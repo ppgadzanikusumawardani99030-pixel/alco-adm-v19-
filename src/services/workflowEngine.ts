@@ -25,7 +25,7 @@ import { validateAcademicSettingReadiness } from './academicSettingReadiness';
 import { resolveCurriculumContext, resolveSubjectInput } from '../data/curriculum/resolver';
 import { ResolvedCurriculumContext } from '../data/curriculum/types';
 import { getPhaseFromGrade } from '../data/curriculumDefaults';
-import { validateKKTPData, resolveCriterionTPReference } from './cpWorkflowService';
+import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences } from './cpWorkflowService';
 import { loadStorageV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
 
@@ -476,14 +476,15 @@ export function validateWorkflowDependencies(
     const seenSequences = new Set<number>();
 
     atpItems.forEach((atpItem) => {
-      // An ATP item MUST have a valid tpId pointing to canonical TP
-      if (!atpItem.tpId || !validTpIds.has(atpItem.tpId)) {
+      // Canonical multi-reference semantics (linkedTpIds or legacy compatibility fallback)
+      const refRes = resolveATPItemTPReferences(atpItem, tpItems);
+      if (!refRes.isValid) {
         hasOrphanATPItem = true;
         issues.push({
           severity: 'ERROR',
           module: 'atp',
           code: 'ORPHAN_ATP_TP_ID',
-          message: `Item ATP '${atpItem.id}' tidak terhubung ke TP canonical (tpId: '${atpItem.tpId || 'kosong'}').`,
+          message: refRes.issues[0] || `Item ATP '${atpItem.id}' tidak terhubung ke TP canonical.`,
           targetId: atpItem.id,
         });
       }
@@ -750,20 +751,25 @@ export function resolveATPItemWithTP(
   displayMaterialScope: string;
   isOrphan: boolean;
 } {
-  const canonicalTP = item.tpId ? tpList.find((t) => t.id === item.tpId) || null : null;
+  const refRes = resolveATPItemTPReferences(item, tpList);
 
-  if (canonicalTP) {
+  if (refRes.isValid && refRes.canonicalTPItems.length > 0) {
+    const primaryTP = refRes.canonicalTPItems[0];
+    const codes = refRes.canonicalTPItems.map((t) => t.code).filter(Boolean);
+    const statements = refRes.canonicalTPItems.map((t) => t.statement || (t as any).description).filter(Boolean);
+    const scopes = refRes.canonicalTPItems.map((t) => t.contentScope).filter(Boolean);
+
     return {
       item,
-      canonicalTP,
-      displayCode: canonicalTP.code || item.tpCode || `TP ${item.stepNumber || 1}`,
-      displayStatement: canonicalTP.statement,
-      displayMaterialScope: canonicalTP.contentScope || item.materialScope || '-',
+      canonicalTP: primaryTP,
+      displayCode: codes.length > 0 ? codes.join(', ') : item.tpCode || `TP ${item.stepNumber || 1}`,
+      displayStatement: statements.length > 0 ? statements.join('; ') : primaryTP.statement,
+      displayMaterialScope: scopes.length > 0 ? scopes.join('; ') : item.materialScope || '-',
       isOrphan: false,
     };
   }
 
-  // If item has no tpId or tpId is not in canonical tpList -> ORPHAN
+  // If item has no valid canonical reference -> ORPHAN
   return {
     item,
     canonicalTP: null,

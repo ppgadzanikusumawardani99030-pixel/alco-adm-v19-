@@ -668,6 +668,137 @@ export interface ATPReferenceResult {
   issue?: string;
 }
 
+export interface ATPMultiReferenceResult {
+  status: ATPReferenceStatus;
+  canonicalTPItems: TPItem[];
+  tpIds: string[];
+  issues: string[];
+  usedLegacyFallback: boolean;
+  isValid: boolean;
+}
+
+/**
+ * Canonical resolver for ATP Step to 1..n atomic TPItems.
+ * 
+ * Rules:
+ * A. Canonical First:
+ *    If atpItem.linkedTpIds is provided and non-empty:
+ *    - Use linkedTpIds as canonical authority
+ *    - Trim IDs, preserve order
+ *    - Validate each ID against tpItems (TPData)
+ *    - If ID not found -> issue dangling reference
+ *    - If duplicate ID in the same step -> issue duplicate TP reference
+ *    - STRICTLY NO fallback to tpId/tpCode/tpStatement if linkedTpIds is invalid
+ * B. Legacy Fallback:
+ *    Only if linkedTpIds is empty or not provided:
+ *    - Use exact tpId if valid
+ *    - If no tpId, use unique tpCode resolution
+ *    - If no unique code, use unique tpStatement resolution
+ *    - Preserve strict rules (no positional, no index, no first-match fallback, ambiguous remains ambiguous)
+ * C. Same TP across different steps:
+ *    Allowed and valid! Step 1 -> [A, KAR], Step 2 -> [B, KAR] is valid.
+ */
+export function resolveATPItemTPReferences(
+  atpItem: ATPItem,
+  tpItems: TPItem[] = []
+): ATPMultiReferenceResult {
+  const issues: string[] = [];
+
+  // A. CANONICAL FIRST: If linkedTpIds is defined and non-empty
+  if (Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0) {
+    const rawIds = atpItem.linkedTpIds
+      .map((id) => (typeof id === 'string' ? id.trim() : ''))
+      .filter((id) => id.length > 0);
+
+    if (rawIds.length === 0) {
+      issues.push(`Langkah ATP ke-${atpItem.stepNumber || 1} memiliki linkedTpIds kosong.`);
+      return {
+        status: 'UNRESOLVED_REFERENCE',
+        canonicalTPItems: [],
+        tpIds: [],
+        issues,
+        usedLegacyFallback: false,
+        isValid: false,
+      };
+    }
+
+    // Check for duplicate TP IDs in the same step
+    const seenIds = new Set<string>();
+    let hasDuplicate = false;
+    for (const id of rawIds) {
+      if (seenIds.has(id)) {
+        hasDuplicate = true;
+      }
+      seenIds.add(id);
+    }
+
+    if (hasDuplicate) {
+      issues.push(
+        `Langkah ATP ke-${atpItem.stepNumber || 1} memiliki duplikasi referensi TP dalam satu langkah (Duplicate TP Reference).`
+      );
+    }
+
+    // Validate each ID against TPData (preserving order)
+    const tpMap = new Map<string, TPItem>();
+    tpItems.forEach((t) => tpMap.set(t.id, t));
+
+    const matchedTPItems: TPItem[] = [];
+    const danglingIds: string[] = [];
+
+    for (const id of rawIds) {
+      const tp = tpMap.get(id);
+      if (tp) {
+        matchedTPItems.push(tp);
+      } else {
+        danglingIds.push(id);
+      }
+    }
+
+    if (danglingIds.length > 0) {
+      issues.push(
+        `TP dengan ID "${danglingIds.join(', ')}" pada langkah ke-${atpItem.stepNumber || 1} tidak ditemukan pada TP tersimpan (Dangling Reference).`
+      );
+    }
+
+    const isValid = !hasDuplicate && danglingIds.length === 0 && matchedTPItems.length > 0;
+    const status: ATPReferenceStatus = danglingIds.length > 0
+      ? 'DANGLING_REFERENCE'
+      : hasDuplicate
+      ? 'AMBIGUOUS_REFERENCE'
+      : 'RESOLVED_REFERENCE';
+
+    return {
+      status,
+      canonicalTPItems: matchedTPItems,
+      tpIds: rawIds,
+      issues,
+      usedLegacyFallback: false,
+      isValid,
+    };
+  }
+
+  // B. LEGACY FALLBACK: Only if linkedTpIds is empty / not provided
+  const legacyRes = resolveATPItemTPReference(atpItem, tpItems);
+  const canonicalTPItems = legacyRes.canonicalTPItem ? [legacyRes.canonicalTPItem] : [];
+  const tpIds = legacyRes.tpId ? [legacyRes.tpId] : [];
+  if (legacyRes.issue) {
+    issues.push(legacyRes.issue);
+  }
+
+  const isValid =
+    (legacyRes.status === 'RESOLVED_REFERENCE' || legacyRes.status === 'LEGACY_MIGRATED') &&
+    canonicalTPItems.length > 0;
+
+  return {
+    status: legacyRes.status,
+    canonicalTPItems,
+    tpIds,
+    issues,
+    usedLegacyFallback: true,
+    isValid,
+  };
+}
+
 /**
  * Resolves reference from an ATPItem to a canonical TPItem in TPData.
  * Strictly adheres to V7 canonical matching:
@@ -778,9 +909,11 @@ export function validateATPDataWorkflow(
   isSiap: boolean;
   issues: string[];
   details: ATPReferenceResult[];
+  multiDetails?: ATPMultiReferenceResult[];
 } {
   const issues: string[] = [];
   const details: ATPReferenceResult[] = [];
+  const multiDetails: ATPMultiReferenceResult[] = [];
 
   if (!atp || !atp.items || atp.items.length === 0) {
     return {
@@ -788,6 +921,7 @@ export function validateATPDataWorkflow(
       isSiap: false,
       issues: ['Matriks Alur Tujuan Pembelajaran (ATP) belum disusun.'],
       details,
+      multiDetails,
     };
   }
 
@@ -833,6 +967,7 @@ export function validateATPDataWorkflow(
   // Items step ordering & reference validation
   const tpItems = tp?.items || [];
   const seenStepNumbers = new Set<number>();
+  const coveredTpIdSet = new Set<string>();
 
   for (let i = 0; i < atp.items.length; i++) {
     const item = atp.items[i];
@@ -846,15 +981,26 @@ export function validateATPDataWorkflow(
       seenStepNumbers.add(item.stepNumber);
     }
 
-    // Reference resolution
-    const res = resolveATPItemTPReference(item, tpItems);
-    details.push(res);
-    if (
-      res.status === 'DANGLING_REFERENCE' ||
-      res.status === 'AMBIGUOUS_REFERENCE' ||
-      res.status === 'UNRESOLVED_REFERENCE'
-    ) {
-      if (res.issue) issues.push(res.issue);
+    // Canonical multi-reference resolution
+    const multiRes = resolveATPItemTPReferences(item, tpItems);
+    multiDetails.push(multiRes);
+
+    details.push({
+      status: multiRes.status,
+      canonicalTPItem: multiRes.canonicalTPItems[0],
+      tpId: multiRes.tpIds[0],
+      issue: multiRes.issues[0],
+    });
+
+    if (!multiRes.isValid) {
+      multiRes.issues.forEach((iss) => {
+        if (!issues.includes(iss)) {
+          issues.push(iss);
+        }
+      });
+    } else {
+      // Record all linked TPs for coverage
+      multiRes.canonicalTPItems.forEach((t) => coveredTpIdSet.add(t.id));
     }
 
     if (item.jp !== undefined && item.jp !== null && Number(item.jp) <= 0) {
@@ -865,11 +1011,7 @@ export function validateATPDataWorkflow(
   // TP Coverage check (MISSING_TP_REFERENCE)
   if (tpItems.length > 0) {
     for (const tpItem of tpItems) {
-      const isCovered = atp.items.some((item) => {
-        const ref = resolveATPItemTPReference(item, tpItems);
-        return ref.canonicalTPItem?.id === tpItem.id;
-      });
-      if (!isCovered) {
+      if (!coveredTpIdSet.has(tpItem.id)) {
         issues.push(
           `MISSING_TP_REFERENCE: Tujuan Pembelajaran "${tpItem.code || tpItem.id}" (${(tpItem.statement || '').substring(0, 40)}...) belum dimasukkan ke dalam Alur Tujuan Pembelajaran (ATP).`
         );
@@ -883,6 +1025,7 @@ export function validateATPDataWorkflow(
       isSiap: false,
       issues,
       details,
+      multiDetails,
     };
   }
 
@@ -891,6 +1034,7 @@ export function validateATPDataWorkflow(
     isSiap: true,
     issues: [],
     details,
+    multiDetails,
   };
 }
 
@@ -905,6 +1049,7 @@ export function validateATPReferences(
   isSiap: boolean;
   issues: string[];
   details: ATPReferenceResult[];
+  multiDetails?: ATPMultiReferenceResult[];
 } {
   return validateATPDataWorkflow(atp, tp);
 }
@@ -916,15 +1061,25 @@ export function normalizeATPReferences(atp: ATPData, tp?: TPData): ATPData {
   if (!tp || !tp.items || tp.items.length === 0) return atp;
 
   const updatedItems = atp.items.map((item) => {
+    // 1. Jika linkedTpIds sudah memiliki isi: pertahankan canonical linkedTpIds tersebut.
+    // JANGAN menggantinya dari tpId. JANGAN membuat tpId = A sebagai canonical fake alias.
+    if (Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0) {
+      return item;
+    }
+
+    // 2. Jika linkedTpIds kosong / tidak tersedia:
+    // Resolve via legacy resolver
     const res = resolveATPItemTPReference(item, tp.items);
-    if (res.status === 'LEGACY_MIGRATED' && res.tpId) {
+    if ((res.status === 'RESOLVED_REFERENCE' || res.status === 'LEGACY_MIGRATED') && res.tpId) {
       return {
         ...item,
-        tpId: res.tpId,
+        linkedTpIds: [res.tpId],
+        tpId: item.tpId || res.tpId,
         tpCode: res.canonicalTPItem?.code || item.tpCode,
         tpStatement: res.canonicalTPItem?.statement || item.tpStatement,
       };
     }
+
     return item;
   });
 

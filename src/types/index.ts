@@ -388,11 +388,38 @@ export interface ATPItem {
   id: string;
   stepNumber: number; // Urutan Alur Pembelajaran (1, 2, 3...)
   sequence?: number; // Alias for stepNumber
-  tpId?: string; // Canonical reference to TPItem.id
-  tpCode?: string; // Resolved display code
-  tpStatement?: string; // Resolved display statement
-  unitTitle?: string; // Metadata pengelompokan Unit / Bab / Topik operasional (optional)
-  materialScope?: string; // Resolved display material scope
+  /**
+   * Canonical relation dari ATP Step ke TPItem.id (1..n TP atomik).
+   * Ordered array, minimal 1 TP untuk ATP Step yang valid, tanpa ID duplikat dalam satu step.
+   */
+  linkedTpIds?: string[];
+  /**
+   * Label/ringkasan fokus langkah ATP untuk display.
+   * BUKAN Bab, Unit, atau authority Lingkup Materi.
+   */
+  focus?: string;
+  /**
+   * @deprecated legacy compatibility untuk ATP lama yang hanya memiliki satu TP.
+   */
+  tpId?: string;
+  /**
+   * @deprecated legacy/display cache, bukan canonical reference.
+   */
+  tpCode?: string;
+  /**
+   * @deprecated legacy/display cache, bukan canonical reference.
+   */
+  tpStatement?: string;
+  /**
+   * @deprecated deprecated sebagai ATP authority.
+   * Canonical Bab/Unit nantinya berada pada ATPUnitMappingData.
+   */
+  unitTitle?: string;
+  /**
+   * @deprecated deprecated sebagai authority pemetaan materi ATP.
+   * Canonical Lingkup Materi nantinya berada pada ATPUnitMappingData.materials.
+   */
+  materialScope?: string;
   allocatedJP?: number | null; // Alokasi Jam Pelajaran (explicitly nullable! Unknown = null)
   jp?: number | null; // Compatibility field
   /**
