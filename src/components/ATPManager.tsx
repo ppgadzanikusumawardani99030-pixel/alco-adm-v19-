@@ -112,7 +112,9 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
         academicYear: context.academicYear,
       });
 
-      const formattedItems: ATPItem[] = generated.items.map((item, idx) => {
+      const formattedItems: ATPItem[] = [];
+      for (let idx = 0; idx < generated.items.length; idx++) {
+        const item = generated.items[idx];
         const rawLinkedTpIds = Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0
           ? item.linkedTpIds
           : item.tpId ? [item.tpId] : [];
@@ -121,36 +123,20 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
           id: `atp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
           stepNumber: item.stepNumber || idx + 1,
           linkedTpIds: rawLinkedTpIds,
-          focus: item.focus || (item as any).focus || undefined,
-          tpId: item.tpId || (rawLinkedTpIds.length > 0 ? rawLinkedTpIds[0] : ''),
-          tpCode: item.tpCode || '',
-          tpStatement: item.tpStatement || '',
-          unitTitle: (item as any).unitTitle || undefined,
-          materialScope: item.materialScope || '',
-          jp: item.jp !== undefined && item.jp !== null && Number(item.jp) > 0 ? Number(item.jp) : undefined,
-          p3Dimensions: Array.isArray(item.p3Dimensions) ? item.p3Dimensions : [],
-          assessmentPlan: item.assessmentPlan || '',
-          glossary: item.glossary || '',
-          resources: item.resources || '',
+          focus: item.focus ? String(item.focus).trim() : undefined,
         };
 
         const refResult = resolveATPItemTPReferences(candidateItem, tp.items);
-        if (refResult.isValid || refResult.canonicalTPItems.length > 0) {
-          const canonicals = refResult.canonicalTPItems;
-          const primary = canonicals[0];
-          candidateItem.linkedTpIds = canonicals.map((t) => t.id);
-          candidateItem.tpId = primary.id;
-          candidateItem.tpCode = canonicals.map((t) => t.code).filter(Boolean).join(', ');
-          candidateItem.tpStatement = candidateItem.focus || canonicals.map((t) => t.statement).join('; ');
-          if (!candidateItem.materialScope) {
-            candidateItem.materialScope = Array.from(new Set(canonicals.map((t) => t.contentScope).filter(Boolean))).join(', ');
-          }
-          if (candidateItem.p3Dimensions.length === 0) {
-            candidateItem.p3Dimensions = Array.from(new Set(canonicals.flatMap((t) => t.p3Dimensions || [])));
-          }
+        if (!refResult.isValid) {
+          throw new Error(
+            `Hasil susunan ATP tidak valid pada langkah ke-${candidateItem.stepNumber}: ${refResult.issues.join('; ')}`
+          );
         }
-        return candidateItem;
-      });
+
+        // Canonical authority is linkedTpIds; DO NOT set candidateItem.tpId = primary.id
+        candidateItem.linkedTpIds = refResult.canonicalTPItems.map((t) => t.id);
+        formattedItems.push(candidateItem);
+      }
 
       setRationale(generated.rationale);
       setItems(formattedItems);
@@ -303,16 +289,6 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
       stepNumber: nextStep,
       linkedTpIds: [],
       focus: '',
-      tpId: '',
-      tpCode: '',
-      tpStatement: '',
-      unitTitle: '',
-      materialScope: '',
-      jp: undefined,
-      p3Dimensions: [],
-      assessmentPlan: '',
-      glossary: '',
-      resources: '',
     });
     setIsEditing(true);
   };
@@ -340,20 +316,11 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
       return;
     }
 
-    const canonicals = tp.items.filter((t) => effectiveLinkedIds.includes(t.id));
-    const primary = canonicals[0];
-
     const toSave: ATPItem = {
       ...currentItem,
       linkedTpIds: effectiveLinkedIds,
       focus: currentItem.focus?.trim() || undefined,
-      tpId: primary?.id || currentItem.tpId || '',
-      tpCode: canonicals.map((t) => t.code).filter(Boolean).join(', ') || currentItem.tpCode || '',
-      tpStatement: currentItem.focus || canonicals.map((t) => t.statement).join('; ') || currentItem.tpStatement,
-      materialScope: currentItem.materialScope || Array.from(new Set(canonicals.map((t) => t.contentScope).filter(Boolean))).join(', '),
-      p3Dimensions: currentItem.p3Dimensions && currentItem.p3Dimensions.length > 0
-        ? currentItem.p3Dimensions
-        : Array.from(new Set(canonicals.flatMap((t) => t.p3Dimensions || []))),
+      tpId: currentItem.tpId ? currentItem.tpId : undefined,
     };
 
     const exists = items.some((i) => i.id === toSave.id);
@@ -644,11 +611,16 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
                           <span className="text-slate-400 text-xs italic">-</span>
                         )}
                       </td>
-                      <td className="p-3 text-slate-700 font-semibold">{item.materialScope || '-'}</td>
+                      <td className="p-3 text-slate-700 font-semibold">
+                        {item.materialScope || Array.from(new Set(refResult.canonicalTPItems.map((t) => t.contentScope).filter(Boolean))).join(', ') || '-'}
+                      </td>
                       <td className="p-3 text-blue-800">
-                        {item.p3Dimensions && item.p3Dimensions.length > 0 ? (
+                        {refResult.canonicalTPItems.some(t => t.p3Dimensions && t.p3Dimensions.length > 0) || (item.p3Dimensions && item.p3Dimensions.length > 0) ? (
                           <div className="flex flex-wrap gap-1">
-                            {item.p3Dimensions.map((d, di) => (
+                            {Array.from(new Set([
+                              ...(item.p3Dimensions || []),
+                              ...refResult.canonicalTPItems.flatMap((t) => t.p3Dimensions || [])
+                            ])).map((d, di) => (
                               <span
                                 key={di}
                                 className="px-1.5 py-0.5 rounded bg-blue-50 text-[10px] font-medium text-blue-700 border border-blue-100"
@@ -823,18 +795,9 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
                               ? Array.from(new Set([...prevIds, tItem.id]))
                               : prevIds.filter((id) => id !== tItem.id);
 
-                            const selectedTPs = tp.items.filter((t) => nextIds.includes(t.id));
-                            const primary = selectedTPs[0];
                             setCurrentItem({
                               ...currentItem,
                               linkedTpIds: nextIds,
-                              tpId: primary?.id || '',
-                              tpCode: selectedTPs.map((t) => t.code).filter(Boolean).join(', '),
-                              tpStatement: currentItem.focus || selectedTPs.map((t) => t.statement).join('; '),
-                              materialScope: currentItem.materialScope || Array.from(new Set(selectedTPs.map((t) => t.contentScope).filter(Boolean))).join(', '),
-                              p3Dimensions: currentItem.p3Dimensions && currentItem.p3Dimensions.length > 0
-                                ? currentItem.p3Dimensions
-                                : Array.from(new Set(selectedTPs.flatMap((t) => t.p3Dimensions || []))),
                             });
                           }}
                           className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"

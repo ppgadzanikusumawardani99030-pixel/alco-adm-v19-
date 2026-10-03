@@ -575,62 +575,109 @@ export function fallbackGenerateATP(params: FallbackGenerateATPParams) {
     };
   }
 
-  // Pedagogical clustering: group coherent atomic TPs (e.g. by element or contiguous 1-2 TPs)
-  // while strictly ensuring all TPs are covered with canonical linkedTpIds
-  const elementGroups = new Map<string, Array<(typeof tps)[0]>>();
-  tps.forEach((tp) => {
-    const elem = tp.elementName || 'Umum';
-    if (!elementGroups.has(elem)) {
-      elementGroups.set(elem, []);
+  // Conservative semantic grouping
+  const getScopeCode = (tp: (typeof tps)[0]): string => {
+    if ((tp as any).scopeCode && typeof (tp as any).scopeCode === 'string') {
+      return (tp as any).scopeCode.trim().toUpperCase();
     }
-    elementGroups.get(elem)!.push(tp);
-  });
+    if (tp.code && typeof tp.code === 'string') {
+      const parts = tp.code.trim().split('-');
+      if (parts.length >= 3) {
+        return parts[1].trim().toUpperCase();
+      }
+    }
+    return '';
+  };
 
-  const clusteredGroups: Array<Array<(typeof tps)[0]>> = [];
-  elementGroups.forEach((elemTps) => {
-    // Within each element, cluster into pedagogical steps of 1-2 coherent TPs
-    for (let i = 0; i < elemTps.length; i += 2) {
-      clusteredGroups.push(elemTps.slice(i, i + 2));
-    }
-  });
+  const isSpecificScopeCode = (sc: string): boolean => {
+    return Boolean(sc && sc !== '' && sc !== 'MAT' && sc !== 'GEN');
+  };
 
-  // Fallback in case of unexpected empty grouping: ensure all TPs are clustered
-  if (clusteredGroups.length === 0) {
-    for (let i = 0; i < tps.length; i += 2) {
-      clusteredGroups.push(tps.slice(i, i + 2));
+  const STOP_WORDS_SCOPE = new Set([
+    'dan', 'atau', 'pada', 'dalam', 'dengan', 'untuk', 'secara', 'yang', 'serta',
+    'konsep', 'variasi', 'pola', 'gerak', 'dasar', 'penerapan', 'pemahaman',
+    'aktivitas', 'keterampilan', 'terkait', 'tentang', 'materi', 'pokok'
+  ]);
+
+  const extractSignificantScopeKeywords = (text?: string): string[] => {
+    if (!text) return [];
+    const clean = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
+    return clean
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !STOP_WORDS_SCOPE.has(w));
+  };
+
+  const haveStrongSemanticRelation = (
+    tpA: (typeof tps)[0],
+    tpB: (typeof tps)[0]
+  ): boolean => {
+    // Signal A: specific scopeCode identical and non-generic
+    const scA = getScopeCode(tpA);
+    const scB = getScopeCode(tpB);
+    if (isSpecificScopeCode(scA) && isSpecificScopeCode(scB) && scA === scB) {
+      return true;
     }
+
+    // Signal B: normalized contentScope identical or shares specific core topic
+    const scopeA = (tpA.contentScope || '').trim().toLowerCase();
+    const scopeB = (tpB.contentScope || '').trim().toLowerCase();
+    if (scopeA && scopeB && scopeA === scopeB) {
+      return true;
+    }
+
+    const kwA = extractSignificantScopeKeywords(tpA.contentScope);
+    const kwB = extractSignificantScopeKeywords(tpB.contentScope);
+    if (kwA.length > 0 && kwB.length > 0) {
+      const shared = kwA.filter((w) => kwB.includes(w));
+      if (shared.length > 0) {
+        return true;
+      }
+    }
+
+    // Conservative: if not clearly the same specific topic, do NOT group
+    return false;
+  };
+
+  const visited = new Set<number>();
+  const clusters: Array<Array<(typeof tps)[0]>> = [];
+
+  for (let i = 0; i < tps.length; i++) {
+    if (visited.has(i)) continue;
+    visited.add(i);
+    const currentGroup = [tps[i]];
+
+    for (let j = i + 1; j < tps.length; j++) {
+      if (visited.has(j)) continue;
+      if (haveStrongSemanticRelation(tps[i], tps[j])) {
+        visited.add(j);
+        currentGroup.push(tps[j]);
+      }
+    }
+
+    clusters.push(currentGroup);
   }
 
-  const items = clusteredGroups.map((group, idx) => {
-    const stepNum = idx + 1;
+  // Canonical ATP items: ONLY stepNumber, linkedTpIds, focus
+  const items = clusters.map((group, idx) => {
+    const stepNumber = idx + 1;
     const linkedTpIds = group.map((t) => t.id || '').filter(Boolean);
     const primary = group[0];
     const scopes = Array.from(new Set(group.map((t) => t.contentScope).filter(Boolean)));
     const focus = group.length === 1
       ? (primary.contentScope ? `Penguasaan ${primary.contentScope}` : primary.statement)
-      : (scopes.length > 0 ? `Penguasaan dan Penerapan ${scopes.join(' dan ')}` : group.map((t) => t.statement).join('; '));
+      : (scopes.length > 0 ? `Penguasaan dan Penerapan ${scopes.join(' dan ')}` : primary.statement);
 
     return {
-      stepNumber: stepNum,
+      stepNumber,
       linkedTpIds,
       focus,
-      tpId: primary.id || '',
-      tpCode: group.map((t) => t.code).filter(Boolean).join(', '),
-      tpStatement: focus,
-      materialScope: scopes.join(', ') || primary.contentScope || '',
-      allocatedJP: null,
-      jp: null as any,
-      p3Dimensions: Array.from(new Set(group.flatMap((t) => t.p3Dimensions || []))),
-      assessmentPlan: 'Asesmen Formatif (Observasi/Penugasan) dan Asesmen Sumatif Lingkup Materi',
-      glossary: scopes.join(', '),
-      resources: `Buku Siswa & Panduan Guru ${subject} ${grade}`.trim(),
     };
   });
 
   return {
     rationale: subject && grade
-      ? `Alur Tujuan Pembelajaran (ATP) untuk ${subject} ${grade} (${phase}) disusun secara terstruktur dari penguasaan konsep dasar hingga keterampilan aplikatif.`
-      : 'Alur Tujuan Pembelajaran (ATP) disusun secara logis dan terstruktur.',
+      ? `Alur Tujuan Pembelajaran (ATP) untuk ${subject} ${grade} (${phase}).`
+      : 'Alur Tujuan Pembelajaran (ATP).',
     items,
   };
 }
