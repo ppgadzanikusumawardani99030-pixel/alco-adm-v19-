@@ -1,0 +1,2614 @@
+import express from 'express';
+import path from 'path';
+import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI, Type } from '@google/genai';
+import dotenv from 'dotenv';
+import { OfficialEducationDataProvider } from './server/schoolProvider';
+import {
+  GroundedCalendarSearchProvider,
+  TrustedCalendarSearchProvider,
+} from './server/calendarProvider';
+import {
+  selectBestCalendarSource,
+  evaluateCalendarCandidate,
+  CalendarSearchRequest,
+} from './src/services/calendarProvider';
+import {
+  fallbackAnalyzeCP,
+  fallbackGenerateTP,
+  fallbackRefineText,
+  fallbackGenerateATPMapping,
+  fallbackGenerateCanonicalATPUnitMapping,
+  enforceCanonicalMappingInvariants,
+} from './server/curriculumFallback';
+import { validateGraduateProfileDimensions } from './src/constants/graduateProfileDimensions';
+
+dotenv.config();
+
+const app = express();
+const envPort = process.env.PORT ? parseInt(process.env.PORT, 10) : NaN;
+const PORT = (!isNaN(envPort) && envPort > 0) ? envPort : 3000;
+
+app.use(express.json({ limit: '10mb' }));
+
+// Resolver for Gemini API Key: Request X-Gemini-API-Key -> fallback process.env.GEMINI_API_KEY -> null
+function resolveApiKey(req: express.Request): string | null {
+  const headerVal = req.headers['x-gemini-api-key'];
+  const userKey = Array.isArray(headerVal) ? headerVal[0] : headerVal;
+  if (typeof userKey === 'string' && userKey.trim().length > 0) {
+    return userKey.trim();
+  }
+  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 0) {
+    return process.env.GEMINI_API_KEY.trim();
+  }
+  return null;
+}
+
+// Dedicated per-request/key Gemini client (no global singleton cache across users)
+function createAIClient(apiKey: string): GoogleGenAI {
+  return new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+}
+
+// Resilient generator helper with model fallbacks and exponential backoff retry for 503/429/temporary spikes
+async function generateContentWithRetry(
+  ai: GoogleGenAI,
+  params: {
+    contents: string;
+    config?: any;
+  }
+): Promise<{ text?: string }> {
+  // Standard non-paid models ordered by capability and availability
+  const modelsToTry = [
+    'gemini-3.8-flash',
+    'gemini-3.1-flash-lite',
+    'gemini-flash-latest',
+  ];
+  let lastError: any = null;
+
+  for (const model of modelsToTry) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: params.contents,
+          config: params.config,
+        });
+        if (response && response.text) {
+          return response;
+        }
+      } catch (err: any) {
+        lastError = err;
+        const errMsg = (err?.message || String(err)).toLowerCase();
+
+        // If 404, model not found so don't retry same model, move to next model immediately
+        if (errMsg.includes('404') || errMsg.includes('not found') || errMsg.includes('no longer available')) {
+          break;
+        }
+
+        // For temporary 503 high demand or 429 rate limits, wait with brief backoff and try next attempt or fallback model
+        if (errMsg.includes('503') || errMsg.includes('high demand') || errMsg.includes('429') || errMsg.includes('unavailable')) {
+          console.info(`[AI Service] Model ${model} returned temporary status (${attempt + 1}/2). Backing off...`);
+          await new Promise((resolve) => setTimeout(resolve, (attempt + 1) * 400));
+        } else {
+          // For other errors, move to next fallback model
+          break;
+        }
+      }
+    }
+  }
+
+  const finalErrMsg = (lastError?.message || String(lastError)).toLowerCase();
+  if (finalErrMsg.includes('503') || finalErrMsg.includes('high demand') || finalErrMsg.includes('unavailable')) {
+    throw new Error('Layanan AI sedang mengalami lonjakan antrean trafik tinggi. Silakan klik tombol generate kembali dalam beberapa saat.');
+  }
+  throw lastError || new Error('Gagal memproses permintaan AI');
+}
+
+function deriveScopeCode(scopeText?: string): string {
+  if (!scopeText || !scopeText.trim()) return 'MAT';
+  const words = scopeText.trim().replace(/[^a-zA-Z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    const code = words.map((w) => w[0].toUpperCase()).slice(0, 4).join('');
+    if (code.length >= 2) return code;
+  }
+  const word = words[0].toUpperCase();
+  if (word.length <= 4) return word;
+  return word.slice(0, 3);
+}
+
+function cleanAndParseJSON(rawText?: string, fallback: any = {}): any {
+  if (!rawText) return fallback;
+  let cleaned = rawText.trim();
+  if (cleaned.startsWith('```json')) {
+    cleaned = cleaned.slice(7);
+  } else if (cleaned.startsWith('```')) {
+    cleaned = cleaned.slice(3);
+  }
+  if (cleaned.endsWith('```')) {
+    cleaned = cleaned.slice(0, -3);
+  }
+  cleaned = cleaned.trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error('Failed to parse JSON output from AI:', cleaned);
+    return fallback;
+  }
+}
+
+const assessmentAICommonProperties = {
+  coverageUnitId: {
+    type: Type.STRING,
+    description: 'ID coverage unit. Wajib sama persis dengan GenerationContract.',
+  },
+  assessmentIndicator: {
+    type: Type.STRING,
+  },
+  materialOrContext: {
+    type: Type.STRING,
+  },
+  rubricDraft: {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING },
+      criteria: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            label: { type: Type.STRING },
+            indicator: { type: Type.STRING },
+            weight: { type: Type.NUMBER },
+          },
+          required: ['label'],
+        },
+      },
+      scale: {
+        type: Type.ARRAY,
+        items: {
+          type: Type.OBJECT,
+          properties: {
+            label: { type: Type.STRING },
+            score: { type: Type.NUMBER },
+            descriptor: { type: Type.STRING },
+            order: { type: Type.NUMBER },
+          },
+          required: ['label'],
+        },
+      },
+    },
+  },
+  scoringGuideDraft: {
+    type: Type.OBJECT,
+    properties: {
+      instructions: { type: Type.STRING },
+      maxScore: { type: Type.NUMBER },
+    },
+  },
+};
+
+const assessmentAIResponseSchema = {
+  type: Type.ARRAY,
+  items: {
+    anyOf: [
+      {
+        type: Type.OBJECT,
+        properties: {
+          ...assessmentAICommonProperties,
+          itemType: {
+            type: Type.STRING,
+            enum: [
+              'MULTIPLE_CHOICE',
+              'MULTIPLE_SELECT',
+              'TRUE_FALSE',
+              'SHORT_ANSWER',
+              'ESSAY',
+              'MATCHING',
+              'CATEGORY_RESPONSE',
+            ],
+          },
+          prompt: {
+            type: Type.STRING,
+          },
+          stimulus: {
+            type: Type.STRING,
+          },
+          stimulusSource: {
+            type: Type.STRING,
+          },
+          options: {
+            type: Type.ARRAY,
+            minItems: 2,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                text: { type: Type.STRING },
+                isCorrect: { type: Type.BOOLEAN },
+              },
+              required: ['text'],
+            },
+          },
+          proposedAnswer: {
+            type: Type.OBJECT,
+            properties: {
+              answerType: {
+                type: Type.STRING,
+                enum: [
+                  'EXACT',
+                  'OPTION',
+                  'MULTIPLE_OPTION',
+                  'EXPECTED_RESPONSE',
+                  'MATCHING',
+                  'CATEGORY_RESPONSE',
+                ],
+              },
+              value: { type: Type.STRING },
+              optionIndices: {
+                type: Type.ARRAY,
+                items: { type: Type.INTEGER },
+              },
+              explanation: { type: Type.STRING },
+            },
+          },
+        },
+        required: ['coverageUnitId', 'itemType', 'prompt'],
+      },
+
+      {
+        type: Type.OBJECT,
+        properties: {
+          ...assessmentAICommonProperties,
+          taskTitle: {
+            type: Type.STRING,
+          },
+          taskPrompt: {
+            type: Type.STRING,
+          },
+          instructions: {
+            type: Type.STRING,
+          },
+          expectedDeliverable: {
+            type: Type.STRING,
+          },
+          aspects: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                label: { type: Type.STRING },
+                description: { type: Type.STRING },
+                weight: { type: Type.NUMBER },
+              },
+              required: ['label'],
+            },
+          },
+        },
+        required: ['coverageUnitId', 'taskPrompt'],
+      },
+
+      {
+        type: Type.OBJECT,
+        properties: {
+          ...assessmentAICommonProperties,
+          instructions: {
+            type: Type.STRING,
+          },
+          evidenceRequirements: {
+            type: Type.ARRAY,
+            minItems: 1,
+            items: {
+              type: Type.STRING,
+            },
+          },
+        },
+        required: [
+          'coverageUnitId',
+          'evidenceRequirements',
+        ],
+      },
+
+      {
+        type: Type.OBJECT,
+        properties: {
+          ...assessmentAICommonProperties,
+          instructions: {
+            type: Type.STRING,
+          },
+          recordingScheme: {
+            type: Type.STRING,
+          },
+          aspects: {
+            type: Type.ARRAY,
+            minItems: 1,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                label: { type: Type.STRING },
+                indicator: { type: Type.STRING },
+              },
+              required: ['label'],
+            },
+          },
+        },
+        required: [
+          'coverageUnitId',
+          'aspects',
+        ],
+      },
+    ],
+  },
+};
+
+// Health check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    geminiConfigured: !!process.env.GEMINI_API_KEY,
+  });
+});
+
+// Official Education Reference School Search Endpoint
+app.get('/api/schools/search', async (req, res) => {
+  try {
+    const query = typeof req.query.q === 'string' ? req.query.q : '';
+    const result = await OfficialEducationDataProvider.search(query);
+    res.json({ success: true, ...result });
+  } catch (error: unknown) {
+    console.error('Error searching schools:', error);
+    const message = error instanceof Error ? error.message : 'Gagal menghubungi data referensi sekolah';
+    res.status(500).json({
+      success: false,
+      found: false,
+      candidates: [],
+      message: 'Tidak dapat menghubungi sumber data sekolah saat ini.',
+      error: message,
+    });
+  }
+});
+
+// Automatic Principal Resolution & Verification Endpoint
+app.post('/api/schools/resolve-principal', async (req, res) => {
+  try {
+    const { name, npsn, district, regency, province } = req.body || {};
+    const result = await OfficialEducationDataProvider.resolvePrincipal({
+      name: name || '',
+      npsn: npsn || '',
+      district: district || '',
+      regency: regency || '',
+      province: province || '',
+    });
+    res.json({ success: true, ...result });
+  } catch (error: unknown) {
+    console.error('Error resolving principal:', error);
+    const message = error instanceof Error ? error.message : 'Gagal memverifikasi kepala sekolah';
+    res.status(500).json({
+      success: false,
+      found: false,
+      verificationStatus: 'unverified',
+      message: 'Gagal menghubungi layanan verifikasi kepala sekolah saat ini.',
+      error: message,
+    });
+  }
+});
+
+// Grounded Calendar Online Resolution Endpoint
+app.post('/api/calendar/resolve', async (req, res) => {
+  const { academicYear, province, regency } = req.body || {};
+
+  // 1. Validation error -> HTTP 400
+  if (!academicYear || typeof academicYear !== 'string' || academicYear.trim() === '') {
+    return res.status(400).json({
+      success: false,
+      error: 'Parameter permintaan kalender tidak valid (academicYear wajib diisi).',
+    });
+  }
+
+  const searchRequest: CalendarSearchRequest = {
+    academicYear: academicYear.trim(),
+    province: typeof province === 'string' && province.trim() ? province.trim() : undefined,
+    regency: typeof regency === 'string' && regency.trim() ? regency.trim() : undefined,
+  };
+
+  try {
+    const provider = new TrustedCalendarSearchProvider();
+    const searchResult = await provider.searchWithDiagnostics(searchRequest);
+    const candidates = searchResult.candidates;
+    const diagnostic = searchResult.diagnostic;
+
+    const selectedSource = selectBestCalendarSource(candidates, searchRequest);
+
+    let diagnosticMessage = '';
+    switch (diagnostic.reason) {
+      case 'SUCCESS':
+        diagnosticMessage = 'Kalender Pendidikan resmi berhasil ditemukan dan diverifikasi secara online.';
+        break;
+      case 'NO_API_KEY':
+        diagnosticMessage = 'Pencarian online memerlukan GEMINI_API_KEY yang terkonfigurasi di server.';
+        break;
+      case 'MODEL_FAILURE':
+        diagnosticMessage = 'Layanan AI untuk pencarian kalender sedang tidak tersedia atau mencapai batas penggunaan. Silakan coba kembali.';
+        break;
+      case 'EMPTY_RESPONSE':
+        diagnosticMessage = 'Pencarian berjalan tetapi tidak menghasilkan respons teks dari model pencarian.';
+        break;
+      case 'NO_GROUNDING':
+        diagnosticMessage = 'Pencarian berjalan tetapi tidak menghasilkan sumber web ter-grounding.';
+        break;
+      case 'GROUNDING_RESOLUTION_FAILED':
+        diagnosticMessage = 'Sumber ditemukan tetapi URL sumber tidak dapat diverifikasi ke domain resmi pemerintah (.go.id).';
+        break;
+      case 'CANDIDATE_REJECTED':
+        diagnosticMessage = 'Kandidat kalender ditemukan tetapi tidak memenuhi syarat verifikasi domain resmi.';
+        break;
+      case 'NO_OFFICIAL_SOURCE':
+        diagnosticMessage = 'Pencarian berhasil, tetapi sumber Kalender Pendidikan resmi belum ditemukan.';
+        break;
+      default:
+        diagnosticMessage = 'Pencarian kalender online belum menghasilkan sumber resmi terverifikasi.';
+    }
+
+    if (!selectedSource) {
+      return res.json({
+        success: true,
+        resolution: {
+          status: 'UNRESOLVED',
+          selectedSource: undefined,
+          candidates,
+          resolvedLevel: undefined,
+          diagnostic,
+          message: diagnosticMessage,
+        },
+      });
+    }
+
+    const status = evaluateCalendarCandidate(selectedSource);
+
+    return res.json({
+      success: true,
+      resolution: {
+        status,
+        selectedSource,
+        candidates,
+        resolvedLevel: selectedSource.sourceLevel,
+        diagnostic,
+        message: diagnosticMessage,
+      },
+    });
+  } catch (error: unknown) {
+    console.error('Error in /api/calendar/resolve:', error);
+    const message = error instanceof Error ? error.message : 'Gagal memproses resolusi kalender pendidikan';
+    return res.status(500).json({
+      success: false,
+      error: message,
+      resolution: {
+        status: 'UNRESOLVED',
+        candidates: [],
+        message,
+        diagnostic: {
+          aiConfigured: Boolean(process.env.GEMINI_API_KEY),
+          reason: 'MODEL_FAILURE',
+          stages: [],
+        },
+      },
+    });
+  }
+});
+
+// 1. Endpoint: AI Analyze CP -> Return canonical CPAnalysisData items
+app.post('/api/ai/analyze-cp', async (req, res) => {
+  const { cpText, elements = [], subject, grade, phase, curriculum } = req.body || {};
+
+  if (!cpText && (!elements || elements.length === 0)) {
+    return res.status(400).json({ error: 'Capaian Pembelajaran (CP) atau Elemen CP harus diisi terlebih dahulu' });
+  }
+
+  const validElements = Array.isArray(elements) ? elements : [];
+  const validElementIdSet = new Set(validElements.map((e: any) => String(e.id || e.elementId)).filter(Boolean));
+
+  const apiKey = resolveApiKey(req);
+  if (apiKey) {
+    try {
+      const ai = createAIClient(apiKey);
+      const prompt = `Anda adalah pakar perancangan kurikulum pendidikan nasional Indonesia (Kurikulum Merdeka).
+Tugas Anda adalah menganalisis dan membedah Capaian Pembelajaran (CP) berikut ke dalam butir-butir Analisis CP terstruktur untuk setiap Elemen CP.
+
+PRINSIP BEDAH & ANALISIS CP:
+1. Setiap butir dalam "items" HARUS menautkan ID elemen CP yang dianalisis dalam field "elementId" (persis sesuai ID input yang diberikan). JANGAN PERNAH mengarang ID elemen fiktif.
+2. Identifikasi untuk setiap elemen CP:
+   - "cpCompetence": Kata Kerja Operasional (KKO) / Kompetensi spesifik yang ditargetkan (misal: "Memahami & Mengidentifikasi", "Mempraktikkan & Menyesuaikan").
+   - "materialScope": Lingkup Materi / Konsep Inti esensial yang dipelajari.
+   - "scopeCode": Singkatan 2-5 huruf kapital yang merepresentasikan lingkup materi (misal: "Pola Gerak Dasar" -> "PGD", "Aktivitas Senam" -> "AS", "Bilangan Bulat" -> "BB").
+   - "meaningfulUnderstanding": Pemahaman bermakna / variasi keterampilan yang diharapkan.
+   - "suggestedTp": Rekomendasi/usulan rumusan awal Tujuan Pembelajaran yang diturunkan langsung dari elemen CP tersebut.
+3. GRANULARITAS BEDAH ELEMEN: Jika satu elemen CP memuat beberapa kompetensi atau lingkup materi yang berbeda secara pedagogis, AI HARUS memecahnya menjadi beberapa CPAnalysisItem tersendiri. Setiap item harus mewakili satu pasangan kompetensi + lingkup materi yang cukup fokus untuk menjadi dasar TP. Jangan memaksakan jumlah angka tertentu (bukan kuota).
+4. "generalSummary": Berikan ringkasan 1-2 paragraf mengenai fokus utama dan orientasi pedagogis CP ini.
+
+DATA PEMBELAJARAN:
+- Mata Pelajaran: ${subject || '-'}
+- Tingkat / Fase: ${grade || '-'} (${phase || '-'})
+- Kurikulum: ${curriculum || 'Kurikulum Merdeka'}
+- CP Umum: ${cpText || '-'}
+- Elemen-Elemen CP:
+${
+  validElements.length > 0
+    ? validElements.map((e: any, idx: number) => `${idx + 1}. [ID: ${e.id || e.elementId || `elem-${idx + 1}`}] [Kode: ${e.code || `E${idx + 1}`}] [Nama: ${e.name || '-'}] Uraian: ${e.content || '-'}`).join('\n')
+    : 'Tidak ada rincian elemen terpisah.'
+}
+
+Kembalikan respon JSON sesuai schema:`;
+
+      const response = await generateContentWithRetry(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              generalSummary: { type: Type.STRING },
+              items: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    elementId: { type: Type.STRING, description: 'ID elemen CP rujukan (persis dari input)' },
+                    elementName: { type: Type.STRING, description: 'Nama elemen CP rujukan' },
+                    scopeCode: { type: Type.STRING, description: 'Singkatan 2-5 huruf kapital lingkup materi (misal: PGD, AS, BB)' },
+                    cpText: { type: Type.STRING, description: 'Kutipan/teks ringkas CP elemen yang dianalisis' },
+                    cpCompetence: { type: Type.STRING, description: 'Kompetensi / KKO utama' },
+                    materialScope: { type: Type.STRING, description: 'Lingkup Materi Inti' },
+                    meaningfulUnderstanding: { type: Type.STRING, description: 'Pemahaman bermakna / variasi' },
+                    suggestedTp: { type: Type.STRING, description: 'Rekomendasi rumusan awal TP' },
+                  },
+                  required: ['elementName', 'cpCompetence', 'materialScope', 'scopeCode', 'suggestedTp'],
+                },
+              },
+            },
+            required: ['generalSummary', 'items'],
+          },
+        },
+      });
+
+      const parsed = cleanAndParseJSON(response.text, null);
+      if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
+        // Sanitize elementId linkage and scopeCode
+        const sanitizedItems = parsed.items.map((item: any, idx: number) => {
+          let elemId = item.elementId && validElementIdSet.has(String(item.elementId)) ? String(item.elementId) : undefined;
+          if (!elemId && validElements.length > 0) {
+            // Match by element name or index
+            const matchedElem = validElements.find((e: any) => e.name && item.elementName && e.name.toLowerCase() === item.elementName.toLowerCase()) || validElements[idx];
+            if (matchedElem) {
+              elemId = matchedElem.id || matchedElem.elementId;
+            }
+          }
+          const scopeCode = (item.scopeCode && typeof item.scopeCode === 'string' && item.scopeCode.trim().length >= 2)
+            ? item.scopeCode.trim().toUpperCase()
+            : deriveScopeCode(item.materialScope || item.elementName);
+
+          return {
+            elementId: elemId,
+            elementName: item.elementName || (validElements[idx]?.name) || `Elemen ${idx + 1}`,
+            scopeCode,
+            cpText: item.cpText || (validElements.find((e: any) => e.id === elemId)?.content) || '',
+            cpCompetence: item.cpCompetence || '',
+            materialScope: item.materialScope || '',
+            meaningfulUnderstanding: item.meaningfulUnderstanding || '',
+            suggestedTp: item.suggestedTp || '',
+          };
+        });
+
+        return res.json({
+          success: true,
+          data: {
+            generalSummary: parsed.generalSummary || cpText || '',
+            items: sanitizedItems,
+          },
+          engine: 'gemini',
+        });
+      }
+    } catch (error: unknown) {
+      console.warn('Gemini analyze CP failed, using fallback engine:', error);
+    }
+  }
+
+  // Fallback: Pedagogical Rule Engine
+  const fallback = fallbackAnalyzeCP({ cpText, elements: validElements, subject, grade, phase, curriculum });
+  return res.json({ success: true, data: fallback, engine: 'pedagogical_engine' });
+});
+
+// Runtime validator for AI TP response
+function validateAITPPayload(data: any): { isValid: boolean; reason?: string } {
+  if (!Array.isArray(data)) {
+    return { isValid: false, reason: 'Payload AI bukan berupa array' };
+  }
+  if (data.length === 0) {
+    return { isValid: false, reason: 'Hasil perumusan AI TP kosong' };
+  }
+  for (let i = 0; i < data.length; i++) {
+    const item = data[i];
+    if (!item || typeof item !== 'object') {
+      return { isValid: false, reason: `Butir TP ke-${i + 1} bukan berupa objek valid` };
+    }
+    const statement = item.statement || item.description;
+    if (!statement || typeof statement !== 'string' || statement.trim() === '') {
+      return { isValid: false, reason: `Rumusan TP ke-${i + 1} kosong atau tidak valid` };
+    }
+  }
+  return { isValid: true };
+}
+
+// 2. Endpoint: AI Generate TP from CP & CP Analysis
+app.post('/api/ai/generate-tp', async (req, res) => {
+  const {
+    cpGeneral,
+    cpElements,
+    cpAnalysisItems = [],
+    subject,
+    grade,
+    phase,
+    curriculum,
+  } = req.body || {};
+
+  if (!cpGeneral && (!cpElements || cpElements.length === 0) && (!cpAnalysisItems || cpAnalysisItems.length === 0)) {
+    return res.status(400).json({ error: 'Capaian Pembelajaran (CP) atau Analisis CP harus diisi terlebih dahulu' });
+  }
+
+  const validAnalysisItems = Array.isArray(cpAnalysisItems) ? cpAnalysisItems : [];
+  const validAnalysisIdSet = new Set(validAnalysisItems.map((a: any) => String(a.id)).filter(Boolean));
+  const analysisElemMap = new Map<string, string>();
+  validAnalysisItems.forEach((a: any) => {
+    if (a.id) {
+      analysisElemMap.set(String(a.id), (a.elementId || a.elementName || '').toLowerCase().trim());
+    }
+  });
+
+  const apiKey = resolveApiKey(req);
+  if (apiKey) {
+    try {
+      const ai = createAIClient(apiKey);
+      const prompt = `Anda adalah pakar perancangan kurikulum pendidikan nasional Indonesia (Kurikulum Merdeka).
+Tugas Anda adalah merumuskan Tujuan Pembelajaran (TP) yang diturunkan melalui analisis pedagogis bertahap:
+CP → Elemen CP → Analisis CP → Rumusan TP.
+
+PRINSIP PEDAGOGIS & KONTRAK ELEMEN CP → TP (WAJIB DIPATUHI):
+1. BUKAN KUOTA & ELEMEN SEBAGAI BOUNDARY:
+   - Jumlah TP adalah hasil murni analisis kurikulum, BUKAN berdasarkan target kuota angka.
+   - Elemen CP adalah batas turunan TP. Kelompokkan CPAnalysisItem berdasarkan elemen CP, dan proses setiap elemen secara terpisah.
+   - JANGAN PERNAH menggabungkan (merge) item Analisis CP dari dua elemen yang berbeda menjadi satu TP! Semua cpAnalysisItemIds pada satu TP HARUS berasal dari elemen CP yang sama.
+2. PROSES PER ELEMEN (1..N TP PER ELEMEN):
+   - MERGE HANYA DALAM ELEMEN YANG SAMA: Jika dalam satu elemen terdapat beberapa butir Analisis CP yang sangat erat dan membentuk satu tujuan belajar yang utuh, baru dapat digabungkan menjadi 1 TP koheren.
+   - DEKOMPOSISI (DECOMPOSE): Jika satu butir/elemen Analisis CP memuat beberapa kompetensi atau lingkup materi yang berbeda secara pedagogis, AI HARUS memecahnya menjadi beberapa TP terfokus.
+   - Pertahankan TP berbeda jika kompetensi (misal: pengetahuan vs keterampilan vs praktik) atau lingkup materinya berbeda.
+3. KUALITAS BUTIR TP:
+   - Setiap TP harus eksplisit memuat: Kompetensi (KKO operasional terukur) dan Lingkup Materi (konten esensial).
+   - Format standar: "Peserta didik mampu [Kompetensi/KKO] [Lingkup Materi] melalui [Konteks/Aktivitas/Kondisi] secara [Karakter/Kriteria]."
+4. PELACAKAN SILSILAH (LINEAGE):
+   - Setiap butir TP HARUS mencantumkan ID butir Analisis CP pendukungnya dari elemen yang sama pada "cpAnalysisItemIds" (bisa 1 ID atau lebih dari elemen yang sama). JANGAN PERNAH mengarang ID fiktif.
+
+5. FORMAT KODE TP SEMANTIK:
+   - Kode TP HARUS menggunakan format: [elementCode]-[scopeCode]-[sequence 2 digit]
+   - Contoh: E1-PGD-01, E1-PGD-02, E1-PGD-03, E2-PGD-01.
+   - Urutan sequence dihitung per kombinasi elementCode + scopeCode.
+   - JANGAN menyertakan kelas/fase dalam kode TP (seperti TP 4.1).
+
+DATA PEMBELAJARAN:
+- Mata Pelajaran: ${subject || '-'}
+- Tingkat: ${grade || '-'} (${phase || '-'})
+- Kurikulum: ${curriculum || 'Kurikulum Merdeka'}
+- Deskripsi CP Umum: ${cpGeneral || '-'}
+- Elemen-Elemen CP:
+${
+  cpElements && cpElements.length > 0
+    ? cpElements.map((e: { code?: string; name: string; content: string }, idx: number) => `${idx + 1}. [Kode: ${e.code || `E${idx + 1}`}] [Elemen: ${e.name}]: ${e.content}`).join('\n')
+    : 'Tidak ada rincian elemen.'
+}
+${
+  validAnalysisItems.length > 0
+    ? `\nHASIL ANALISIS CP (Rujukan Utama Kompetensi & Lingkup Materi):
+${validAnalysisItems.map((a: any, idx: number) => `${idx + 1}. [ID: ${a.id}] [Elemen: ${a.elementName || '-'}] [ScopeCode: ${a.scopeCode || 'MAT'}] Kompetensi: "${a.cpCompetence || '-'}" | Materi: "${a.materialScope || '-'}" | Rekomendasi TP: "${a.suggestedTp || '-'}"`).join('\n')}`
+    : ''
+}
+
+Lakukan analisis keterkaitan kurikulum dan rumuskan butir-butir TP yang koheren dan bermakna.
+Kembalikan respon dalam format JSON sesuai schema:`;
+
+      const response = await generateContentWithRetry(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                code: { type: Type.STRING, description: 'Kode TP semantik misal E1-PGD-01, E2-PGD-01' },
+                scopeCode: { type: Type.STRING, description: 'Kode ringkas 2-5 huruf kapital lingkup materi (misal PGD, AS)' },
+                elementName: { type: Type.STRING, description: 'Nama Elemen CP yang menjadi rujukan' },
+                statement: { type: Type.STRING, description: 'Rumusan kalimat Tujuan Pembelajaran lengkap' },
+                competence: { type: Type.STRING, description: 'Kata Kerja Operasional / Kompetensi utama' },
+                contentScope: { type: Type.STRING, description: 'Lingkup Materi / Topik Pembelajaran' },
+                p3Dimensions: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: 'Dimensi Profil Lulusan yang diasah (1-3 dimensi)',
+                },
+                cpAnalysisItemIds: {
+                  type: Type.ARRAY,
+                  items: { type: Type.STRING },
+                  description: 'Daftar ID butir Analisis CP dari elemen yang sama yang menjadi rujukan',
+                },
+              },
+              required: ['code', 'scopeCode', 'elementName', 'statement', 'competence', 'contentScope', 'p3Dimensions', 'cpAnalysisItemIds'],
+            },
+          },
+        },
+      });
+
+      const parsed = cleanAndParseJSON(response.text, null);
+      const validation = validateAITPPayload(parsed);
+
+      if (validation.isValid && Array.isArray(parsed)) {
+        // Lineage & code sanitization
+        const sequenceCounters = new Map<string, number>();
+        const elemCodeMap = new Map<string, string>();
+        if (Array.isArray(cpElements)) {
+          cpElements.forEach((e: any, idx: number) => {
+            const code = e.code || `E${idx + 1}`;
+            if (e.id) elemCodeMap.set(String(e.id), code);
+            if (e.name) elemCodeMap.set(e.name.toLowerCase().trim(), code);
+          });
+        }
+
+        const analysisScopeCodeMap = new Map<string, { elemCode: string; scopeCode: string }>();
+        validAnalysisItems.forEach((a: any, idx: number) => {
+          if (a.id) {
+            const eCode = (a.elementId && elemCodeMap.get(String(a.elementId))) ||
+                          (a.elementName && elemCodeMap.get(a.elementName.toLowerCase().trim())) ||
+                          `E${idx + 1}`;
+            const sCode = a.scopeCode || deriveScopeCode(a.materialScope);
+            analysisScopeCodeMap.set(String(a.id), { elemCode: eCode, scopeCode: sCode });
+          }
+        });
+
+        const sanitizedItems = parsed.map((item: any) => {
+          const rawIds = Array.isArray(item.cpAnalysisItemIds) ? item.cpAnalysisItemIds : [];
+          let filteredIds = rawIds.filter((id: string) => validAnalysisIdSet.has(String(id)));
+
+          // Enforce single-element boundary: if filteredIds contain IDs from multiple elements, retain only those matching first element
+          if (filteredIds.length > 1) {
+            const firstElem = analysisElemMap.get(String(filteredIds[0]));
+            if (firstElem) {
+              filteredIds = filteredIds.filter((id: string) => analysisElemMap.get(String(id)) === firstElem);
+            }
+          }
+
+          // If no valid IDs matched but CP Analysis items exist, match based on element name
+          if (filteredIds.length === 0 && validAnalysisItems.length > 0) {
+            const itemElem = (item.elementName || '').toLowerCase().trim();
+            const itemScope = (item.contentScope || '').toLowerCase().trim();
+            const matchedAnalysis = validAnalysisItems.filter((a: any) => {
+              const aElem = (a.elementName || '').toLowerCase().trim();
+              const aScope = (a.materialScope || '').toLowerCase().trim();
+              return (itemElem && aElem && (itemElem === aElem || itemElem.includes(aElem))) ||
+                     (itemScope && aScope && (itemScope.includes(aScope) || aScope.includes(itemScope)));
+            });
+            if (matchedAnalysis.length > 0) {
+              const firstMatchedElem = (matchedAnalysis[0].elementId || matchedAnalysis[0].elementName || '').toLowerCase().trim();
+              filteredIds = matchedAnalysis
+                .filter((a: any) => (a.elementId || a.elementName || '').toLowerCase().trim() === firstMatchedElem)
+                .map((a: any) => a.id);
+            }
+          }
+
+          // Resolve semantic code format: E1-PGD-01
+          let elemCode = 'E1';
+          let scopeCode = 'MAT';
+
+          if (filteredIds.length > 0 && analysisScopeCodeMap.has(filteredIds[0])) {
+            const info = analysisScopeCodeMap.get(filteredIds[0])!;
+            elemCode = info.elemCode;
+            scopeCode = info.scopeCode;
+          } else {
+            const itemElem = (item.elementName || '').toLowerCase().trim();
+            elemCode = elemCodeMap.get(itemElem) || 'E1';
+            scopeCode = item.scopeCode && typeof item.scopeCode === 'string' && item.scopeCode.trim().length >= 2
+              ? item.scopeCode.trim().toUpperCase()
+              : deriveScopeCode(item.contentScope || item.elementName);
+          }
+
+          const key = `${elemCode}-${scopeCode}`;
+          const seq = (sequenceCounters.get(key) || 0) + 1;
+          sequenceCounters.set(key, seq);
+
+          const generatedCode = `${elemCode}-${scopeCode}-${String(seq).padStart(2, '0')}`;
+
+          return {
+            ...item,
+            code: generatedCode,
+            scopeCode,
+            cpAnalysisItemIds: filteredIds,
+          };
+        });
+
+        return res.json({ success: true, items: sanitizedItems, engine: 'gemini' });
+      }
+    } catch (error: any) {
+      console.warn('Gemini generate TP failed, falling back to pedagogical engine:', error);
+    }
+  }
+
+  // Fallback: Pedagogical Rule Engine
+  const fallbackItems = fallbackGenerateTP({
+    cpGeneral,
+    cpElements,
+    cpAnalysisItems: validAnalysisItems,
+    subject,
+    grade,
+    phase,
+    curriculum,
+  });
+
+  return res.json({ success: true, items: fallbackItems, engine: 'pedagogical_engine' });
+});
+
+// 3. Endpoint: AI Generate ATP from TP
+app.post('/api/ai/generate-atp', async (req, res) => {
+  const { tps, cpGeneral, subject, grade, phase, semester, academicYear, curriculum, totalHoursPerWeek } = req.body || {};
+
+  // 1. Validate TP array prerequisite
+  if (!tps || !Array.isArray(tps) || tps.length === 0) {
+    return res.status(400).json({ error: 'Daftar Tujuan Pembelajaran (TP) harus diisi dan tidak boleh kosong sebelum menyusun ATP.' });
+  }
+
+  // 2. Validate Academic Context Prerequisites
+  if (!subject || typeof subject !== 'string' || subject.trim() === '') {
+    return res.status(400).json({ error: 'Mata pelajaran harus diisi sebelum menyusun ATP.' });
+  }
+
+  if (!grade || typeof grade !== 'string' || grade.trim() === '') {
+    return res.status(400).json({ error: 'Kelas/tingkat harus diisi sebelum menyusun ATP.' });
+  }
+
+  const isK13 = (curriculum && String(curriculum).toUpperCase().includes('K13')) || (curriculum && String(curriculum).toUpperCase().includes('2013'));
+  if (!isK13) {
+    if (!phase || typeof phase !== 'string' || phase.trim() === '') {
+      return res.status(400).json({ error: 'Fase harus diisi untuk Kurikulum Merdeka sebelum menyusun ATP.' });
+    }
+  }
+
+  if (!academicYear || typeof academicYear !== 'string' || academicYear.trim() === '') {
+    return res.status(400).json({ error: 'Tahun ajaran/akademik harus diisi sebelum menyusun ATP.' });
+  }
+
+  if (isK13) {
+    if (!semester || typeof semester !== 'string' || semester.trim() === '') {
+      return res.status(400).json({ error: 'Semester harus diisi sebelum menyusun ATP.' });
+    }
+  }
+
+  // 3. Validate totalHoursPerWeek if provided (No silent default, no fake JP assumption)
+  let validatedWeeklyJP: number | undefined = undefined;
+  if (totalHoursPerWeek !== undefined && totalHoursPerWeek !== null) {
+    const isNumType = typeof totalHoursPerWeek === 'number';
+    const isStringType = typeof totalHoursPerWeek === 'string';
+    const parsed = isNumType
+      ? totalHoursPerWeek
+      : isStringType && totalHoursPerWeek.trim() !== ''
+        ? Number(totalHoursPerWeek)
+        : NaN;
+
+    if (
+      !Number.isFinite(parsed) ||
+      isNaN(parsed) ||
+      parsed <= 0 ||
+      !Number.isInteger(parsed)
+    ) {
+      return res.status(400).json({
+        error: 'Alokasi jam per minggu (totalHoursPerWeek) jika diisi harus berupa bilangan bulat positif yang valid (misal: 1, 2, 4, 5).',
+      });
+    }
+    validatedWeeklyJP = parsed;
+  }
+
+  // 4. Check AI configuration (GEMINI_API_KEY or BYOK header)
+  const apiKey = resolveApiKey(req);
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      code: 'AI_NOT_CONFIGURED',
+      error: 'Layanan AI belum dikonfigurasi pada server.',
+    });
+  }
+
+  try {
+    const ai = createAIClient(apiKey);
+    const prompt = `Anda adalah spesialis penyusun Alur Tujuan Pembelajaran (ATP) dan perangkat pembelajaran Kurikulum Merdeka.
+Susunlah Matriks Alur Tujuan Pembelajaran (ATP) yang berurutan secara logis, pedagogis, dan terstruktur dari daftar Tujuan Pembelajaran (TP) berikut:
+
+DATA PEMBELAJARAN:
+- Mata Pelajaran: ${subject || '-'}
+- Kelas / Fase: ${grade || '-'} / ${phase || '-'}
+${isK13 ? `- Tahun Ajaran / Semester: ${academicYear || '-'} / ${semester || '-'}` : `- Tahun Ajaran: ${academicYear || '-'}`}
+- Alokasi Jam per Minggu: ${validatedWeeklyJP !== undefined ? `${validatedWeeklyJP} JP` : 'Belum ditentukan'}
+- Rujukan CP: ${cpGeneral || '-'}
+
+DAFTAR TP YANG SUDAH DIBUAT (PENTING: Gunakan TP_ID persis saat menautkan TP!):
+${tps
+  .map(
+    (tp: { id: string; code: string; statement: string; competence?: string; contentScope?: string; p3Dimensions?: string[] }) =>
+      `- [TP_ID: ${tp.id}] [TP_CODE: ${tp.code || '-'}] Rumusan: "${tp.statement}" (Materi: "${tp.contentScope || '-'}", Kompetensi: "${tp.competence || '-'}", Dimensi Profil Lulusan: ${tp.p3Dimensions?.join(', ') || '-'})`
+  )
+  .join('\n')}
+
+INSTRUKSI PENYUSUNAN ATP:
+1. Urutkan TP secara logis (misal dari konkret ke abstrak, mudah ke sukar, atau hierarki keterampilan bahasa/sains/matematika).
+${
+  validatedWeeklyJP !== undefined
+    ? `2. Tentukan Alokasi Waktu (JP) yang realistis dan proporsional untuk tiap langkah pembelajaran (total mingguan: ${validatedWeeklyJP} JP).`
+    : `2. Alokasi Waktu (JP) per minggu BELUM DITENTUKAN. JANGAN mengarang alokasi JP atau menyimpulkan angka JP sendiri. Kosongkan alokasi JP untuk tiap langkah pembelajaran.`
+}
+3. Rincikan Rencana Asesmen (Asesmen Awal, Formatif, dan Sumatif Lingkup Materi).
+4. Rincikan Glosarium / Kata Kunci penting.
+5. Gunakan terminologi "Murid" (bukan peserta didik) dan "Dimensi Profil Lulusan".
+6. Buat rasionalisasi alur pembelajaran secara komprehensif.
+
+Kembalikan output JSON sesuai schema:`;
+
+    const response = await generateContentWithRetry(ai, {
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            rationale: {
+              type: Type.STRING,
+              description: 'Penjelasan rasional mengapa alur TP disusun dalam urutan ini.',
+            },
+            items: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  stepNumber: { type: Type.INTEGER, description: 'Urutan alur pembelajaran (1, 2, 3...)' },
+                  tpId: { type: Type.STRING, description: 'TP_ID rujukan persis dari daftar input' },
+                  tpCode: { type: Type.STRING, description: 'Kode TP yang diurutkan' },
+                  tpStatement: { type: Type.STRING, description: 'Rumusan TP' },
+                  materialScope: { type: Type.STRING, description: 'Lingkup Materi / Topik Pembelajaran Spesifik' },
+                  jp: {
+                    type: Type.INTEGER,
+                    description: validatedWeeklyJP !== undefined
+                      ? 'Jumlah Alokasi Jam Pelajaran (JP), misal 4, 6, 8'
+                      : 'Jangan diisi jika alokasi JP per minggu belum ditentukan',
+                  },
+                  p3Dimensions: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  assessmentPlan: { type: Type.STRING, description: 'Bentuk Asesmen Awal, Formatif, dan Sumatif' },
+                  glossary: { type: Type.STRING, description: 'Kata kunci / Glosarium istilah penting' },
+                  resources: { type: Type.STRING, description: 'Sumber belajar / Media yang disarankan' },
+                },
+                required: [
+                  'stepNumber',
+                  'tpId',
+                  'tpCode',
+                  'tpStatement',
+                  'materialScope',
+                  ...(validatedWeeklyJP !== undefined ? ['jp'] : []),
+                  'p3Dimensions',
+                  'assessmentPlan',
+                  'glossary',
+                ],
+              },
+            },
+          },
+          required: ['rationale', 'items'],
+        },
+      },
+    });
+
+    const parsed = cleanAndParseJSON(response.text, null);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return res.status(500).json({ error: 'Respons AI tidak memenuhi kualifikasi struktur ATP: Respons bukan berupa objek valid' });
+    }
+
+    if (!Array.isArray(parsed.items) || parsed.items.length === 0) {
+      return res.status(500).json({ error: 'Respons AI tidak memenuhi kualifikasi struktur ATP: Hasil perumusan alur TP kosong atau bukan array' });
+    }
+
+    // Build canonical TP maps for strict validation and matching
+    const tpMapById = new Map<string, any>();
+    const tpMapByCode = new Map<string, any[]>();
+
+    tps.forEach((tp: any) => {
+      if (tp.id) tpMapById.set(tp.id, tp);
+      if (tp.code) {
+        const normalizedCode = tp.code.trim().toUpperCase();
+        if (!tpMapByCode.has(normalizedCode)) {
+          tpMapByCode.set(normalizedCode, []);
+        }
+        tpMapByCode.get(normalizedCode)!.push(tp);
+      }
+    });
+
+    const resolvedItems: any[] = [];
+
+    for (let i = 0; i < parsed.items.length; i++) {
+      const item = parsed.items[i];
+      if (!item || typeof item !== 'object') {
+        return res.status(500).json({ error: `Respons AI tidak memenuhi kualifikasi struktur ATP: Butir langkah ATP ke-${i + 1} bukan berupa objek valid` });
+      }
+
+      let canonicalTP: any = null;
+
+      // 1. Primary resolution using tpId
+      if (item.tpId && tpMapById.has(item.tpId)) {
+        canonicalTP = tpMapById.get(item.tpId);
+      }
+
+      // 2. Secondary resolution using tpCode fallback
+      if (!canonicalTP && item.tpCode) {
+        const normCode = item.tpCode.trim().toUpperCase();
+        const matches = tpMapByCode.get(normCode);
+        if (matches && matches.length === 1) {
+          canonicalTP = matches[0];
+        }
+      }
+
+      // If we cannot resolve, response is considered invalid (prevents hallucinating TPs)
+      if (!canonicalTP) {
+        return res.status(500).json({
+          error: `Respons AI tidak sah: Langkah ke-${i + 1} merujuk ke Tujuan Pembelajaran (${item.tpId || item.tpCode || 'Tanpa ID'}) yang tidak ditemukan dalam daftar rujukan guru.`
+        });
+      }
+
+      // Overwrite ATP items with exact canonical TP reference values
+      item.tpId = canonicalTP.id;
+      item.tpCode = canonicalTP.code;
+      item.tpStatement = canonicalTP.statement;
+
+      if (validatedWeeklyJP === undefined) {
+        // Enforce unresolved JP: do not leak synthetic or guessed numbers
+        delete item.jp;
+        delete item.allocatedJP;
+      } else {
+        // If JP was provided by caller, retain positive finite JP from AI
+        if (typeof item.jp === 'number' && Number.isFinite(item.jp) && item.jp > 0) {
+          item.allocatedJP = item.jp;
+        } else {
+          delete item.jp;
+          delete item.allocatedJP;
+        }
+      }
+
+      resolvedItems.push(item);
+    }
+
+    parsed.items = resolvedItems;
+
+    return res.json({ success: true, data: parsed, engine: 'gemini' });
+  } catch (error: any) {
+    console.error('Gemini ATP generation failed:', error);
+    const isAuth = error?.status === 401 || error?.status === 403 ||
+      (error?.message && (error.message.includes('API_KEY_INVALID') || error.message.includes('API key not valid')));
+    return res.status(isAuth ? (error.status || 401) : 500).json({
+      error: `Gagal menyusun ATP dengan AI: ${error.message || 'Respons provider AI tidak dapat diproses'}`,
+      code: isAuth ? 'INVALID_API_KEY' : undefined,
+    });
+  }
+});
+
+// 3b. Endpoint: AI Generate ATP Unit/Bab Mapping
+app.post('/api/ai/generate-atp-mapping', async (req, res) => {
+  const {
+    atpItems,
+    subject,
+    grade,
+    phase,
+    targetUnitCount = 6,
+    teacherUnits = [],
+  } = req.body || {};
+
+  if (!Array.isArray(atpItems) || atpItems.length === 0) {
+    return res.status(400).json({ error: 'Daftar langkah ATP tidak boleh kosong.' });
+  }
+
+  const unitCount = Math.max(1, Math.min(20, Number(targetUnitCount) || 6));
+
+  // Build teacher unit constraints map
+  const teacherUnitMap: Record<number, string> = {};
+  if (Array.isArray(teacherUnits)) {
+    teacherUnits.forEach((u: any) => {
+      if (u && typeof u.unitIndex === 'number' && typeof u.unitTitle === 'string' && u.unitTitle.trim().length > 0) {
+        teacherUnitMap[u.unitIndex] = u.unitTitle.trim();
+      }
+    });
+  }
+
+  // Check AI configuration (GEMINI_API_KEY or BYOK header)
+  const apiKey = resolveApiKey(req);
+  if (apiKey) {
+    try {
+      const ai = createAIClient(apiKey);
+      const prompt = `Anda adalah pakar kurikulum dan pengembang perangkat pembelajaran Kurikulum Merdeka.
+Tugas Anda adalah melakukan pemetaan Unit/Bab (Unit Mapping) dan Lingkup Materi untuk setiap butir langkah Alur Tujuan Pembelajaran (ATP) berikut.
+
+DATA PEMBELAJARAN:
+- Mata Pelajaran: ${subject || '-'}
+- Kelas / Fase: ${grade || '-'} (${phase || '-'})
+- Target Jumlah Bab / Unit Pembelajaran: ${unitCount} Bab
+
+ATURAN DAN BATASAN DARI GURU (WAJIB DIPATUHI SECARA MUTLAK):
+1. Target jumlah Bab adalah ${unitCount} Bab (Bab 1 s.d. Bab ${unitCount}).
+${
+  Object.keys(teacherUnitMap).length > 0
+    ? `2. Nama Bab yang SUDAH DITETAPKAN OLEH GURU (JANGAN DIUBAH SAMA SEKALI, GUNAKAN PERSIS SAMA):\n${Object.entries(
+        teacherUnitMap
+      )
+        .map(([idx, title]) => `   - Bab ${idx}: "${title}"`)
+        .join('\n')}\n3. Untuk Bab yang belum dinamai oleh guru, usulkan judul Bab yang kontekstual, menarik, dan sesuai materi Kurikulum Merdeka.`
+    : `2. Usulkan nama Bab yang menarik, ringkas, dan relevan dengan materi pelajaran untuk Bab 1 s.d. Bab ${unitCount} (misal: "Bab 1: Menjelajah Teks Deskripsi", "Bab 2: Mengungkap Fakta dalam Berita", dsb).`
+}
+4. Setiap langkah ATP harus dipetakan ke salah satu Bab secara kronologis dan berkesinambungan. Urutan langkah ATP (Step 1 s.d. Step ${atpItems.length}) harus berurutan secara logis dalam Bab yang bertahap (Bab 1, Bab 2, dst).
+5. Tentukan Lingkup Materi / Topik Pembelajaran yang spesifik dan bernas untuk tiap langkah ATP.
+${
+  atpItems.some((it: any) => it.unitTitle || it.materialScope)
+    ? `6. Nilai yang sudah diisi oleh guru pada butir ATP tertentu (ditandai dengan [Kustom Guru]) harus dipertahankan dan diutamakan.`
+    : ''
+}
+
+DAFTAR LANGKAH ATP YANG HARUS DIPETAKAN:
+${atpItems
+  .map(
+    (item: any, idx: number) =>
+      `${idx + 1}. [ID: ${item.id}] Langkah #${item.stepNumber || idx + 1} (Kode TP: ${item.tpCode || '-'}): "${
+        item.tpStatement || '-'
+      }" ${item.tpContentScope ? `[Lingkup Materi TP Asli: "${item.tpContentScope}"]` : ''} ${
+        item.unitTitle ? `[Kustom Guru Unit: "${item.unitTitle}"]` : ''
+      } ${item.materialScope ? `[Kustom Guru Materi: "${item.materialScope}"]` : ''}`
+  )
+  .join('\n')}
+
+Kembalikan output JSON sesuai skema:
+- units: daftar ${unitCount} Bab beserta nomor unitIndex (1..${unitCount}) dan judul unitTitle.
+- mappings: daftar pemetaan untuk setiap langkah ATP dengan atpItemId (merujuk ID langkah ATP di atas), unitTitle, dan materialScope.`;
+
+      const response = await generateContentWithRetry(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              units: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    unitIndex: { type: Type.INTEGER },
+                    unitTitle: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                  },
+                  required: ['unitIndex', 'unitTitle'],
+                },
+              },
+              mappings: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    atpItemId: { type: Type.STRING },
+                    unitTitle: { type: Type.STRING },
+                    materialScope: { type: Type.STRING },
+                  },
+                  required: ['atpItemId', 'unitTitle', 'materialScope'],
+                },
+              },
+            },
+            required: ['units', 'mappings'],
+          },
+        },
+      });
+
+      const parsed = cleanAndParseJSON(response.text, null);
+      if (parsed && Array.isArray(parsed.mappings) && parsed.mappings.length > 0) {
+        // Enforce teacher unit titles on the units list
+        const finalUnits = (parsed.units || []).map((u: any, idx: number) => {
+          const uIdx = u.unitIndex || idx + 1;
+          const teacherTitle = teacherUnitMap[uIdx];
+          return {
+            unitIndex: uIdx,
+            unitTitle: teacherTitle || u.unitTitle || `Bab ${uIdx}`,
+            description: u.description || '',
+          };
+        });
+
+        // If units count was less than unitCount, fill missing
+        for (let i = 1; i <= unitCount; i++) {
+          if (!finalUnits.some((u: any) => u.unitIndex === i)) {
+            finalUnits.push({
+              unitIndex: i,
+              unitTitle: teacherUnitMap[i] || `Bab ${i}`,
+              description: '',
+            });
+          }
+        }
+        finalUnits.sort((a: any, b: any) => a.unitIndex - b.unitIndex);
+
+        return res.json({
+          success: true,
+          data: {
+            units: finalUnits,
+            mappings: parsed.mappings,
+          },
+          engine: 'gemini',
+        });
+      }
+    } catch (error: any) {
+      console.warn('Gemini ATP mapping generation failed, using pedagogical rule fallback:', error);
+    }
+  }
+
+  // Fallback: Pedagogical Rule-Based Mapping Engine
+  const fallback = fallbackGenerateATPMapping({
+    atpItems,
+    targetUnitCount: unitCount,
+    teacherUnits: teacherUnitMap,
+    subject,
+  });
+
+  return res.json({ success: true, data: fallback, engine: 'pedagogical_engine' });
+});
+
+function extractKeywords(text: string): string[] {
+  if (!text) return [];
+  const STOPWORDS = new Set([
+    'dan', 'atau', 'pada', 'dalam', 'dengan', 'untuk', 'secara', 'yang', 'serta',
+    'dapat', 'mampu', 'peserta', 'didik', 'siswa', 'murid', 'pembelajaran', 'materi',
+    'konsep', 'memahami', 'mengidentifikasi', 'menjelaskan', 'mempraktikkan', 'menganalisis',
+    'merancang', 'melakukan', 'tentang', 'terhadap', 'sebagai', 'melalui', 'proses',
+    'tahap', 'bagian', 'berbagai', 'macam', 'jenis', 'dasar', 'awal', 'akhir', 'menggunakan'
+  ]);
+  const clean = text.toLowerCase().replace(/[^a-z0-9\s-]/g, ' ');
+  const tokens = clean.split(/\s+/).filter((t) => t.length > 2 && !STOPWORDS.has(t));
+  return Array.from(new Set(tokens));
+}
+
+function isCrossCuttingTp(tp?: any): boolean {
+  if (!tp) return false;
+  const full = `${tp.statement || ''} ${tp.contentScope || ''} ${tp.elementName || ''}`.toLowerCase();
+  return (
+    full.includes('profil pelajar pancasila') ||
+    full.includes('profil lulusan') ||
+    full.includes('karakter') ||
+    full.includes('tanggung jawab') ||
+    full.includes('refleksi') ||
+    full.includes('evaluasi diri') ||
+    full.includes('sikap') ||
+    full.includes('kolaborasi')
+  );
+}
+
+function findBestExistingUnitMatch(u: any, existingUnits: any[]): any {
+  if (!Array.isArray(existingUnits) || existingUnits.length === 0) return null;
+
+  // 1. Exact existing id
+  if (u.id) {
+    const match = existingUnits.find(eu => eu.id === u.id);
+    if (match) return match;
+  }
+
+  // 2. Highest overlap of linkedAtpItemIds / linkedTpIds
+  let bestMatch: any = null;
+  let maxOverlap = 0;
+
+  const uAtpIds = new Set(u.linkedAtpItemIds || []);
+  const uTpIds = new Set(u.linkedTpIds || []);
+
+  for (const eu of existingUnits) {
+    let overlapCount = 0;
+    
+    if (Array.isArray(eu.linkedAtpItemIds)) {
+      eu.linkedAtpItemIds.forEach((id: string) => {
+        if (uAtpIds.has(id)) overlapCount += 3; // higher weight for exact ATP step match
+      });
+    }
+    if (Array.isArray(eu.linkedTpIds)) {
+      eu.linkedTpIds.forEach((id: string) => {
+        if (uTpIds.has(id)) overlapCount += 1;
+      });
+    }
+
+    if (overlapCount > maxOverlap) {
+      maxOverlap = overlapCount;
+      bestMatch = eu;
+    }
+  }
+
+  if (maxOverlap > 0) return bestMatch;
+
+  // 3. Semantic title match (using keyword similarity)
+  let bestTitleMatch: any = null;
+  let maxTitleSimilarity = 0.4; // minimum similarity threshold
+
+  const normTitleU = (u.title || '').toLowerCase().replace(/^(bab|unit)\s*\d*[:\-]?\s*/i, '').trim();
+  const kwU = extractKeywords(normTitleU);
+
+  for (const eu of existingUnits) {
+    const normTitleEU = (eu.title || '').toLowerCase().replace(/^(bab|unit)\s*\d*[:\-]?\s*/i, '').trim();
+    if (normTitleU === normTitleEU) return eu; // exact clean title match
+
+    const kwEU = extractKeywords(normTitleEU);
+    const overlap = kwU.filter(k => kwEU.includes(k));
+    const similarity = overlap.length / Math.max(1, Math.max(kwU.length, kwEU.length));
+    
+    if (similarity > maxTitleSimilarity) {
+      maxTitleSimilarity = similarity;
+      bestTitleMatch = eu;
+    }
+  }
+
+  return bestTitleMatch;
+}
+
+function findBestExistingMaterialMatch(m: any, existingMaterials: any[]): any {
+  if (!Array.isArray(existingMaterials) || existingMaterials.length === 0) return null;
+
+  // 1. Exact existing id
+  if (m.id) {
+    const match = existingMaterials.find(em => em.id === m.id);
+    if (match) return match;
+  }
+
+  // 2. Highest overlap of linkedAtpItemIds / linkedTpIds
+  let bestMatch: any = null;
+  let maxOverlap = 0;
+
+  const mAtpIds = new Set(m.linkedAtpItemIds || []);
+  const mTpIds = new Set(m.linkedTpIds || []);
+
+  for (const em of existingMaterials) {
+    let overlapCount = 0;
+    if (Array.isArray(em.linkedAtpItemIds)) {
+      em.linkedAtpItemIds.forEach((id: string) => {
+        if (mAtpIds.has(id)) overlapCount += 3;
+      });
+    }
+    if (Array.isArray(em.linkedTpIds)) {
+      em.linkedTpIds.forEach((id: string) => {
+        if (mTpIds.has(id)) overlapCount += 1;
+      });
+    }
+
+    if (overlapCount > maxOverlap) {
+      maxOverlap = overlapCount;
+      bestMatch = em;
+    }
+  }
+
+  if (maxOverlap > 0) return bestMatch;
+
+  // 3. Semantic title match
+  let bestTitleMatch: any = null;
+  let maxTitleSimilarity = 0.4;
+
+  const normTitleM = (m.title || '').toLowerCase().trim();
+  const kwM = extractKeywords(normTitleM);
+
+  for (const em of existingMaterials) {
+    const normTitleEM = (em.title || '').toLowerCase().trim();
+    if (normTitleM === normTitleEM) return em;
+
+    const kwEM = extractKeywords(normTitleEM);
+    const overlap = kwM.filter(k => kwEM.includes(k));
+    const similarity = overlap.length / Math.max(1, Math.max(kwM.length, kwEM.length));
+
+    if (similarity > maxTitleSimilarity) {
+      maxTitleSimilarity = similarity;
+      bestTitleMatch = em;
+    }
+  }
+
+  return bestTitleMatch;
+}
+
+// 3c. Endpoint: Canonical AI Generate ATPUnitMappingData (Multi-Material & Semantic Bab Clustering)
+app.post('/api/ai/generate-canonical-atp-unit-mapping', async (req, res) => {
+  const {
+    academicSettingId = '',
+    subject = 'Mata Pelajaran',
+    grade = '',
+    phase = '',
+    tpData,
+    atpData,
+    cpAnalysisData,
+    existingMapping,
+    targetUnitCount,
+    targetMaterialCountPerUnit,
+  } = req.body || {};
+
+  const validTpItems = Array.isArray(tpData?.items) ? tpData.items : [];
+  const validAtpItems = Array.isArray(atpData?.items)
+    ? [...atpData.items].sort((a, b) => (a.stepNumber || 0) - (b.stepNumber || 0))
+    : [];
+
+  if (validTpItems.length === 0 || validAtpItems.length === 0) {
+    return res.status(400).json({ error: 'Data TP dan ATP tidak boleh kosong untuk menyusun pemetaan unit.' });
+  }
+
+  const tpMap = new Map<string, (typeof validTpItems)[0]>();
+  validTpItems.forEach((tp) => tpMap.set(tp.id, tp));
+
+  const atpMap = new Map<string, (typeof validAtpItems)[0]>();
+  validAtpItems.forEach((atp) => atpMap.set(atp.id, atp));
+
+  const count = targetUnitCount ? Math.max(1, Math.min(20, Number(targetUnitCount))) : undefined;
+
+  const apiKey = resolveApiKey(req);
+  if (apiKey) {
+    try {
+      const ai = createAIClient(apiKey);
+
+      const prompt = `Anda adalah pakar pengembang kurikulum dan perangkat pembelajaran Kurikulum Merdeka.
+Tugas Anda adalah melakukan pengelompokan tematis (Semantic Clustering) butir-butir Tujuan Pembelajaran (TP) dan Alur Tujuan Pembelajaran (ATP) ke dalam Unit / Bab Pembelajaran yang bermakna, serta mendekomposisi setiap Bab menjadi beberapa Lingkup Materi Inti.
+
+PRINSIP & OTORITAS PEDAGOGIS (WAJIB DIPATUHI):
+1. TP adalah otoritas konten dan tujuan pembelajaran.
+2. ATP adalah otoritas kronologi / urutan pembelajaran (stepNumber).
+3. Bab / Unit mengelompokkan TP dan langkah ATP yang relevan secara semantik (Semantic Clustering), bukan pembagian butir secara mekanis (misal 12 TP dibagi 6 = 2).
+4. TP dari elemen/domain yang berbeda namun mendukung topik yang sama dapat disatukan dalam satu Bab (misal: TP pemahaman dan TP keterampilan praktis pada topik yang sama).
+5. TP integratif / lintas-elemen (misal: karakter/evaluasi diri/analisis umum) dapat dikaitkan ke Bab relevan bersama TP konten utama.
+6. ${
+  count
+    ? `Target jumlah Bab adalah ${count} Bab sebagai panduan organisasi. Jika TP/ATP yang tersedia secara alami lebih sesuai dengan jumlah Bab tertentu, gunakan pengelompokan yang paling logis.`
+    : `Jumlah Bab ditentukan secara alami berdasarkan kesamaan semantik (Semantic Clustering) dari materi TP/ATP. Jangan memaksakan atau menggabungkan materi yang berbeda secara mekanis hanya untuk menuju jumlah unit tertentu.`
+} JANGAN PERNAH membuat TP atau ATP fiktif.
+7. Setiap Bab didekomposisi menjadi Lingkup Materi yang didukung secara autentik oleh TP dan konteks Analisis CP terkait (Lingkup Materi BUKAN sekadar 1:1 dengan langkah ATP). Satu Bab dapat memuat satu atau beberapa Lingkup Materi sesuai kedalaman materi yang didukung secara pedagogis. JANGAN MENGARANG materi generik atau fiktif hanya untuk memenuhi kuota jumlah materi.
+8. Setiap Lingkup Materi harus mencantumkan relasi linkedTpIds dan linkedAtpItemIds dari TP/ATP yang mendukungnya.
+9. Gunakan "TP_CODE" dan "scopeCode" (seperti PGD, AS, dll) sebagai isyarat semantis yang sangat kuat (strong semantic signal) untuk pengelompokan lintas elemen. Sebagai contoh, TP dengan scopeCode yang sama mengindikasikan mereka harus berada dalam keluarga Unit/Bab yang sama. JANGAN melakukan hardcode khusus PJOK.
+${
+  existingMapping && Array.isArray(existingMapping.units) && existingMapping.units.length > 0
+    ? `10. OTORITAS GURU (MUTLAK): Guru telah mengisi struktur pemetaan sebelumnya. Nama Bab dan nama Lingkup Materi yang sudah diisi guru TIDAK BOLEH DIUBAH/DITIMPA SAMA SEKALI. Anda hanya bertugas melengkapi nama yang kosong atau menyempurnakan relasi TP/ATP.`
+    : ''
+}
+
+DATA KURIKULUM:
+- Mata Pelajaran: ${subject}
+- Kelas / Fase: ${grade} (${phase})
+${count ? `- Target Jumlah Bab: ${count} Bab` : '- Target Jumlah Bab: Sesuai keselarasan semantis alami'}
+
+DAFTAR TUJUAN PEMBELAJARAN (TP):
+${validTpItems
+  .map(
+    (tp, i) =>
+      `${i + 1}. [TP_ID: ${tp.id}] Kode TP: ${tp.code || `TP-${i + 1}`} | ScopeCode: ${tp.scopeCode || 'MAT'} | Elemen: ${tp.elementName || '-'} | Rumusan: "${
+        tp.statement
+      }" | Lingkup Materi TP: "${tp.contentScope || '-'}" | Kompetensi: "${tp.competence || '-'}"`
+  )
+  .join('\n')}
+
+DAFTAR ALUR TUJUAN PEMBELAJARAN (ATP) SECARA KRONOLOGIS:
+${validAtpItems
+  .map(
+    (atp, i) =>
+      `${i + 1}. [ATP_ID: ${atp.id}] Langkah #${atp.stepNumber || i + 1} (Ref TP_ID: ${atp.tpId || '-'}): "${
+        atp.tpStatement || tpMap.get(atp.tpId || '')?.statement || '-'
+      }"`
+  )
+  .join('\n')}
+${
+  Array.isArray(cpAnalysisData?.items) && cpAnalysisData.items.length > 0
+    ? `\nKONTEKS ANALISIS CP (REFERENSI PENDUKUNG):\n${cpAnalysisData.items
+        .map(
+          (cpa, i) =>
+            `${i + 1}. Elemen: ${cpa.elementName} | Kompetensi: ${cpa.cpCompetence} | Lingkup Materi: ${cpa.materialScope} | ScopeCode: ${cpa.scopeCode || 'MAT'}`
+        )
+        .join('\n')}`
+    : ''
+}
+${
+  existingMapping && Array.isArray(existingMapping.units) && existingMapping.units.length > 0
+    ? `\nSTRUKTUR EKSISTING DARI GURU (PERTAHANKAN STRUKTUR & JUDUL NON-KOSONG):\n${JSON.stringify(
+        existingMapping.units.map((u) => ({
+          id: u.id,
+          title: u.title,
+          order: u.order,
+          materials: (u.materials || []).map((m) => ({ id: m.id, title: m.title, order: m.order })),
+        })),
+        null,
+        2
+      )}`
+    : ''
+}
+
+Kembalikan respon JSON dengan skema:
+- units: array Unit / Bab Pembelajaran.
+  - id: ID unik unit (misal "unit-1" atau ID eksisting jika ada)
+  - title: Judul Bab (misal "Bab 1: Menjelajah Teks Deskripsi")
+  - order: Nomor urut Bab (1, 2, 3...)
+  - linkedTpIds: Array ID TP yang dipayungi oleh Bab ini
+  - linkedAtpItemIds: Array ID ATP yang dipayungi oleh Bab ini
+  - materials: Array Lingkup Materi dalam Bab ini
+    - id: ID unik materi (misal "mat-1-1")
+    - title: Judul Lingkup Materi yang bernas dan operasional
+    - order: Nomor urut materi dalam Bab (1, 2, 3...)
+    - linkedTpIds: Array ID TP yang mendukung materi ini
+    - linkedAtpItemIds: Array ID ATP yang mendukung materi ini`;
+
+      const response = await generateContentWithRetry(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              units: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    order: { type: Type.INTEGER },
+                    linkedTpIds: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                    },
+                    linkedAtpItemIds: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                    },
+                    materials: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          id: { type: Type.STRING },
+                          title: { type: Type.STRING },
+                          order: { type: Type.INTEGER },
+                          linkedTpIds: {
+                            type: Type.ARRAY,
+                            items: { type: Type.STRING },
+                          },
+                          linkedAtpItemIds: {
+                            type: Type.ARRAY,
+                            items: { type: Type.STRING },
+                          },
+                        },
+                        required: ['title', 'order', 'linkedTpIds', 'linkedAtpItemIds'],
+                      },
+                    },
+                  },
+                  required: ['title', 'order', 'linkedTpIds', 'linkedAtpItemIds', 'materials'],
+                },
+              },
+            },
+            required: ['units'],
+          },
+        },
+      });
+
+      const parsed = cleanAndParseJSON(response.text, null);
+      if (parsed && Array.isArray(parsed.units) && parsed.units.length > 0) {
+        // SERVER-SIDE DETERMINISTIC MERGE SAFETY & SANITIZATION
+        const rawUnits = parsed.units;
+
+        // Map existing units/materials for strict preservation
+        const existingUnitsList = existingMapping && Array.isArray(existingMapping.units) ? existingMapping.units : [];
+
+        const consumedUnitIds = new Set<string>();
+
+        const sanitizedUnits = rawUnits.map((u: any, uIdx: number) => {
+          const unitOrder = u.order || uIdx + 1;
+          const availableUnits = existingUnitsList.filter(eu => !consumedUnitIds.has(eu.id));
+          const matchedExisting = findBestExistingUnitMatch(u, availableUnits);
+          if (matchedExisting) {
+            consumedUnitIds.add(matchedExisting.id);
+          }
+
+          // Strictly preserve teacher title if non-empty
+          const finalTitle =
+            matchedExisting && matchedExisting.title && matchedExisting.title.trim().length > 0
+              ? matchedExisting.title.trim()
+              : (u.title || `Bab ${unitOrder}`).trim();
+
+          const finalUnitId = matchedExisting?.id || u.id || `unit-${Date.now()}-${unitOrder}`;
+
+          // Sanitize linked IDs (only allow IDs that exist in canonical TP and ATP)
+          const validLinkedTpIds: string[] = Array.isArray(u.linkedTpIds)
+            ? Array.from(new Set(u.linkedTpIds.filter((id: string) => tpMap.has(id))))
+            : [];
+          const validLinkedAtpItemIds: string[] = Array.isArray(u.linkedAtpItemIds)
+            ? Array.from(new Set(u.linkedAtpItemIds.filter((id: string) => atpMap.has(id))))
+            : [];
+
+          // LINK CONTRACT: Ensure linkedTpIds contains corresponding tpId of every linkedAtpItemId
+          validLinkedAtpItemIds.forEach(atpId => {
+            const atpItem = atpMap.get(atpId);
+            if (atpItem && atpItem.tpId && !validLinkedTpIds.includes(atpItem.tpId)) {
+              validLinkedTpIds.push(atpItem.tpId);
+            }
+          });
+
+          // Sanitize materials
+          const existingMaterials = matchedExisting?.materials || [];
+          const rawMaterials = Array.isArray(u.materials) ? u.materials : [];
+
+          const consumedMaterialIds = new Set<string>();
+
+          const sanitizedMaterials = rawMaterials.map((m: any, mIdx: number) => {
+            const matOrder = m.order || mIdx + 1;
+            const availableMaterials = existingMaterials.filter(em => !consumedMaterialIds.has(em.id));
+            const matchedMat = findBestExistingMaterialMatch(m, availableMaterials);
+            if (matchedMat) {
+              consumedMaterialIds.add(matchedMat.id);
+            }
+
+            const finalMatTitle =
+              matchedMat && matchedMat.title && matchedMat.title.trim().length > 0
+                ? matchedMat.title.trim()
+                : (m.title || `Lingkup Materi ${matOrder}`).trim();
+
+            const finalMatId = matchedMat?.id || m.id || `mat-${Date.now()}-${unitOrder}-${matOrder}`;
+
+            const matTpIds: string[] = Array.isArray(m.linkedTpIds)
+              ? Array.from(new Set(m.linkedTpIds.filter((id: string) => tpMap.has(id))))
+              : [];
+            const matAtpIds: string[] = Array.isArray(m.linkedAtpItemIds)
+              ? Array.from(new Set(m.linkedAtpItemIds.filter((id: string) => atpMap.has(id))))
+              : [];
+
+            // LINK CONTRACT: Ensure linkedTpIds contains corresponding tpId of every linkedAtpItemId
+            matAtpIds.forEach(atpId => {
+              const atpItem = atpMap.get(atpId);
+              if (atpItem && atpItem.tpId && !matTpIds.includes(atpItem.tpId)) {
+                matTpIds.push(atpItem.tpId);
+              }
+              // Propagation to unit level
+              if (!validLinkedAtpItemIds.includes(atpId)) {
+                validLinkedAtpItemIds.push(atpId);
+              }
+              if (atpItem && atpItem.tpId && !validLinkedTpIds.includes(atpItem.tpId)) {
+                validLinkedTpIds.push(atpItem.tpId);
+              }
+            });
+
+            return {
+              id: finalMatId,
+              title: finalMatTitle,
+              order: matOrder,
+              linkedTpIds: matTpIds.length > 0 ? matTpIds : [...validLinkedTpIds],
+              linkedAtpItemIds: matAtpIds.length > 0 ? matAtpIds : [...validLinkedAtpItemIds],
+            };
+          });
+
+          // If existing had materials that AI omitted, re-add them to preserve teacher work
+          existingMaterials.forEach((em: any) => {
+            if (!sanitizedMaterials.some((sm: any) => sm.id === em.id || sm.title === em.title)) {
+              sanitizedMaterials.push({
+                id: em.id || `mat-${Date.now()}-${unitOrder}-${sanitizedMaterials.length + 1}`,
+                title: em.title,
+                order: sanitizedMaterials.length + 1,
+                linkedTpIds: (em.linkedTpIds || []).filter((id: string) => tpMap.has(id)),
+                linkedAtpItemIds: (em.linkedAtpItemIds || []).filter((id: string) => atpMap.has(id)),
+              });
+            }
+          });
+
+          sanitizedMaterials.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+
+          return {
+            id: finalUnitId,
+            title: finalTitle,
+            order: unitOrder,
+            linkedTpIds: validLinkedTpIds,
+            linkedAtpItemIds: validLinkedAtpItemIds,
+            materials: sanitizedMaterials,
+          };
+        });
+
+        // If existingMapping had extra teacher units that AI omitted, preserve them
+        if (existingMapping && Array.isArray(existingMapping.units)) {
+          existingMapping.units.forEach((eu: any) => {
+            if (!sanitizedUnits.some((su: any) => su.id === eu.id || su.title === eu.title)) {
+              sanitizedUnits.push({
+                id: eu.id || `unit-${Date.now()}-${sanitizedUnits.length + 1}`,
+                title: eu.title,
+                order: sanitizedUnits.length + 1,
+                linkedTpIds: (eu.linkedTpIds || []).filter((id: string) => tpMap.has(id)),
+                linkedAtpItemIds: (eu.linkedAtpItemIds || []).filter((id: string) => atpMap.has(id)),
+                materials: Array.isArray(eu.materials) ? eu.materials : [],
+              });
+            }
+          });
+        }
+
+        sanitizedUnits.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+
+        const canonicalResult = {
+          id: existingMapping?.id || `aum-${Date.now()}`,
+          academicSettingId: existingMapping?.academicSettingId || academicSettingId,
+          atpId: atpData?.id || '',
+          tpDataId: tpData?.id || '',
+          units: sanitizedUnits,
+          basedOnTpUpdatedAt: tpData?.updatedAt,
+          basedOnAtpUpdatedAt: atpData?.updatedAt,
+          updatedAt: new Date().toISOString(),
+        };
+
+        const finalizedResult = enforceCanonicalMappingInvariants(canonicalResult, validTpItems, validAtpItems);
+
+        return res.json({
+          success: true,
+          data: finalizedResult,
+          engine: 'gemini',
+        });
+      }
+    } catch (error: any) {
+      console.warn('Gemini Canonical ATP Unit Mapping failed, falling back to pedagogical engine:', error);
+    }
+  }
+
+  // Fallback: Pedagogical Rule-Based Clustering Engine
+  const fallbackResult = fallbackGenerateCanonicalATPUnitMapping({
+    academicSettingId,
+    subject,
+    grade,
+    phase,
+    tpData,
+    atpData,
+    cpAnalysisData,
+    existingMapping,
+    targetUnitCount: count,
+    targetMaterialCountPerUnit,
+  });
+
+  return res.json({
+    success: true,
+    data: fallbackResult,
+    engine: 'pedagogical_engine',
+  });
+});
+
+// 4. Endpoint: AI Refine / Polish any custom text
+app.post('/api/ai/refine-text', async (req, res) => {
+  const { text, instruction, context } = req.body || {};
+  if (!text) {
+    return res.status(400).json({ error: 'Teks tidak boleh kosong' });
+  }
+
+  // If GEMINI_API_KEY is configured or user key provided, try Gemini AI first
+  const apiKey = resolveApiKey(req);
+  if (apiKey) {
+    try {
+      const ai = createAIClient(apiKey);
+      const prompt = `Anda adalah asisten ahli administrasi guru Indonesia.
+Teks asli: "${text}"
+Konteks: ${context || 'Administrasi Kurikulum Merdeka'}
+Instruksi perbaikan: ${instruction || 'Sempurnakan tata bahasa, ketepatan pedagogis, dan istilah Kurikulum Merdeka agar lebih formal, jelas, dan operasional.'}
+
+Berikan versi teks hasil penyempurnaan dalam bahasa Indonesia yang baku dan elegan. Langsung berikan teks hasil tanpa pembuka/penutup.`;
+
+      const response = await generateContentWithRetry(ai, {
+        contents: prompt,
+      });
+
+      if (response.text && response.text.trim().length > 0) {
+        return res.json({ success: true, refinedText: response.text.trim(), engine: 'gemini' });
+      }
+    } catch (error: unknown) {
+      console.warn('Gemini refine text failed or unconfigured, using fallback:', error);
+    }
+  }
+
+  const refined = fallbackRefineText(text, instruction, context);
+  res.json({ success: true, refinedText: refined, engine: 'pedagogical_engine' });
+});
+
+// Safe phase normalization helper for learning plan
+function normalizeExperiencePhase(phase: any): 'UNDERSTAND' | 'APPLY' | 'REFLECT' | null {
+  if (typeof phase !== 'string') return null;
+  const s = phase.trim().toUpperCase();
+  if (s === 'UNDERSTAND' || s === 'MEMAHAMI') {
+    return 'UNDERSTAND';
+  }
+  if (s === 'APPLY' || s === 'MENGAPLIKASI' || s === 'MENGAPLIKASIKAN') {
+    return 'APPLY';
+  }
+  if (s === 'REFLECT' || s === 'MEREFLEKSI' || s === 'MEREFLEKSIKAN') {
+    return 'REFLECT';
+  }
+  return null;
+}
+
+// Runtime validator for AI Learning Plan response
+function validateAILearningPlanPayload(data: any): { isValid: boolean; reason?: string } {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { isValid: false, reason: 'Payload AI bukan berupa objek valid' };
+  }
+
+  // Print-readiness mandatory pedagogical fields for Kurikulum Merdeka
+  if (typeof data.initialCompetency !== 'string' || data.initialCompetency.trim() === '') {
+    return { isValid: false, reason: 'Kompetensi Awal (initialCompetency) kosong atau tidak valid' };
+  }
+
+  const dimVal = validateGraduateProfileDimensions(data.graduateProfileDimensions);
+  if (!dimVal.isValid) {
+    return { isValid: false, reason: dimVal.error || 'Dimensi Profil Lulusan (graduateProfileDimensions) kosong atau tidak valid' };
+  }
+
+  if (!Array.isArray(data.resources) || data.resources.filter((r: any) => r && typeof r === 'object' && ((typeof r.title === 'string' && r.title.trim().length > 0) || (typeof r.source === 'string' && r.source.trim().length > 0))).length === 0) {
+    return { isValid: false, reason: 'Sarana dan prasarana / sumber belajar (resources) kosong atau tidak valid' };
+  }
+
+  if (typeof data.learningModel !== 'string' || data.learningModel.trim() === '') {
+    return { isValid: false, reason: 'Model/praktik pembelajaran (learningModel) kosong atau tidak valid' };
+  }
+
+  if (!Array.isArray(data.learningExperiences) || data.learningExperiences.length === 0) {
+    return { isValid: false, reason: 'Daftar Pengalaman Belajar (learningExperiences) kosong atau bukan array' };
+  }
+
+  const phaseSet = new Set<string>();
+  for (let i = 0; i < data.learningExperiences.length; i++) {
+    const exp = data.learningExperiences[i];
+    if (!exp || typeof exp !== 'object') {
+      return { isValid: false, reason: `Butir pengalaman belajar ke-${i + 1} bukan berupa objek` };
+    }
+    const normalizedPhase = normalizeExperiencePhase(exp.phase);
+    if (!normalizedPhase) {
+      return { isValid: false, reason: `Fase pengalaman belajar ke-${i + 1} ('${exp.phase}') tidak valid. Pilihan sah: UNDERSTAND, APPLY, REFLECT` };
+    }
+    exp.phase = normalizedPhase;
+    phaseSet.add(normalizedPhase);
+
+    if (!exp.description || typeof exp.description !== 'string' || exp.description.trim() === '') {
+      return { isValid: false, reason: `Deskripsi pengalaman belajar ke-${i + 1} kosong` };
+    }
+
+    exp.id = `exp-ai-${i + 1}`;
+  }
+
+  for (const phase of ['UNDERSTAND', 'APPLY', 'REFLECT']) {
+    if (!phaseSet.has(phase)) {
+      return { isValid: false, reason: `Pengalaman Belajar wajib memuat fase ${phase}` };
+    }
+  }
+
+  if (!data.assessmentPlan || typeof data.assessmentPlan !== 'object' || Array.isArray(data.assessmentPlan)) {
+    return { isValid: false, reason: 'Rencana Asesmen (assessmentPlan) wajib berupa objek' };
+  }
+
+  const assessmentCount = ['initial', 'formative', 'summative'].reduce((sum, key) => {
+    const items = Array.isArray(data.assessmentPlan[key]) ? data.assessmentPlan[key] : [];
+    return sum + items.filter((item: any) => item && typeof item === 'object' && (
+      typeof item.description === 'string' ||
+      typeof item.technique === 'string' ||
+      typeof item.method === 'string' ||
+      typeof item.instrument === 'string'
+    )).length;
+  }, 0);
+  if (assessmentCount === 0) {
+    return { isValid: false, reason: 'Rencana Asesmen tidak memuat item pedagogis valid' };
+  }
+
+  if (data.triggerQuestions !== undefined && !Array.isArray(data.triggerQuestions)) {
+    return { isValid: false, reason: 'Pertanyaan pemantik (triggerQuestions) harus berupa array' };
+  }
+
+  // Normalize arrays
+  data.triggerQuestions = Array.isArray(data.triggerQuestions) ? data.triggerQuestions : [];
+  data.resources = Array.isArray(data.resources) ? data.resources : [];
+  data.graduateProfileDimensions = Array.isArray(data.graduateProfileDimensions) ? data.graduateProfileDimensions : [];
+  if (data.reflection && typeof data.reflection === 'object') {
+    data.reflection = {
+      teacherReflection: typeof data.reflection.teacherReflection === 'string'
+        ? data.reflection.teacherReflection
+        : (typeof data.reflection.teacher === 'string' ? data.reflection.teacher : undefined),
+      studentReflection: typeof data.reflection.studentReflection === 'string'
+        ? data.reflection.studentReflection
+        : (typeof data.reflection.student === 'string' ? data.reflection.student : undefined),
+    };
+  }
+  delete data.allocatedJP;
+
+  return { isValid: true };
+}
+
+// Endpoint: AI Generate Learning Plan (Modul Ajar DRAFT)
+app.post('/api/ai/generate-learning-plan', async (req, res) => {
+  const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const { academicSetting, tps, atpItems, topic, allocatedJP } = req.body || {};
+
+  if (!tps || !Array.isArray(tps) || tps.length === 0) {
+    return res.status(400).json({ error: 'Minimal satu Tujuan Pembelajaran (TP) diperlukan untuk menyusun Modul Ajar' });
+  }
+
+  const apiKey = resolveApiKey(req);
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      code: 'AI_NOT_CONFIGURED',
+      error: 'Layanan AI belum dikonfigurasi pada server.',
+    });
+  }
+
+  try {
+    const ai = createAIClient(apiKey);
+    const subject = academicSetting?.subject || '';
+    const grade = academicSetting?.grade || '';
+    const phase = academicSetting?.phase || '';
+
+    const canonicalAllocatedJP =
+      typeof allocatedJP === 'number' && Number.isFinite(allocatedJP) && allocatedJP > 0
+        ? allocatedJP
+        : undefined;
+
+    const atpContextStr = atpItems && atpItems.length > 0
+      ? atpItems.map((a: any, i: number) => {
+          const parts: string[] = [];
+          if (a.unitTitle && typeof a.unitTitle === 'string' && a.unitTitle.trim()) {
+            parts.push(`Unit/Bab: ${a.unitTitle.trim()}`);
+          }
+          parts.push(`ATP Langkah: ${a.stepNumber || i + 1}`);
+          if (a.materialScope && typeof a.materialScope === 'string' && a.materialScope.trim()) {
+            parts.push(`Lingkup Materi: ${a.materialScope.trim()}`);
+          }
+          return `${i + 1}. ${parts.join(', ')}`;
+        }).join('\n')
+      : 'ATP: Belum tersedia';
+
+    const prompt = `Anda adalah spesialis penyusun Modul Ajar / RPP Berdiferensiasi Kurikulum Merdeka 2026 (Deep Learning & Kemendikdasmen).
+Susun draf Modul Ajar pedagogis yang komprehensif berdasarkan data rujukan berikut:
+
+MATA PELAJARAN: ${subject}
+KELAS / FASE: ${grade} / ${phase}
+TOPIK: ${topic || tps[0]?.contentScope || tps[0]?.statement || 'Topik Pembelajaran'}
+ALOKASI WAKTU KANONIKAL: ${canonicalAllocatedJP ? `${canonicalAllocatedJP} JP` : 'Belum ditentukan'}
+
+TUJUAN PEMBELAJARAN (TP) RUJUKAN:
+${tps.map((t: any, i: number) => `${i + 1}. [Kode: ${t.code || '-'}] ${t.statement} (Materi: ${t.contentScope || '-'}, Kompetensi: ${t.competence || '-'})`).join('\n')}
+
+ATP RUJUKAN:
+${atpContextStr}
+
+INSTRUKSI INFORMASI UMUM & PEDAGOGIS:
+1. "initialCompetency" (Kompetensi Awal): Tuliskan kalimat prasyarat kompetensi awal yang diharapkan (misal: "Murid diharapkan telah mengenal..." atau "Prasyarat pembelajaran meliputi..."). Jangan mengklaim penguasaan murid tanpa asesmen nyata.
+2. "graduateProfileDimensions": Pilih 2–4 dimensi profil lulusan yang paling relevan dari 8 dimensi kanonikal: "Keimanan dan Ketakwaan terhadap Tuhan Yang Maha Esa", "Kewargaan", "Penalaran Kritis", "Kreativitas", "Kolaborasi", "Kemandirian", "Kesehatan", "Komunikasi".
+3. "resources": Susun daftar sarana, prasarana, atau sumber belajar yang diperlukan atau direncanakan sesuai mata pelajaran dan aktivitas nyata.
+4. "learningModel": Tentukan model atau praktik pembelajaran kontekstual yang operasional (misal: "Pembelajaran kontekstual melalui demonstrasi, praktik terbimbing, kolaborasi, dan refleksi").
+
+INSTRUKSI KEGIATAN & ASESMEN:
+5. Susun Pengalaman Belajar (learningExperiences) dengan struktur 3 fase utama (UNDERSTAND, APPLY, REFLECT) sesuai panduan 2026. Nilai properti "phase" HARUS salah satu dari: "UNDERSTAND", "APPLY", atau "REFLECT".
+6. Setiap Pengalaman Belajar memuat "description" yang jelas dan operasional, serta "durationMinutes" (dalam menit, opsional).
+7. Gunakan terminologi "Murid" (bukan peserta didik) dan "Dimensi Profil Lulusan".
+8. Sediakan Rencana Asesmen (Asesmen Diagnostik Awal, Formatif, dan Sumatif).
+9. Sediakan Rencana Diferensiasi (Konten, Proses, Produk).
+10. Buat kalimat pemahaman bermakna dan pertanyaan pemantik yang relevan.
+${
+  canonicalAllocatedJP
+    ? `11. ALOKASI WAKTU KANONIKAL: Lingkup pembelajaran ini memiliki Alokasi Waktu tepat ${canonicalAllocatedJP} JP dari pemetaan waktu semester. Rancang seluruh rangkaian kegiatan dan pengalaman belajar secara proporsional sesuai durasi ${canonicalAllocatedJP} JP tersebut. Jangan menebak, mengubah, atau menyimpulkan angka JP yang berbeda.`
+    : `11. ALOKASI WAKTU: Belum ditentukan. JANGAN mengarang atau memalsukan Alokasi JP.`
+}
+
+Kembalikan output JSON sesuai schema.`;
+
+    const response = await generateContentWithRetry(ai, {
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          required: [
+            'learningExperiences',
+            'initialCompetency',
+            'graduateProfileDimensions',
+            'resources',
+            'learningModel',
+          ],
+          properties: {
+            title: { type: Type.STRING },
+            topic: { type: Type.STRING },
+            initialCompetency: { type: Type.STRING, description: 'Kompetensi awal atau prasyarat pembelajaran' },
+            graduateProfileDimensions: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: '2-4 Dimensi Profil Lulusan kanonikal yang relevan',
+            },
+            learningModel: { type: Type.STRING, description: 'Model atau praktik pembelajaran kontekstual' },
+            resources: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  title: { type: Type.STRING },
+                },
+                required: ['title'],
+              },
+              description: 'Daftar sarana dan prasarana / sumber belajar',
+            },
+            meaningfulUnderstanding: { type: Type.STRING },
+            triggerQuestions: { type: Type.ARRAY, items: { type: Type.STRING } },
+            learningExperiences: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  phase: { type: Type.STRING, description: 'MUST be UNDERSTAND, APPLY, or REFLECT' },
+                  description: { type: Type.STRING },
+                  durationMinutes: { type: Type.NUMBER },
+                },
+                required: ['phase', 'description'],
+              },
+            },
+            deepLearningContext: {
+              type: Type.OBJECT,
+              properties: {
+                principles: { type: Type.ARRAY, items: { type: Type.STRING } },
+                graduateProfileDimensions: { type: Type.ARRAY, items: { type: Type.STRING } },
+              },
+            },
+            learningSteps: {
+              type: Type.OBJECT,
+              properties: {
+                opening: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      stepName: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                      durationMinutes: { type: Type.NUMBER },
+                    },
+                  },
+                },
+                core: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      stepName: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                      durationMinutes: { type: Type.NUMBER },
+                    },
+                  },
+                },
+                closing: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      stepName: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                      durationMinutes: { type: Type.NUMBER },
+                    },
+                  },
+                },
+              },
+            },
+            assessmentPlan: {
+              type: Type.OBJECT,
+              properties: {
+                initial: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      type: { type: Type.STRING },
+                      technique: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                    },
+                  },
+                },
+                formative: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      type: { type: Type.STRING },
+                      technique: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                    },
+                  },
+                },
+                summative: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      type: { type: Type.STRING },
+                      technique: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                    },
+                  },
+                },
+              },
+            },
+            differentiation: {
+              type: Type.OBJECT,
+              properties: {
+                content: { type: Type.STRING },
+                process: { type: Type.STRING },
+                product: { type: Type.STRING },
+              },
+            },
+            reflection: {
+              type: Type.OBJECT,
+              properties: {
+                teacherReflection: { type: Type.STRING },
+                studentReflection: { type: Type.STRING },
+              },
+            },
+            enrichmentPlan: { type: Type.STRING },
+            remedialPlan: { type: Type.STRING },
+          },
+        },
+      },
+    });
+
+    const parsed = cleanAndParseJSON(response.text, null);
+    const validation = validateAILearningPlanPayload(parsed);
+
+    if (!validation.isValid) {
+      console.warn(`[AI Service][learning-plan][${requestId}] Gemini output invalid:`, validation.reason);
+      return res.status(500).json({ error: `Respons AI tidak memenuhi kualifikasi struktur Modul Ajar: ${validation.reason}` });
+    }
+
+    if (canonicalAllocatedJP) {
+      parsed.allocatedJP = canonicalAllocatedJP;
+    }
+
+    return res.json({ success: true, data: parsed, engine: 'gemini' });
+  } catch (error: any) {
+    console.error(`[AI Service][learning-plan][${requestId}] Gemini generate learning plan failed:`, error?.message || error);
+    return res.status(500).json({ error: `Gagal menyusun Draf AI Modul Ajar: ${error.message || 'Respons provider AI tidak dapat diproses'}` });
+  }
+});
+
+// 2. Endpoint: AI Assessment Package Generation (9C.4 / 9C.7)
+app.post('/api/ai/generate-assessment-package', async (req, res) => {
+  const { systemPrompt, userPrompt } = req.body || {};
+  if (!userPrompt) {
+    return res.status(400).json({ error: 'User prompt is required' });
+  }
+
+  const apiKey = resolveApiKey(req);
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      code: 'AI_NOT_CONFIGURED',
+      error: 'Layanan AI belum dikonfigurasi pada server.',
+    });
+  }
+
+  try {
+    const ai = createAIClient(apiKey);
+    const response = await generateContentWithRetry(ai, {
+      contents: userPrompt,
+      config: {
+        systemInstruction: systemPrompt,
+        responseMimeType: 'application/json',
+        responseSchema: assessmentAIResponseSchema,
+      },
+    });
+
+    if (response.text) {
+      return res.json({ success: true, rawText: response.text });
+    }
+  } catch (error: any) {
+    console.error('Gemini generate assessment package failed:', error);
+    const isAuth = error?.status === 401 || error?.status === 403;
+    return res.status(isAuth ? error.status : 500).json({ error: error.message || 'Gagal generate perangkat asesmen via Gemini' });
+  }
+
+  return res.status(500).json({ error: 'Gagal menghasilkan perangkat asesmen' });
+});
+
+// 3. Endpoint: AI Assessment Target Granular Regeneration (9C.6 / 9C.7)
+app.post('/api/ai/regenerate-assessment-target', async (req, res) => {
+  const { contract } = req.body || {};
+  if (!contract) {
+    return res.status(400).json({ error: 'Contract is required' });
+  }
+
+  const apiKey = resolveApiKey(req);
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      code: 'AI_NOT_CONFIGURED',
+      error: 'Layanan AI belum dikonfigurasi pada server.',
+    });
+  }
+
+  try {
+    const ai = createAIClient(apiKey);
+    const systemInstruction = `Anda adalah asisten AI kurikulum dan pembuat soal profesional di Indonesia.
+Bantu guru melakukan regenerasi granular (pembaruan bertahap) secara aman untuk target: ${contract.target}.
+Target ID: ${contract.targetId}.
+
+Aturan utama:
+- Tanggapi HANYA dengan objek JSON valid berisi rincian bidang yang diminta di editableContent.
+- Kembalikan bidang yang berubah atau yang baru saja, pertahankan tipe data bidang aslinya.
+- Jangan menambahkan penjelasan, markdown block (seperti \`\`\`json), atau teks pengantar lainnya. Tanggapi dengan format mentah JSON objek saja.`;
+
+    const userPrompt = `Lakukan regenerasi target ${contract.target} untuk Target ID: ${contract.targetId}.
+
+Konteks tidak berubah (Immutable Context):
+${JSON.stringify(contract.immutableContext, null, 2)}
+
+Materi & Kriteria:
+- Kalibrasi Kelas: ${JSON.stringify(contract.gradeCalibration, null, 2)}
+- Profil Subjek: ${JSON.stringify(contract.subjectProfile, null, 2)}
+
+Temuan Validasi yang Perlu Diperbaiki (Validation Findings):
+${JSON.stringify(contract.validationFindings, null, 2)}
+
+Konten yang Dipertahankan (Preserved Content):
+${JSON.stringify(contract.preservedContent, null, 2)}
+
+Konten yang Boleh Diedit & Diminta Regenerasi (Editable/Requested Content):
+${JSON.stringify(contract.editableContent, null, 2)}
+
+Hasilkan pembaruan untuk editableContent tersebut dalam format JSON.`;
+
+    const response = await generateContentWithRetry(ai, {
+      contents: userPrompt,
+      config: {
+        systemInstruction,
+        responseMimeType: 'application/json',
+      },
+    });
+
+    if (response.text) {
+      const cleanedText = response.text.trim();
+      const parsed = cleanAndParseJSON(cleanedText, null);
+      if (parsed) {
+        return res.json({ success: true, data: parsed });
+      } else {
+        return res.status(500).json({ error: 'Gagal parse JSON hasil regenerasi AI' });
+      }
+    }
+  } catch (error: any) {
+    console.error('Gemini regenerate assessment target failed:', error);
+    const isAuth = error?.status === 401 || error?.status === 403;
+    return res.status(isAuth ? error.status : 500).json({ error: error.message || 'Gagal regenerasi granular via Gemini' });
+  }
+
+  return res.status(500).json({ error: 'Gagal meregenerasi target asesmen' });
+});
+
+// 4. Endpoint: AI Assessment Answer Key Verification (9C.5 / 9C.7)
+app.post('/api/ai/verify-assessment-answers', async (req, res) => {
+  const { assessmentPackage, itemsToVerify } = req.body || {};
+  if (!itemsToVerify || !Array.isArray(itemsToVerify) || itemsToVerify.length === 0) {
+    return res.json({ success: true, data: { results: [] } });
+  }
+
+  const apiKey = resolveApiKey(req);
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      code: 'AI_NOT_CONFIGURED',
+      error: 'Layanan AI belum dikonfigurasi pada server.',
+    });
+  }
+
+  try {
+    const ai = createAIClient(apiKey);
+    const systemInstruction = `Anda adalah Verifikator Kunci Jawaban Asesmen (AI Answer Verifier) profesional di Indonesia.
+Tugas Anda adalah memverifikasi kebenaran dan ketepatan semantik kunci jawaban untuk butir-butir soal yang diberikan.
+
+Pedoman evaluasi status:
+- 'VERIFIED': Kunci jawaban terbukti benar, tepat, dan tidak memiliki ambiguitas berdasarkan pertanyaan dan opsi/pasangan.
+- 'REJECTED': Kunci jawaban terbukti SALAH secara faktual/konseptual, opsi yang ditandai benar keliru, atau pasangan menjodohkan salah.
+- 'REVIEW': Terdapat ambiguitas soal, ada lebih dari satu opsi yang bisa dianggap benar, teks kunci jawaban mengandung salah ketik fatal, atau butir memerlukan penilaian subjektif guru.
+
+Wajib sertakan alasan ringkas dan jelas pada 'reason'.
+Kembalikan HANYA format JSON sesuai schema.`;
+
+    const promptData = itemsToVerify.map((item: any, idx: number) => ({
+      index: idx + 1,
+      instrumentItemId: item.instrumentItemId,
+      itemType: item.itemType,
+      prompt: item.prompt,
+      stimulus: item.stimulus || undefined,
+      options: item.options || undefined,
+      premises: item.premises || undefined,
+      responses: item.responses || undefined,
+      categories: item.categories || undefined,
+      proposedAnswerKey: item.proposedAnswerKey || undefined,
+    }));
+
+    const userPrompt = `Verifikasi kebenaran kunci jawaban untuk ${itemsToVerify.length} butir soal berikut:
+${JSON.stringify(promptData, null, 2)}
+
+Kembalikan hasil verifikasi untuk SETIAP instrumentItemId di atas dalam array results.`;
+
+    const verifyAnswersResponseSchema = {
+      type: Type.OBJECT,
+      properties: {
+        results: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              instrumentItemId: { type: Type.STRING },
+              status: { type: Type.STRING, enum: ['VERIFIED', 'REVIEW', 'REJECTED'] },
+              reason: { type: Type.STRING },
+            },
+            required: ['instrumentItemId', 'status', 'reason'],
+          },
+        },
+      },
+      required: ['results'],
+    };
+
+    const response = await generateContentWithRetry(ai, {
+      contents: userPrompt,
+      config: {
+        systemInstruction,
+        responseMimeType: 'application/json',
+        responseSchema: verifyAnswersResponseSchema,
+      },
+    });
+
+    if (response.text) {
+      const parsed = cleanAndParseJSON(response.text, null);
+      if (parsed && Array.isArray(parsed.results)) {
+        return res.json({ success: true, data: parsed });
+      }
+    }
+    return res.status(500).json({ error: 'Gagal parse JSON hasil verifikasi jawaban AI' });
+  } catch (error: any) {
+    console.error('Gemini verify assessment answers failed:', error);
+    const isAuth = error?.status === 401 || error?.status === 403;
+    return res.status(isAuth ? error.status : 500).json({ error: error.message || 'Gagal verifikasi jawaban via Gemini' });
+  }
+});
+
+// 5. Endpoint: AI Assessment Quality Review (9C.5 / 9C.7)
+app.post('/api/ai/review-assessment-quality', async (req, res) => {
+  const { assessmentPackage, generationPlan, gradeCalibration, subjectProfile } = req.body || {};
+  if (!assessmentPackage) {
+    return res.status(400).json({ error: 'Assessment package is required' });
+  }
+
+  const apiKey = resolveApiKey(req);
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      code: 'AI_NOT_CONFIGURED',
+      error: 'Layanan AI belum dikonfigurasi pada server.',
+    });
+  }
+
+  try {
+    const ai = createAIClient(apiKey);
+    const systemInstruction = `Anda adalah AI Quality Reviewer profesional untuk kurikulum dan perangkat asesmen di Indonesia.
+Tugas Anda adalah menelaah kualitas butir dan instrumen asesmen yang dirancang berdasarkan konten pedagogis nyata, bukan hanya kecocokan ID.
+
+PRINSIP PENJALAJARAN PEDAGOGIS (ALUR ALIGNMENT):
+Pahami relasi penurunan berikut dalam setiap butir asesmen:
+TP / Objective (tujuan pembelajaran umum)
+  → Criterion / KKTP (kriteria ketercapaian tujuan pembelajaran)
+    → Assessment Indicator (indikator spesifik apa yang diukur pada butir)
+      → Item Soal / Task (pertanyaan/tugas yang dikerjakan murid)
+        → Cognitive Demand (tingkat proses kognitif: RECALL_UNDERSTAND, APPLY, ANALYZE_REASON, EVALUATE_CREATE)
+
+Dimensi evaluasi kualitas:
+1. CONTENT_ALIGNMENT: Keselarasan materi butir soal dengan isi teks TP/objective, criterion/KKTP, dan indikator asesmen (assessmentIndicator). Butir soal harus benar-benar menguji kompetensi dan materi yang ditargetkan, bukan sekadar cocok ID.
+2. COGNITIVE_ALIGNMENT: Keselarasan tingkat kognitif butir soal dengan target kognitif (cognitiveDemand) yang direncanakan. Soal pemahaman/ingatan tidak boleh dilabeli atau menguji penalaran tingkat tinggi, begitu pula sebaliknya.
+3. ITEM_CONSTRUCTION: Kualitas konstruksi butir soal (kejelasan pokok soal/stem, tidak ambigu, tidak memberi petunjuk jawaban, opsi homogen).
+4. STIMULUS_QUALITY: Kualitas dan relevansi stimulus dengan pertanyaan (jika ada stimulus).
+5. ANSWER_VERIFICATION: Kepastian kunci jawaban dan objektivitas penskoran.
+6. DISTRACTOR_QUALITY: Kualitas dan efektivitas pilihan pengecoh (hanya untuk butir yang memiliki opsi pilihan ganda).
+7. GRADE_LANGUAGE: Kesesuaian bahasa, keterbacaan, dan istilah dengan fase/tingkat kelas murid.
+8. SENSITIVITY: Bebas dari bias SARA, diskriminasi gender, politik praktis, atau kekerasan.
+9. TRACEABILITY: Keterlacakan pemetaan butir ke kisi-kisi asesmen (keterkaitan item ke kisi-kisi dan indikator).
+10. DUPLICATION: Tidak ada pengulangan atau duplikasi materi dan butir soal.
+
+ATURAN TARGET ID SANGAT PENTING:
+- Setiap finding untuk butir soal WAJIB menyertakan 'instrumentItemId' yang SAMA PERSIS dengan ID butir soal yang dievaluasi.
+- Jika mengevaluasi kisi-kisi atau cakupan umum, gunakan 'coverageUnitId' atau 'unitId' yang ada di data.
+- 'DISTRACTOR_QUALITY' HANYA boleh diterapkan pada butir pilihan ganda yang memiliki opsi jawaban.
+- Status:
+  - 'PASS': Memenuhi standar kualitas dengan baik.
+  - 'REVIEW': Terdapat catatan atau saran perbaikan minor yang perlu ditinjau guru.
+  - 'FAIL': Terdapat pelanggaran kaidah penulisan fatal yang perlu diganti/diperbaiki.
+- 'reason': Penjelasan singkat dan konstruktif dengan merujuk isi pedagogis (tujuan, materi, atau tingkat kognitif).
+
+ATURAN LINKAGE KANONIKAL EKSPLISIT:
+- Setiap butir soal (item) memiliki relasi kanonikal eksplisit:
+  instrumentItemId → blueprintItemId → coverageUnitId → TP/KKTP/assessmentIndicator → cognitiveDemand
+- Reviewer WAJIB menggunakan linkage ID tersebut (blueprintItemId, coverageUnitId, instrumentId, instrumentItemIds) untuk menentukan blueprint, TP, KKTP, indikator asesmen, dan target kognitif milik setiap item.
+- DILARANG KERAS menebak atau mereka-reka hubungan antara soal dan kisi-kisi berdasarkan kemiripan teks atau asumsi bebas.`;
+
+    const objectivesList = generationPlan?.generationSpec?.objectives || [];
+    const criteriaList = generationPlan?.generationSpec?.criteria || [];
+    const coverageUnitsList = generationPlan?.coverageUnits || [];
+
+    const objMap = new Map<string, string>();
+    for (const obj of objectivesList) {
+      if (obj && obj.id) {
+        objMap.set(obj.id, obj.text || (obj as any).statement || '');
+      }
+    }
+
+    const critMap = new Map<string, string>();
+    for (const crit of criteriaList) {
+      if (crit && crit.id) {
+        const text = crit.description
+          ? (crit.name ? `${crit.name}: ${crit.description}` : crit.description)
+          : (crit.name || '');
+        critMap.set(crit.id, text);
+      }
+    }
+
+    const covMap = new Map<string, any>();
+    for (const cu of coverageUnitsList) {
+      if (cu && cu.id) {
+        covMap.set(cu.id, cu);
+      }
+    }
+
+    const compactBlueprint = (assessmentPackage.blueprintItems || []).map((bp: any) => {
+      const cov = bp.coverageUnitId ? covMap.get(bp.coverageUnitId) : undefined;
+      const objectiveText = bp.objectiveText || objMap.get(bp.objectiveRefId) || (cov ? objMap.get(cov.objectiveRefId) : undefined) || undefined;
+      const criterionText = bp.criterionText || (bp.criterionId ? critMap.get(bp.criterionId) : undefined) || (cov?.criterionId ? critMap.get(cov.criterionId) : undefined) || undefined;
+      const assessmentIndicator = bp.assessmentIndicator || cov?.assessmentIndicator || undefined;
+      const materialOrContext = bp.materialOrContext || cov?.materialOrContext || undefined;
+
+      return {
+        id: bp.id,
+        coverageUnitId: bp.coverageUnitId,
+        objectiveRefId: bp.objectiveRefId,
+        objectiveText,
+        criterionText,
+        assessmentIndicator,
+        materialOrContext,
+        instrumentType: bp.instrumentType,
+        instrumentId: bp.instrumentId,
+        instrumentItemIds: bp.instrumentItemIds,
+        cognitiveDemand: bp.cognitiveDemand,
+        difficultyTarget: bp.difficultyTarget,
+      };
+    });
+
+    const compactInstruments = (assessmentPackage.instruments || []).map((inst: any) => ({
+      id: inst.id,
+      type: inst.type,
+      title: inst.title,
+      items: Array.isArray(inst.items)
+        ? inst.items.map((it: any) => {
+            const bp = assessmentPackage.blueprintItems?.find(
+              (b: any) => b.id === it.blueprintItemId || (Array.isArray(b.instrumentItemIds) && b.instrumentItemIds.includes(it.id))
+            );
+            return {
+              id: it.id,
+              blueprintItemId: it.blueprintItemId || (bp ? bp.id : undefined),
+              coverageUnitId: it.coverageUnitId || (bp ? bp.coverageUnitId : undefined),
+              plannedItemId: it.plannedItemId || undefined,
+              cognitiveDemand: it.cognitiveDemand || (bp ? bp.cognitiveDemand : undefined),
+              difficultyTarget: it.difficultyTarget || (bp ? bp.difficultyTarget : undefined),
+              itemType: it.itemType,
+              prompt: it.prompt,
+              stimulus: it.stimulus,
+              options: it.options ? it.options.map((o: any) => ({ id: o.id, text: o.text, isCorrect: o.isCorrect })) : undefined,
+            };
+          })
+        : undefined,
+      aspects: inst.aspects,
+    }));
+
+    const userPrompt = `Lakukan telaah kualitas untuk perangkat asesmen berikut berdasarkan linkage kanonikal eksplisit:
+[instrumentItemId → blueprintItemId → coverageUnitId → TP/KKTP/assessmentIndicator → cognitiveDemand]
+
+Gunakan linkage ID tersebut secara ketat untuk menelaah keselarasan materi (CONTENT_ALIGNMENT) dan kognitif (COGNITIVE_ALIGNMENT) setiap butir soal terhadap TP, KKTP, indikator, dan cognitiveDemand yang telah dipetakan, TANPA menebak berdasarkan kemiripan teks.
+
+Judul Perangkat: ${assessmentPackage.title || '-'}
+Kalibrasi Kelas: ${JSON.stringify(gradeCalibration || {}, null, 2)}
+Profil Subjek: ${JSON.stringify(subjectProfile || {}, null, 2)}
+
+Kisi-Kisi Asesmen (Blueprint dengan teks rujukan TP, KKTP, Indikator, dan Target Kognitif):
+${JSON.stringify(compactBlueprint, null, 2)}
+
+Instrumen & Butir Soal yang Dinilai:
+${JSON.stringify(compactInstruments, null, 2)}
+
+Berikan evaluasi kualitas untuk butir-butir soal dan instrumen tersebut dalam format JSON sesuai schema.`;
+
+    const qualityReviewResponseSchema = {
+      type: Type.OBJECT,
+      properties: {
+        findings: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              dimension: {
+                type: Type.STRING,
+                enum: [
+                  'CONTENT_ALIGNMENT',
+                  'COGNITIVE_ALIGNMENT',
+                  'ITEM_CONSTRUCTION',
+                  'STIMULUS_QUALITY',
+                  'ANSWER_VERIFICATION',
+                  'DISTRACTOR_QUALITY',
+                  'GRADE_LANGUAGE',
+                  'SENSITIVITY',
+                  'TRACEABILITY',
+                  'DUPLICATION',
+                ],
+              },
+              status: { type: Type.STRING, enum: ['PASS', 'REVIEW', 'FAIL'] },
+              reason: { type: Type.STRING },
+              unitId: { type: Type.STRING },
+              instrumentItemId: { type: Type.STRING },
+              coverageUnitId: { type: Type.STRING },
+            },
+            required: ['dimension', 'status', 'reason'],
+          },
+        },
+      },
+      required: ['findings'],
+    };
+
+    const response = await generateContentWithRetry(ai, {
+      contents: userPrompt,
+      config: {
+        systemInstruction,
+        responseMimeType: 'application/json',
+        responseSchema: qualityReviewResponseSchema,
+      },
+    });
+
+    if (response.text) {
+      const parsed = cleanAndParseJSON(response.text, null);
+      if (parsed && Array.isArray(parsed.findings)) {
+        return res.json({ success: true, data: parsed });
+      }
+    }
+    return res.status(500).json({ error: 'Gagal parse JSON hasil telaah kualitas AI' });
+  } catch (error: any) {
+    console.error('Gemini review assessment quality failed:', error);
+    const isAuth = error?.status === 401 || error?.status === 403;
+    return res.status(isAuth ? error.status : 500).json({ error: error.message || 'Gagal telaah kualitas via Gemini' });
+  }
+});
+
+// Final /api 404 handler - must return JSON and never fall through to Vite static HTML fallback
+app.all('/api/*', (req, res) => {
+  res.status(404).json({
+    error: 'Unknown API route',
+    path: req.path
+  });
+});
+
+// Vite middleware in dev or static files in prod
+async function startServer() {
+  if (process.env.NODE_ENV !== 'production') {
+    const vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: 'spa',
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
+    });
+  }
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Administrasi Guru AI Server running at http://0.0.0.0:${PORT}`);
+  });
+}
+
+startServer();
