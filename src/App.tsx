@@ -10,6 +10,7 @@ import {
   CPAnalysisData,
   TPData,
   ATPData,
+  ATPUnitMappingData,
   AdministrationWorkspace,
   AppDocumentRecord,
   LearningPlan,
@@ -56,6 +57,7 @@ import {
   saveCPAnalysisV5,
   saveTPV5,
   saveATPV5,
+  saveATPUnitMappingV5,
   saveAcademicCalendarV5,
   saveSemesterJPSettingV5,
   saveTimeAllocationV5,
@@ -583,6 +585,8 @@ export function App() {
     items: [],
     updatedAt: '',
   };
+  const activeATPUnitMapping: ATPUnitMappingData | undefined =
+    runtimeContext.annualData?.atpUnitMapping;
 
   // Handlers for Academic Setting & Documents (Transitional compatibility)
   const handleSaveAcademicSetting = (
@@ -797,6 +801,26 @@ export function App() {
       setAppNotice({
         type: 'error',
         message: err instanceof Error ? err.message : 'Gagal menyimpan Alur Tujuan Pembelajaran (ATP) ke penyimpanan tahunan.',
+      });
+    }
+  };
+
+  const handleSaveATPUnitMapping = (mapping: ATPUnitMappingData) => {
+    if (!activeYearPlan) {
+      setAppNotice({
+        type: 'error',
+        message: 'Tidak ada Tahun Ajaran (YearPlan) aktif untuk menyimpan Pemetaan Bab & Lingkup Materi.',
+      });
+      return;
+    }
+
+    try {
+      saveATPUnitMappingV5(activeYearPlan.id, mapping);
+      refreshV5();
+    } catch (err: any) {
+      setAppNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal menyimpan Pemetaan Bab & Lingkup Materi ke penyimpanan tahunan.',
       });
     }
   };
@@ -1455,8 +1479,9 @@ export function App() {
             <ATPUnitMappingManager
               atp={activeATP}
               tp={activeTP}
+              mapping={activeATPUnitMapping}
               academicSetting={transitionalAcademicSetting}
-              onSaveATP={handleSaveATP}
+              onSaveMapping={handleSaveATPUnitMapping}
               onNextStep={() => setCurrentStep('annual-planning')}
               onBackToATP={() => setCurrentStep('atp')}
             />
