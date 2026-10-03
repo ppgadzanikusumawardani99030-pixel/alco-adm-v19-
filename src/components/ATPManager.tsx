@@ -21,7 +21,12 @@ import {
 } from 'lucide-react';
 import { ATPData, ATPItem, TPData, CPData, AcademicSetting, TeacherProfile, ActiveContext } from '../types';
 import { generateATPWithAI, refineTextWithAI } from '../services/aiService';
-import { validateATPReferences, resolveATPItemTPReference, normalizeATPReferences } from '../services/cpWorkflowService';
+import {
+  validateATPReferences,
+  resolveATPItemTPReferences,
+  resolveATPItemTPReference,
+  normalizeATPReferences,
+} from '../services/cpWorkflowService';
 import { P3_DIMENSIONS } from '../data/curriculumDefaults';
 
 interface ATPManagerProps {
@@ -108,10 +113,16 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
       });
 
       const formattedItems: ATPItem[] = generated.items.map((item, idx) => {
+        const rawLinkedTpIds = Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0
+          ? item.linkedTpIds
+          : item.tpId ? [item.tpId] : [];
+
         const candidateItem: ATPItem = {
           id: `atp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
           stepNumber: item.stepNumber || idx + 1,
-          tpId: item.tpId || '',
+          linkedTpIds: rawLinkedTpIds,
+          focus: item.focus || (item as any).focus || undefined,
+          tpId: item.tpId || (rawLinkedTpIds.length > 0 ? rawLinkedTpIds[0] : ''),
           tpCode: item.tpCode || '',
           tpStatement: item.tpStatement || '',
           unitTitle: (item as any).unitTitle || undefined,
@@ -123,17 +134,19 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
           resources: item.resources || '',
         };
 
-        const refResult = resolveATPItemTPReference(candidateItem, tp.items);
-        if (refResult.status === 'RESOLVED_REFERENCE' || refResult.status === 'LEGACY_MIGRATED') {
-          const canonical = refResult.canonicalTPItem!;
-          candidateItem.tpId = canonical.id;
-          candidateItem.tpCode = canonical.code;
-          candidateItem.tpStatement = canonical.statement;
+        const refResult = resolveATPItemTPReferences(candidateItem, tp.items);
+        if (refResult.isValid || refResult.canonicalTPItems.length > 0) {
+          const canonicals = refResult.canonicalTPItems;
+          const primary = canonicals[0];
+          candidateItem.linkedTpIds = canonicals.map((t) => t.id);
+          candidateItem.tpId = primary.id;
+          candidateItem.tpCode = canonicals.map((t) => t.code).filter(Boolean).join(', ');
+          candidateItem.tpStatement = candidateItem.focus || canonicals.map((t) => t.statement).join('; ');
           if (!candidateItem.materialScope) {
-            candidateItem.materialScope = canonical.contentScope || '';
+            candidateItem.materialScope = Array.from(new Set(canonicals.map((t) => t.contentScope).filter(Boolean))).join(', ');
           }
-          if (candidateItem.p3Dimensions.length === 0 && canonical.p3Dimensions) {
-            candidateItem.p3Dimensions = [...canonical.p3Dimensions];
+          if (candidateItem.p3Dimensions.length === 0) {
+            candidateItem.p3Dimensions = Array.from(new Set(canonicals.flatMap((t) => t.p3Dimensions || [])));
           }
         }
         return candidateItem;
@@ -288,6 +301,8 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
     setCurrentItem({
       id: `atp-item-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       stepNumber: nextStep,
+      linkedTpIds: [],
+      focus: '',
       tpId: '',
       tpCode: '',
       tpStatement: '',
@@ -303,23 +318,50 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
   };
 
   const handleOpenEdit = (item: ATPItem) => {
-    setCurrentItem({ ...item });
+    const rawLinkedTpIds = Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0
+      ? [...item.linkedTpIds]
+      : item.tpId ? [item.tpId] : [];
+    setCurrentItem({
+      ...item,
+      linkedTpIds: rawLinkedTpIds,
+      focus: item.focus || '',
+    });
     setIsEditing(true);
   };
 
   const handleSaveItemModal = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentItem || !currentItem.tpId || !currentItem.tpStatement.trim()) {
-      alert('Pilih butir Tujuan Pembelajaran (TP Canonical) terlebih dahulu.');
+    const effectiveLinkedIds = Array.isArray(currentItem?.linkedTpIds) && currentItem.linkedTpIds.length > 0
+      ? currentItem.linkedTpIds
+      : currentItem?.tpId ? [currentItem.tpId] : [];
+
+    if (!currentItem || effectiveLinkedIds.length === 0) {
+      alert('Pilih minimal 1 butir Tujuan Pembelajaran (TP Canonical) untuk langkah ini.');
       return;
     }
 
-    const exists = items.some((i) => i.id === currentItem.id);
+    const canonicals = tp.items.filter((t) => effectiveLinkedIds.includes(t.id));
+    const primary = canonicals[0];
+
+    const toSave: ATPItem = {
+      ...currentItem,
+      linkedTpIds: effectiveLinkedIds,
+      focus: currentItem.focus?.trim() || undefined,
+      tpId: primary?.id || currentItem.tpId || '',
+      tpCode: canonicals.map((t) => t.code).filter(Boolean).join(', ') || currentItem.tpCode || '',
+      tpStatement: currentItem.focus || canonicals.map((t) => t.statement).join('; ') || currentItem.tpStatement,
+      materialScope: currentItem.materialScope || Array.from(new Set(canonicals.map((t) => t.contentScope).filter(Boolean))).join(', '),
+      p3Dimensions: currentItem.p3Dimensions && currentItem.p3Dimensions.length > 0
+        ? currentItem.p3Dimensions
+        : Array.from(new Set(canonicals.flatMap((t) => t.p3Dimensions || []))),
+    };
+
+    const exists = items.some((i) => i.id === toSave.id);
     let newItems: ATPItem[];
     if (exists) {
-      newItems = items.map((i) => (i.id === currentItem.id ? currentItem : i));
+      newItems = items.map((i) => (i.id === toSave.id ? toSave : i));
     } else {
-      newItems = [...items, currentItem];
+      newItems = [...items, toSave];
     }
 
     setItems(newItems.map((it, idx) => ({ ...it, stepNumber: idx + 1 })));
@@ -519,42 +561,74 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
               </thead>
               <tbody className="divide-y divide-slate-200 bg-white">
                 {items.map((item, idx) => {
-                  const refStatus = resolveATPItemTPReference(item, tp.items);
+                  const refResult = resolveATPItemTPReferences(item, tp.items);
                   return (
                     <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="p-3 text-center font-bold text-slate-700 bg-slate-50/50">
                         {idx + 1}
                       </td>
                       <td className="p-3 font-mono text-xs">
-                        <div className="font-bold text-blue-900">{item.tpCode || '-'}</div>
-                        {refStatus.status === 'DANGLING_REFERENCE' && (
+                        <div className="flex flex-wrap gap-1 mb-1">
+                          {refResult.canonicalTPItems.length > 0 ? (
+                            refResult.canonicalTPItems.map((t) => (
+                              <span
+                                key={t.id}
+                                className="font-bold text-blue-900 bg-blue-50/80 px-1.5 py-0.5 rounded border border-blue-200"
+                                title={t.statement}
+                              >
+                                {t.code || '-'}
+                              </span>
+                            ))
+                          ) : (
+                            <div className="font-bold text-blue-900">{item.tpCode || '-'}</div>
+                          )}
+                        </div>
+                        {refResult.status === 'DANGLING_REFERENCE' && (
                           <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
                             ⚠️ TP Terhapus
                           </span>
                         )}
-                        {refStatus.status === 'AMBIGUOUS_REFERENCE' && (
+                        {refResult.status === 'AMBIGUOUS_REFERENCE' && (
                           <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
                             ⚠️ TP Ambigu
                           </span>
                         )}
-                        {refStatus.status === 'UNRESOLVED_REFERENCE' && (
+                        {refResult.status === 'UNRESOLVED_REFERENCE' && (
                           <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
                             ⚠️ Terputus
                           </span>
                         )}
-                        {refStatus.status === 'LEGACY_MIGRATED' && (
+                        {refResult.status === 'LEGACY_MIGRATED' && (
                           <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
                             ℹ️ Migrasi
                           </span>
                         )}
-                        {refStatus.status === 'RESOLVED_REFERENCE' && (
+                        {refResult.status === 'RESOLVED_REFERENCE' && (
                           <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            ✓ Canonical
+                            ✓ Canonical {refResult.canonicalTPItems.length > 1 ? `(${refResult.canonicalTPItems.length} TP)` : ''}
                           </span>
                         )}
                       </td>
                       <td className="p-3 font-medium text-slate-900 leading-relaxed">
-                        {item.tpStatement || refStatus.canonicalTPItem?.statement || '-'}
+                        {item.focus && (
+                          <div className="font-semibold text-slate-900 mb-1 text-xs text-indigo-950">
+                            {item.focus}
+                          </div>
+                        )}
+                        {refResult.canonicalTPItems.length > 1 ? (
+                          <div className="space-y-1 text-xs text-slate-600">
+                            {refResult.canonicalTPItems.map((t) => (
+                              <div key={t.id} className="flex items-start gap-1">
+                                <span className="font-mono text-blue-800 font-semibold shrink-0">[{t.code}]</span>
+                                <span>{t.statement}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-slate-800 text-xs">
+                            {item.tpStatement || refResult.canonicalTPItems[0]?.statement || '-'}
+                          </div>
+                        )}
                         {item.glossary && (
                           <div className="text-[11px] text-slate-500 mt-1">
                             <span className="font-semibold text-slate-700">Glosarium:</span> {item.glossary}
@@ -709,57 +783,95 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
             </div>
 
             <form onSubmit={handleSaveItemModal} className="space-y-4">
-              {/* Select Canonical TP */}
+              {/* Step Focus */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                  Pilih Tujuan Pembelajaran (TP Canonical) <span className="text-rose-500">*</span>
+                  Fokus Langkah Pembelajaran (Opsional)
                 </label>
-                <select
-                  required
-                  value={currentItem.tpId || ''}
-                  onChange={(e) => {
-                    const selectedId = e.target.value;
-                    const matched = tp.items.find((t) => t.id === selectedId);
-                    if (matched) {
-                      setCurrentItem({
-                        ...currentItem,
-                        tpId: matched.id,
-                        tpCode: matched.code || '',
-                        tpStatement: matched.statement,
-                        materialScope: currentItem.materialScope || matched.contentScope || '',
-                        p3Dimensions: matched.p3Dimensions && matched.p3Dimensions.length > 0 ? [...matched.p3Dimensions] : currentItem.p3Dimensions,
-                      });
-                    } else {
-                      setCurrentItem({
-                        ...currentItem,
-                        tpId: '',
-                        tpCode: '',
-                        tpStatement: '',
-                      });
-                    }
-                  }}
-                  className="w-full text-sm px-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-600 font-medium"
-                >
-                  <option value="">-- Pilih Butir TP Canonical --</option>
-                  {tp.items.map((tItem) => (
-                    <option key={tItem.id} value={tItem.id}>
-                      [{tItem.code}] {tItem.statement.substring(0, 90)}{tItem.statement.length > 90 ? '...' : ''}
-                    </option>
-                  ))}
-                </select>
+                <input
+                  type="text"
+                  placeholder="Ringkasan fokus pedagogis langkah pembelajaran ini..."
+                  value={currentItem.focus || ''}
+                  onChange={(e) => setCurrentItem({ ...currentItem, focus: e.target.value })}
+                  className="w-full text-sm px-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-600"
+                />
               </div>
 
-              {/* Read-only Canonical TP Statement */}
-              {currentItem.tpStatement && (
+              {/* Multi-TP Canonical Selection */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                  Tautkan Tujuan Pembelajaran (1 atau Lebih TP Atomik) <span className="text-rose-500">*</span>
+                </label>
+                <div className="max-h-48 overflow-y-auto border border-slate-300 rounded-xl p-2.5 space-y-1.5 bg-slate-50/50">
+                  {tp.items.map((tItem) => {
+                    const isChecked = (currentItem.linkedTpIds || []).includes(tItem.id);
+                    return (
+                      <label
+                        key={tItem.id}
+                        className={`flex items-start gap-2 p-2 rounded-lg cursor-pointer transition text-xs ${
+                          isChecked
+                            ? 'bg-blue-50 border border-blue-200 text-blue-950 font-medium'
+                            : 'hover:bg-slate-100 text-slate-700 border border-transparent'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            const prevIds = currentItem.linkedTpIds || (currentItem.tpId ? [currentItem.tpId] : []);
+                            const nextIds = e.target.checked
+                              ? Array.from(new Set([...prevIds, tItem.id]))
+                              : prevIds.filter((id) => id !== tItem.id);
+
+                            const selectedTPs = tp.items.filter((t) => nextIds.includes(t.id));
+                            const primary = selectedTPs[0];
+                            setCurrentItem({
+                              ...currentItem,
+                              linkedTpIds: nextIds,
+                              tpId: primary?.id || '',
+                              tpCode: selectedTPs.map((t) => t.code).filter(Boolean).join(', '),
+                              tpStatement: currentItem.focus || selectedTPs.map((t) => t.statement).join('; '),
+                              materialScope: currentItem.materialScope || Array.from(new Set(selectedTPs.map((t) => t.contentScope).filter(Boolean))).join(', '),
+                              p3Dimensions: currentItem.p3Dimensions && currentItem.p3Dimensions.length > 0
+                                ? currentItem.p3Dimensions
+                                : Array.from(new Set(selectedTPs.flatMap((t) => t.p3Dimensions || []))),
+                            });
+                          }}
+                          className="mt-0.5 rounded text-blue-600 focus:ring-blue-500"
+                        />
+                        <div className="leading-snug">
+                          <span className="font-mono font-bold text-blue-800">[{tItem.code}]</span> {tItem.statement}
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+                {(currentItem.linkedTpIds || []).length === 0 && (
+                  <p className="text-[11px] text-rose-600 mt-1">
+                    * Pilih minimal 1 butir TP untuk langkah pembelajaran ini.
+                  </p>
+                )}
+              </div>
+
+              {/* Selected Canonical TPs Summary */}
+              {(currentItem.linkedTpIds || []).length > 0 && (
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 space-y-1">
                   <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 uppercase">
-                    <span>Rumusan TP Canonical</span>
+                    <span>TP Canonical Tertaut ({(currentItem.linkedTpIds || []).length} TP)</span>
                     <span className="text-blue-700 font-semibold text-[10px] bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-                      Read-Only
+                      Canonical Authority
                     </span>
                   </div>
-                  <p className="font-medium text-slate-900 leading-relaxed">{currentItem.tpStatement}</p>
-                  <p className="text-[10px] text-slate-500 italic">
+                  <div className="space-y-1">
+                    {tp.items
+                      .filter((t) => (currentItem.linkedTpIds || []).includes(t.id))
+                      .map((t) => (
+                        <div key={t.id} className="text-slate-800">
+                          <strong className="font-mono text-blue-900">[{t.code}]</strong> {t.statement}
+                        </div>
+                      ))}
+                  </div>
+                  <p className="text-[10px] text-slate-500 italic mt-1">
                     * Rumusan TP bersifat terpusat. Untuk mengubah kalimat TP, silakan kembali ke Tahap 05 (TP).
                   </p>
                 </div>

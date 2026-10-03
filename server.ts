@@ -940,7 +940,7 @@ app.post('/api/ai/generate-atp', async (req, res) => {
   try {
     const ai = createAIClient(apiKey);
     const prompt = `Anda adalah spesialis penyusun Alur Tujuan Pembelajaran (ATP) dan perangkat pembelajaran Kurikulum Merdeka.
-Susunlah Matriks Alur Tujuan Pembelajaran (ATP) yang berurutan secara logis, pedagogis, dan terstruktur dari daftar Tujuan Pembelajaran (TP) berikut:
+Tugas Anda adalah merumuskan Matriks Alur Tujuan Pembelajaran (ATP) yang berurutan secara logis, pedagogis, dan terstruktur dari daftar Tujuan Pembelajaran (TP) atomik berikut:
 
 DATA PEMBELAJARAN:
 - Mata Pelajaran: ${subject || '-'}
@@ -949,7 +949,7 @@ ${isK13 ? `- Tahun Ajaran / Semester: ${academicYear || '-'} / ${semester || '-'
 - Alokasi Jam per Minggu: ${validatedWeeklyJP !== undefined ? `${validatedWeeklyJP} JP` : 'Belum ditentukan'}
 - Rujukan CP: ${cpGeneral || '-'}
 
-DAFTAR TP YANG SUDAH DIBUAT (PENTING: Gunakan TP_ID persis saat menautkan TP!):
+DAFTAR TP ATOMIK YANG SUDAH DIBUAT (Gunakan TP_ID persis saat menautkan TP!):
 ${tps
   .map(
     (tp: { id: string; code: string; statement: string; competence?: string; contentScope?: string; p3Dimensions?: string[] }) =>
@@ -957,17 +957,26 @@ ${tps
   )
   .join('\n')}
 
-INSTRUKSI PENYUSUNAN ATP:
-1. Urutkan TP secara logis (misal dari konkret ke abstrak, mudah ke sukar, atau hierarki keterampilan bahasa/sains/matematika).
+PRINSIP & INSTRUKSI PENYUSUNAN ATP MULTI-TP (CANONICAL):
+1. Satu langkah ATP (ATP Step) dapat merujuk 1 atau beberapa (1..n) TP atomik yang secara pedagogis masuk akal dan koheren dipelajari bersama dalam satu alur (misal: memadukan pemahaman konsep dengan aplikasi keterampilan gerak/bahasa/sains, atau menautkan kompetensi konten dengan profil lulusan/karakter).
+2. Urutkan kelompok langkah pembelajaran secara pedagogis logis (misal dari konkret ke abstrak, mudah ke sukar, atau hierarki keterampilan).
+3. CAKUPAN LENGKAP TP (WAJIB):
+   - Seluruh TP atomik dari daftar input di atas WAJIB dimasukkan ke dalam minimal satu langkah ATP (linkedTpIds).
+   - Satu TP boleh masuk ke lebih dari satu langkah jika relevan (misal dimensi karakter atau keterampilan berkesinambungan).
+   - JANGAN ada TP input yang tertinggal atau tidak terpetakan (no orphan TP).
+   - JANGAN ada duplikasi TP ID di dalam langkah yang sama (no duplicate within same step).
+4. FOKUS LANGKAH:
+   - Rumuskan 'focus' untuk tiap langkah sebagai ringkasan fokus pembelajaran pedagogis langkah tersebut.
+   - PENTING: Pada tahap penyusunan ATP ini, JANGAN menentukan Bab atau Unit Pembelajaran (Bab/Unit ditentukan pada modul tersendiri).
 ${
   validatedWeeklyJP !== undefined
-    ? `2. Tentukan Alokasi Waktu (JP) yang realistis dan proporsional untuk tiap langkah pembelajaran (total mingguan: ${validatedWeeklyJP} JP).`
-    : `2. Alokasi Waktu (JP) per minggu BELUM DITENTUKAN. JANGAN mengarang alokasi JP atau menyimpulkan angka JP sendiri. Kosongkan alokasi JP untuk tiap langkah pembelajaran.`
+    ? `5. Tentukan Alokasi Waktu (JP) yang realistis dan proporsional untuk tiap langkah pembelajaran (total mingguan: ${validatedWeeklyJP} JP).`
+    : `5. Alokasi Waktu (JP) per minggu BELUM DITENTUKAN. JANGAN mengarang alokasi JP atau menyimpulkan angka JP sendiri. Kosongkan alokasi JP untuk tiap langkah pembelajaran.`
 }
-3. Rincikan Rencana Asesmen (Asesmen Awal, Formatif, dan Sumatif Lingkup Materi).
-4. Rincikan Glosarium / Kata Kunci penting.
-5. Gunakan terminologi "Murid" (bukan peserta didik) dan "Dimensi Profil Lulusan".
-6. Buat rasionalisasi alur pembelajaran secara komprehensif.
+6. Rincikan Rencana Asesmen (Asesmen Awal, Formatif, dan Sumatif Lingkup Materi).
+7. Rincikan Glosarium / Kata Kunci penting dan Sumber Belajar.
+8. Gunakan terminologi "Murid" (bukan peserta didik) dan "Dimensi Profil Lulusan".
+9. Buat rasionalisasi alur pembelajaran secara komprehensif.
 
 Kembalikan output JSON sesuai schema:`;
 
@@ -988,9 +997,12 @@ Kembalikan output JSON sesuai schema:`;
                 type: Type.OBJECT,
                 properties: {
                   stepNumber: { type: Type.INTEGER, description: 'Urutan alur pembelajaran (1, 2, 3...)' },
-                  tpId: { type: Type.STRING, description: 'TP_ID rujukan persis dari daftar input' },
-                  tpCode: { type: Type.STRING, description: 'Kode TP yang diurutkan' },
-                  tpStatement: { type: Type.STRING, description: 'Rumusan TP' },
+                  linkedTpIds: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: 'Daftar persis TP_ID rujukan dari daftar input yang dipelajari pada langkah ini (1..n TP)',
+                  },
+                  focus: { type: Type.STRING, description: 'Ringkasan fokus pedagogis langkah pembelajaran' },
                   materialScope: { type: Type.STRING, description: 'Lingkup Materi / Topik Pembelajaran Spesifik' },
                   jp: {
                     type: Type.INTEGER,
@@ -1005,9 +1017,8 @@ Kembalikan output JSON sesuai schema:`;
                 },
                 required: [
                   'stepNumber',
-                  'tpId',
-                  'tpCode',
-                  'tpStatement',
+                  'linkedTpIds',
+                  'focus',
                   'materialScope',
                   ...(validatedWeeklyJP !== undefined ? ['jp'] : []),
                   'p3Dimensions',
@@ -1047,6 +1058,7 @@ Kembalikan output JSON sesuai schema:`;
     });
 
     const resolvedItems: any[] = [];
+    const coveredTpIds = new Set<string>();
 
     for (let i = 0; i < parsed.items.length; i++) {
       const item = parsed.items[i];
@@ -1054,33 +1066,69 @@ Kembalikan output JSON sesuai schema:`;
         return res.status(500).json({ error: `Respons AI tidak memenuhi kualifikasi struktur ATP: Butir langkah ATP ke-${i + 1} bukan berupa objek valid` });
       }
 
-      let canonicalTP: any = null;
-
-      // 1. Primary resolution using tpId
-      if (item.tpId && tpMapById.has(item.tpId)) {
-        canonicalTP = tpMapById.get(item.tpId);
+      // Collect raw candidate IDs from linkedTpIds or legacy tpId
+      let rawCandidateIds: string[] = [];
+      if (Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0) {
+        rawCandidateIds = item.linkedTpIds;
+      } else if (item.tpId && typeof item.tpId === 'string' && item.tpId.trim() !== '') {
+        rawCandidateIds = [item.tpId.trim()];
       }
 
-      // 2. Secondary resolution using tpCode fallback
-      if (!canonicalTP && item.tpCode) {
-        const normCode = item.tpCode.trim().toUpperCase();
+      const validStepTpIds: string[] = [];
+      const seenInStep = new Set<string>();
+
+      for (const rawId of rawCandidateIds) {
+        if (!rawId || typeof rawId !== 'string') continue;
+        const trimmedId = rawId.trim();
+
+        // 1. Direct ID match
+        if (tpMapById.has(trimmedId)) {
+          if (!seenInStep.has(trimmedId)) {
+            seenInStep.add(trimmedId);
+            validStepTpIds.push(trimmedId);
+          }
+          continue;
+        }
+
+        // 2. Code fallback match
+        const normCode = trimmedId.toUpperCase();
         const matches = tpMapByCode.get(normCode);
         if (matches && matches.length === 1) {
-          canonicalTP = matches[0];
+          const matchedId = matches[0].id;
+          if (!seenInStep.has(matchedId)) {
+            seenInStep.add(matchedId);
+            validStepTpIds.push(matchedId);
+          }
+          continue;
         }
       }
 
-      // If we cannot resolve, response is considered invalid (prevents hallucinating TPs)
-      if (!canonicalTP) {
+      if (validStepTpIds.length === 0) {
         return res.status(500).json({
-          error: `Respons AI tidak sah: Langkah ke-${i + 1} merujuk ke Tujuan Pembelajaran (${item.tpId || item.tpCode || 'Tanpa ID'}) yang tidak ditemukan dalam daftar rujukan guru.`
+          error: `Respons AI tidak sah: Langkah ke-${i + 1} tidak memiliki rujukan Tujuan Pembelajaran (TP) yang sah dari daftar rujukan guru.`
         });
       }
 
-      // Overwrite ATP items with exact canonical TP reference values
-      item.tpId = canonicalTP.id;
-      item.tpCode = canonicalTP.code;
-      item.tpStatement = canonicalTP.statement;
+      // Set canonical authority
+      item.linkedTpIds = validStepTpIds;
+      validStepTpIds.forEach((id) => coveredTpIds.add(id));
+
+      const canonicalTPs = validStepTpIds.map((id) => tpMapById.get(id)).filter(Boolean);
+      const primaryTP = canonicalTPs[0];
+
+      // Populate legacy compatibility fields
+      item.tpId = primaryTP.id;
+      item.tpCode = canonicalTPs.map((t) => t.code).filter(Boolean).join(', ');
+      item.tpStatement = item.focus || canonicalTPs.map((t) => t.statement).join('; ');
+      if (!item.materialScope) {
+        item.materialScope = Array.from(new Set(canonicalTPs.map((t) => t.contentScope).filter(Boolean))).join(', ');
+      }
+      if (!Array.isArray(item.p3Dimensions) || item.p3Dimensions.length === 0) {
+        item.p3Dimensions = Array.from(new Set(canonicalTPs.flatMap((t) => t.p3Dimensions || [])));
+      }
+
+      // ATP step does NOT determine unitTitle
+      delete item.unitTitle;
 
       if (validatedWeeklyJP === undefined) {
         // Enforce unresolved JP: do not leak synthetic or guessed numbers
@@ -1096,7 +1144,28 @@ Kembalikan output JSON sesuai schema:`;
         }
       }
 
+      item.stepNumber = i + 1;
       resolvedItems.push(item);
+    }
+
+    // TP Coverage Guarantee: verify all input TPs are covered
+    const missingTps = tps.filter((tp: any) => tp.id && !coveredTpIds.has(tp.id));
+    if (missingTps.length > 0) {
+      const stepNum = resolvedItems.length + 1;
+      const missingIds = missingTps.map((tp: any) => tp.id);
+      resolvedItems.push({
+        stepNumber: stepNum,
+        linkedTpIds: missingIds,
+        focus: missingTps.map((tp: any) => tp.statement).join('; '),
+        tpId: missingTps[0].id,
+        tpCode: missingTps.map((tp: any) => tp.code).filter(Boolean).join(', '),
+        tpStatement: missingTps.map((tp: any) => tp.statement).join('; '),
+        materialScope: Array.from(new Set(missingTps.map((tp: any) => tp.contentScope).filter(Boolean))).join(', '),
+        p3Dimensions: Array.from(new Set(missingTps.flatMap((tp: any) => tp.p3Dimensions || []))),
+        assessmentPlan: 'Asesmen Formatif dan Asesmen Sumatif Lingkup Materi',
+        glossary: '',
+        resources: '',
+      });
     }
 
     parsed.items = resolvedItems;

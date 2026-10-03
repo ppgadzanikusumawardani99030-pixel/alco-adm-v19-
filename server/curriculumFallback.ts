@@ -566,28 +566,71 @@ export function fallbackGenerateATP(params: FallbackGenerateATPParams) {
   const phase = params.phase || '';
   const tps = params.tps || [];
 
-  const items = tps.map((tp, idx) => {
+  if (tps.length === 0) {
+    return {
+      rationale: subject && grade
+        ? `Alur Tujuan Pembelajaran (ATP) untuk ${subject} ${grade} (${phase}).`
+        : 'Alur Tujuan Pembelajaran (ATP).',
+      items: [],
+    };
+  }
+
+  // Pedagogical clustering: group coherent atomic TPs (e.g. by element or contiguous 1-2 TPs)
+  // while strictly ensuring all TPs are covered with canonical linkedTpIds
+  const elementGroups = new Map<string, Array<(typeof tps)[0]>>();
+  tps.forEach((tp) => {
+    const elem = tp.elementName || 'Umum';
+    if (!elementGroups.has(elem)) {
+      elementGroups.set(elem, []);
+    }
+    elementGroups.get(elem)!.push(tp);
+  });
+
+  const clusteredGroups: Array<Array<(typeof tps)[0]>> = [];
+  elementGroups.forEach((elemTps) => {
+    // Within each element, cluster into pedagogical steps of 1-2 coherent TPs
+    for (let i = 0; i < elemTps.length; i += 2) {
+      clusteredGroups.push(elemTps.slice(i, i + 2));
+    }
+  });
+
+  // Fallback in case of unexpected empty grouping: ensure all TPs are clustered
+  if (clusteredGroups.length === 0) {
+    for (let i = 0; i < tps.length; i += 2) {
+      clusteredGroups.push(tps.slice(i, i + 2));
+    }
+  }
+
+  const items = clusteredGroups.map((group, idx) => {
     const stepNum = idx + 1;
-    const material = tp.contentScope || '';
+    const linkedTpIds = group.map((t) => t.id || '').filter(Boolean);
+    const primary = group[0];
+    const scopes = Array.from(new Set(group.map((t) => t.contentScope).filter(Boolean)));
+    const focus = group.length === 1
+      ? (primary.contentScope ? `Penguasaan ${primary.contentScope}` : primary.statement)
+      : (scopes.length > 0 ? `Penguasaan dan Penerapan ${scopes.join(' dan ')}` : group.map((t) => t.statement).join('; '));
+
     return {
       stepNumber: stepNum,
-      tpId: tp.id || '',
-      tpCode: tp.code || '',
-      tpStatement: tp.statement || '',
-      materialScope: material,
+      linkedTpIds,
+      focus,
+      tpId: primary.id || '',
+      tpCode: group.map((t) => t.code).filter(Boolean).join(', '),
+      tpStatement: focus,
+      materialScope: scopes.join(', ') || primary.contentScope || '',
       allocatedJP: null,
       jp: null as any,
-      p3Dimensions: tp.p3Dimensions && tp.p3Dimensions.length > 0 ? tp.p3Dimensions : [],
-      assessmentPlan: '',
-      glossary: '',
-      resources: '',
+      p3Dimensions: Array.from(new Set(group.flatMap((t) => t.p3Dimensions || []))),
+      assessmentPlan: 'Asesmen Formatif (Observasi/Penugasan) dan Asesmen Sumatif Lingkup Materi',
+      glossary: scopes.join(', '),
+      resources: `Buku Siswa & Panduan Guru ${subject} ${grade}`.trim(),
     };
   });
 
   return {
     rationale: subject && grade
-      ? `Alur Tujuan Pembelajaran (ATP) untuk ${subject} ${grade} (${phase}).`
-      : 'Alur Tujuan Pembelajaran (ATP).',
+      ? `Alur Tujuan Pembelajaran (ATP) untuk ${subject} ${grade} (${phase}) disusun secara terstruktur dari penguasaan konsep dasar hingga keterampilan aplikatif.`
+      : 'Alur Tujuan Pembelajaran (ATP) disusun secara logis dan terstruktur.',
     items,
   };
 }

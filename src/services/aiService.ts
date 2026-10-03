@@ -625,7 +625,24 @@ export async function generateATPWithAI(params: GenerateATPParams): Promise<Gene
     if (!data.data || !Array.isArray(data.data.items) || data.data.items.length === 0) {
       throw new Error('Hasil respon AI ATP tidak memuat butir alur yang valid.');
     }
-    return data.data;
+
+    const normalizedItems = data.data.items.map((item: any, idx: number) => {
+      const rawLinked = Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0
+        ? item.linkedTpIds.map((id: any) => String(id).trim()).filter(Boolean)
+        : item.tpId ? [String(item.tpId).trim()] : [];
+
+      return {
+        ...item,
+        stepNumber: typeof item.stepNumber === 'number' && item.stepNumber > 0 ? item.stepNumber : idx + 1,
+        linkedTpIds: rawLinked,
+        focus: item.focus ? String(item.focus).trim() : undefined,
+      };
+    });
+
+    return {
+      rationale: data.data.rationale || '',
+      items: normalizedItems,
+    };
   } catch (err) {
     throw new Error(formatAIErrorMessage(err, 'menyusun Alur Tujuan Pembelajaran'));
   }
