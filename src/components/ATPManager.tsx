@@ -300,7 +300,6 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
       const existing = items.find((i) => i.id === currentItem.id)!;
       toSave = {
         ...existing,
-        stepNumber: currentItem.stepNumber,
         linkedTpIds: effectiveLinkedIds,
         focus: currentItem.focus?.trim() || undefined,
         tpId: existing.tpId,
@@ -308,20 +307,47 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
     } else {
       toSave = {
         id: currentItem.id,
-        stepNumber: currentItem.stepNumber,
         linkedTpIds: effectiveLinkedIds,
         focus: currentItem.focus?.trim() || undefined,
       };
     }
 
-    let newItems: ATPItem[];
+    // 1. Ambil desiredStep dari currentItem.stepNumber
+    const rawDesired = Number(currentItem.stepNumber) || 1;
+
+    // 2. Clamp: minimal = 1, maksimal = items.length (edit) atau items.length + 1 (add)
+    const minStep = 1;
+    const maxStep = exists ? items.length : items.length + 1;
+    const clampedStep = Math.max(minStep, Math.min(rawDesired, maxStep));
+    const targetIndex = clampedStep - 1;
+
+    // 3 & 4. Tempatkan toSave pada targetIndex
+    let reorderedItems: ATPItem[];
     if (exists) {
-      newItems = items.map((i) => (i.id === toSave.id ? toSave : i));
+      // keluarkan item existing dari array
+      const remainingItems = items.filter((i) => i.id !== toSave.id);
+      // masukkan toSave pada index desiredStep - 1
+      reorderedItems = [
+        ...remainingItems.slice(0, targetIndex),
+        toSave,
+        ...remainingItems.slice(targetIndex),
+      ];
     } else {
-      newItems = [...items, toSave];
+      // masukkan toSave pada index desiredStep - 1
+      reorderedItems = [
+        ...items.slice(0, targetIndex),
+        toSave,
+        ...items.slice(targetIndex),
+      ];
     }
 
-    setItems(newItems.map((it, idx) => ({ ...it, stepNumber: idx + 1 })));
+    // 5. Renumber seluruh item: stepNumber = index + 1
+    const finalizedItems = reorderedItems.map((it, idx) => ({
+      ...it,
+      stepNumber: idx + 1,
+    }));
+
+    setItems(finalizedItems);
     setIsEditing(false);
     setCurrentItem(null);
   };
