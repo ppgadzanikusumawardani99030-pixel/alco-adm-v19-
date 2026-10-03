@@ -470,9 +470,11 @@ export function validateWorkflowDependencies(
     const validTpIds = new Set(tpItems.map((t) => t.id));
     const isATPBlocked = !isTPDataValid;
 
-    // Check ATP sequence and orphan tpIds
+    // Check ATP sequence, orphan tpIds, and canonical TP coverage
     let hasOrphanATPItem = false;
     let hasDuplicateATPSequence = false;
+    let hasMissingTpCoverage = false;
+    const coveredAtpTpIds = new Set<string>();
     const seenSequences = new Set<number>();
 
     atpItems.forEach((atpItem) => {
@@ -487,6 +489,8 @@ export function validateWorkflowDependencies(
           message: refRes.issues[0] || `Item ATP '${atpItem.id}' tidak terhubung ke TP canonical.`,
           targetId: atpItem.id,
         });
+      } else {
+        refRes.canonicalTPItems.forEach((t) => coveredAtpTpIds.add(t.id));
       }
 
       const seq = atpItem.stepNumber || atpItem.sequence;
@@ -505,7 +509,26 @@ export function validateWorkflowDependencies(
       }
     });
 
-    const isATPComplete = isTPDataValid && atpItems.length > 0 && !hasOrphanATPItem;
+    if (isTPDataValid && tpItems.length > 0 && atpItems.length > 0) {
+      tpItems.forEach((tpItem) => {
+        if (!coveredAtpTpIds.has(tpItem.id)) {
+          hasMissingTpCoverage = true;
+          issues.push({
+            severity: 'ERROR',
+            module: 'atp',
+            code: 'MISSING_ATP_TP_COVERAGE',
+            message: `Tujuan Pembelajaran '${tpItem.code || tpItem.id}' belum dimasukkan ke dalam Alur Tujuan Pembelajaran (ATP).`,
+            targetId: tpItem.id,
+          });
+        }
+      });
+    }
+
+    const isATPComplete =
+      isTPDataValid &&
+      atpItems.length > 0 &&
+      !hasOrphanATPItem &&
+      !hasMissingTpCoverage;
     const isATPStale = isTPDataValid && isUpstreamStale(tp?.updatedAt, atp?.basedOnTpUpdatedAt);
 
     stepStates.atp = {
@@ -526,6 +549,8 @@ export function validateWorkflowDependencies(
         ? 'Memerlukan daftar Tujuan Pembelajaran (TP) terlebih dahulu'
         : isATPStale
         ? 'Daftar TP telah diperbarui, alur ATP perlu ditinjau'
+        : hasMissingTpCoverage
+        ? 'Belum semua Tujuan Pembelajaran (TP) dimasukkan ke dalam alur ATP'
         : undefined,
       missingDependencies: isATPBlocked ? ['Tujuan Pembelajaran (TP)'] : undefined,
     };
