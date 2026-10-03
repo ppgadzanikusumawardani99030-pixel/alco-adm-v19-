@@ -593,45 +593,91 @@ export function fallbackGenerateATP(params: FallbackGenerateATPParams) {
     return Boolean(sc && sc !== '' && sc !== 'MAT' && sc !== 'GEN');
   };
 
-  const STOP_WORDS_SCOPE = new Set([
+  const normalizeScopeText = (text: string): string => {
+    return text
+      .toLowerCase()
+      .replace(/\bnon[\s-]+lokomotor\b/g, 'nonlokomotor')
+      .replace(/\bnon[\s-]+/g, 'non');
+  };
+
+  const GENERIC_CURRICULUM_WORDS = new Set([
+    // Function words & prepositions
     'dan', 'atau', 'pada', 'dalam', 'dengan', 'untuk', 'secara', 'yang', 'serta',
-    'konsep', 'variasi', 'pola', 'gerak', 'dasar', 'penerapan', 'pemahaman',
-    'aktivitas', 'keterampilan', 'terkait', 'tentang', 'materi', 'pokok'
+    'ke', 'di', 'dari', 'sebagai', 'oleh', 'tentang', 'terkait', 'antara', 'melalui',
+    'tanpa', 'hingga', 'sampai', 'maupun',
+    // Pedagogical process & cognitive qualifiers
+    'konsep', 'pemahaman', 'penerapan', 'aktivitas', 'keterampilan', 'materi', 'pokok', 'dasar',
+    'pola', 'variasi', 'praktik', 'analisis', 'identifikasi', 'kemampuan', 'kompetensi', 'proses',
+    'tujuan', 'pengenalan', 'pembelajaran', 'kegiatan', 'latihan', 'tahap', 'metode', 'cara',
+    'aturan', 'kaidah', 'contoh', 'hasil', 'bagian', 'prinsip', 'makna', 'evaluasi', 'eksplorasi',
+    'pengembangan', 'penguasaan', 'tingkat', 'lingkup', 'kategori',
+    // Broad umbrella discipline words (not specific topics on their own)
+    'teks',
+    'bilangan',
+    'gerak',
+    'operasi',
+    'bentuk',
+    'karya',
+    'seni',
+    'gambar',
+    'alat',
+    'unsur',
+    'objek',
+    'media',
+    'lingkungan',
+    'ruang',
   ]);
 
-  const extractSignificantScopeKeywords = (text?: string): string[] => {
+  const extractSpecificKeywords = (text?: string): string[] => {
     if (!text) return [];
-    const clean = text.toLowerCase().replace(/[^a-z0-9\s]/g, ' ');
-    return clean
+    const normalized = normalizeScopeText(text).replace(/[^a-z0-9\s]/g, ' ');
+    return normalized
       .split(/\s+/)
-      .filter((w) => w.length > 2 && !STOP_WORDS_SCOPE.has(w));
+      .map((w) => w.trim())
+      .filter((w) => w.length > 2 && !GENERIC_CURRICULUM_WORDS.has(w));
   };
 
   const haveStrongSemanticRelation = (
     tpA: (typeof tps)[0],
     tpB: (typeof tps)[0]
   ): boolean => {
-    // Signal A: specific scopeCode identical and non-generic
+    if (!tpA || !tpB) return false;
+    if (tpA.id && tpB.id && tpA.id === tpB.id) return true;
+
+    const rawScopeA = (tpA.contentScope || '').trim();
+    const rawScopeB = (tpB.contentScope || '').trim();
+    if (!rawScopeA || !rawScopeB) return false;
+
+    // 1. Normalized contentScope sama persis
+    const cleanScopeA = normalizeScopeText(rawScopeA).replace(/\s+/g, ' ').trim();
+    const cleanScopeB = normalizeScopeText(rawScopeB).replace(/\s+/g, ' ').trim();
+    if (cleanScopeA === cleanScopeB) {
+      return true;
+    }
+
+    // Extract specific non-generic topic keywords
+    const kwA = extractSpecificKeywords(rawScopeA);
+    const kwB = extractSpecificKeywords(rawScopeB);
+    if (kwA.length === 0 || kwB.length === 0) {
+      return false;
+    }
+
+    const sharedKeywords = kwA.filter((w) => kwB.includes(w));
+    if (sharedKeywords.length === 0) {
+      return false;
+    }
+
+    // 2. scopeCode sama + specific topic overlap yang jelas
     const scA = getScopeCode(tpA);
     const scB = getScopeCode(tpB);
-    if (isSpecificScopeCode(scA) && isSpecificScopeCode(scB) && scA === scB) {
+    const isSameSpecificScopeCode = isSpecificScopeCode(scA) && isSpecificScopeCode(scB) && scA === scB;
+    if (isSameSpecificScopeCode && sharedKeywords.length >= 1) {
       return true;
     }
 
-    // Signal B: normalized contentScope identical or shares specific core topic
-    const scopeA = (tpA.contentScope || '').trim().toLowerCase();
-    const scopeB = (tpB.contentScope || '').trim().toLowerCase();
-    if (scopeA && scopeB && scopeA === scopeB) {
+    // 3. contentScope memiliki semantic overlap kuat (lintas elemen atau lintas scopeCode)
+    if (sharedKeywords.length >= 1) {
       return true;
-    }
-
-    const kwA = extractSignificantScopeKeywords(tpA.contentScope);
-    const kwB = extractSignificantScopeKeywords(tpB.contentScope);
-    if (kwA.length > 0 && kwB.length > 0) {
-      const shared = kwA.filter((w) => kwB.includes(w));
-      if (shared.length > 0) {
-        return true;
-      }
     }
 
     // Conservative: if not clearly the same specific topic, do NOT group
