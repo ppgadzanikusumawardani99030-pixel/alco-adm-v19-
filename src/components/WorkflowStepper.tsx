@@ -27,6 +27,7 @@ import {
   CPData,
   TPData,
   ATPData,
+  ATPUnitMappingData,
   AdministrationWorkspace,
   CPAnalysisData,
   SemesterPlan,
@@ -47,6 +48,7 @@ interface WorkflowStepperProps {
   cpAnalysis?: CPAnalysisData;
   tp?: TPData;
   atp?: ATPData;
+  atpUnitMapping?: ATPUnitMappingData;
   activeSemesterPlan?: SemesterPlan;
   k13Analysis?: K13Analysis;
   k13KKM?: K13KKM;
@@ -63,6 +65,7 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
   cpAnalysis,
   tp,
   atp,
+  atpUnitMapping,
   activeSemesterPlan,
   k13Analysis,
   k13KKM,
@@ -81,6 +84,7 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
     cpAnalysis,
     tp,
     atp,
+    atpUnitMapping,
     k13Analysis,
     k13KKM,
   });

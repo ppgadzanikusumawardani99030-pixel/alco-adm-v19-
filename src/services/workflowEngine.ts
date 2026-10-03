@@ -218,6 +218,7 @@ export function validateWorkflowDependencies(
   const cpAnalysis = workspaceData.cpAnalysis;
   const tp = workspaceData.tp;
   const atp = workspaceData.atp;
+  const atpUnitMapping = workspaceData.atpUnitMapping || workspaceData.activeATPUnitMapping;
   const criteria = workspaceData.assessmentCriteria || [];
   const assessments = workspaceData.assessments || [];
   const assessmentResults = workspaceData.assessmentResults || [];
@@ -639,26 +640,68 @@ export function validateWorkflowDependencies(
       hasOrphans: hasOrphanCriterion,
     };
 
-    // 5b. Pemetaan Unit/Bab step state
-    const hasMappedUnit = isATPComplete && atpItems.some((item) => item.unitTitle && item.unitTitle.trim().length > 0);
+    // 5b. Pemetaan Unit/Bab step state (Canonical ATPUnitMappingData authority)
+    const mappingUnits = atpUnitMapping?.units || [];
+    const hasUnits = mappingUnits.length > 0;
+    const allUnitsHaveTitle = hasUnits && mappingUnits.every((u) => u.title && u.title.trim().length > 0);
+    // Lingkup Materi kosong tidak dianggap selesai: each unit must have materials and each material must have non-empty title
+    const allUnitsHaveMaterials =
+      hasUnits &&
+      mappingUnits.every(
+        (u) =>
+          Array.isArray(u.materials) &&
+          u.materials.length > 0 &&
+          u.materials.every((m) => m.title && m.title.trim().length > 0)
+      );
+
+    // Check all ATP items assigned to at least one unit
+    const assignedAtpIds = new Set<string>();
+    mappingUnits.forEach((u) => {
+      (u.linkedAtpItemIds || []).forEach((id) => assignedAtpIds.add(id));
+    });
+    const allAtpItemsAssigned = atpItems.length > 0 && atpItems.every((it) => assignedAtpIds.has(it.id));
+
+    const isMappingComplete =
+      isATPComplete &&
+      hasUnits &&
+      allUnitsHaveTitle &&
+      allUnitsHaveMaterials &&
+      allAtpItemsAssigned;
+
+    const isMappingStale =
+      isATPComplete &&
+      (isUpstreamStale(atp?.updatedAt, atpUnitMapping?.basedOnAtpUpdatedAt) ||
+        isUpstreamStale(tp?.updatedAt, atpUnitMapping?.basedOnTpUpdatedAt));
+
     stepStates['atp-mapping'] = {
       id: 'atp-mapping',
       status: isATPBlocked
         ? 'BLOCKED'
-        : isATPStale
+        : !isATPComplete
+        ? 'BLOCKED'
+        : isMappingStale
         ? 'STALE'
-        : hasMappedUnit
+        : isMappingComplete
         ? 'COMPLETE'
-        : isATPComplete
-        ? 'READY'
-        : 'BLOCKED',
+        : hasUnits
+        ? 'IN_PROGRESS'
+        : 'READY',
       isBlocked: !isATPComplete,
-      isComplete: hasMappedUnit,
-      isStale: isATPStale,
-      reason: !isATPComplete ? 'Memerlukan penyusunan Alur Tujuan Pembelajaran (ATP) terlebih dahulu' : undefined,
+      isComplete: isMappingComplete,
+      isStale: isMappingStale,
+      reason: !isATPComplete
+        ? 'Memerlukan penyusunan Alur Tujuan Pembelajaran (ATP) terlebih dahulu'
+        : isMappingStale
+        ? 'Alur ATP telah diperbarui, pemetaan Unit/Bab perlu diselaraskan'
+        : !allUnitsHaveMaterials
+        ? 'Setiap Unit/Bab harus memiliki minimal satu Lingkup Materi yang terisi'
+        : !allAtpItemsAssigned
+        ? 'Belum semua langkah ATP dipetakan ke dalam Unit/Bab'
+        : undefined,
+      missingDependencies: !isATPComplete ? ['Alur Tujuan Pembelajaran (ATP)'] : undefined,
     };
 
-    // 5c. Perencanaan Tahunan (Kalender & JP S1 & S2) step state
+    // 5c. Perencanaan Tahunan (Kalender & JP S1 & S2) step state (Requires structurally complete Pemetaan)
     let isAnnualPlanningComplete = false;
     try {
       const v5State = loadStorageV5();
@@ -677,21 +720,30 @@ export function validateWorkflowDependencies(
       isAnnualPlanningComplete = false;
     }
 
+    const isAnnualPlanningBlocked = !isMappingComplete;
+
     stepStates['annual-planning'] = {
       id: 'annual-planning',
-      status: isATPBlocked
+      status: isAnnualPlanningBlocked
         ? 'BLOCKED'
-        : isATPStale
+        : isMappingStale
         ? 'STALE'
         : isAnnualPlanningComplete
         ? 'COMPLETE'
-        : isATPComplete
-        ? 'READY'
-        : 'BLOCKED',
-      isBlocked: !isATPComplete,
-      isComplete: isAnnualPlanningComplete,
-      isStale: isATPStale,
-      reason: !isATPComplete ? 'Memerlukan penyusunan Alur Tujuan Pembelajaran (ATP) terlebih dahulu' : undefined,
+        : 'READY',
+      isBlocked: isAnnualPlanningBlocked,
+      isComplete: isAnnualPlanningComplete && !isAnnualPlanningBlocked,
+      isStale: isMappingStale,
+      reason: !isATPComplete
+        ? 'Memerlukan penyusunan Alur Tujuan Pembelajaran (ATP) terlebih dahulu'
+        : !isMappingComplete
+        ? 'Memerlukan penyelesaian Pemetaan Unit/Bab & Lingkup Materi (07) terlebih dahulu'
+        : undefined,
+      missingDependencies: !isATPComplete
+        ? ['Alur Tujuan Pembelajaran (ATP)']
+        : !isMappingComplete
+        ? ['Pemetaan Unit/Bab & Lingkup Materi']
+        : undefined,
     };
 
     // 6. Semester Selection step state

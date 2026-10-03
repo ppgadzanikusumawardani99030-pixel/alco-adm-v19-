@@ -1563,6 +1563,7 @@ export interface ProfileWorkspaceData {
   cpAnalysis?: CPAnalysisData;
   tp?: TPData;
   atp?: ATPData;
+  atpUnitMapping?: ATPUnitMappingData;
   documents: AppDocumentRecord[];
   allWorkspaces: AdministrationWorkspace[];
   allWorkspacesForProfile?: AdministrationWorkspace[];
@@ -1578,6 +1579,7 @@ export interface ProfileWorkspaceData {
   activeCP?: CPData;
   activeTP?: TPData;
   activeATP?: ATPData;
+  activeATPUnitMapping?: ATPUnitMappingData;
   // New modules scoped strictly to this workspace
   students: Student[];
   calendar?: AcademicCalendar;

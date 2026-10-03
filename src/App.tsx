@@ -1368,6 +1368,7 @@ export function App() {
           cpAnalysis={activeCPAnalysis}
           tp={activeTP}
           atp={activeATP}
+          atpUnitMapping={activeATPUnitMapping}
           activeSemesterPlan={activeSemesterPlan}
           k13Analysis={undefined}
           k13KKM={undefined}

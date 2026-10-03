@@ -83,30 +83,65 @@ function createInitialUnits(
     }));
   }
 
-  // Fallback initial draft: default 6 Bab
-  // If legacy ATP items already have unitTitle, group them initially
-  const legacyUnitMap = new Map<string, string[]>();
+  // Fallback initial draft: bootstrap from legacy unitTitle & materialScope if available
+  const legacyUnitMap = new Map<
+    string,
+    { atpIds: string[]; materialsMap: Map<string, { atpIds: string[]; tpIds: string[] }> }
+  >();
+
   atpItems.forEach((it) => {
     const t = it.unitTitle?.trim();
     if (t) {
       if (!legacyUnitMap.has(t)) {
-        legacyUnitMap.set(t, []);
+        legacyUnitMap.set(t, { atpIds: [], materialsMap: new Map() });
       }
-      legacyUnitMap.get(t)!.push(it.id);
+      const unitEntry = legacyUnitMap.get(t)!;
+      unitEntry.atpIds.push(it.id);
+
+      const mScope = it.materialScope?.trim();
+      if (mScope) {
+        if (!unitEntry.materialsMap.has(mScope)) {
+          unitEntry.materialsMap.set(mScope, { atpIds: [], tpIds: [] });
+        }
+        const matEntry = unitEntry.materialsMap.get(mScope)!;
+        matEntry.atpIds.push(it.id);
+        const itemTpIds =
+          Array.isArray(it.linkedTpIds) && it.linkedTpIds.length > 0
+            ? it.linkedTpIds
+            : it.tpId
+            ? [it.tpId]
+            : [];
+        itemTpIds.forEach((id) => {
+          if (id && !matEntry.tpIds.includes(id)) matEntry.tpIds.push(id);
+        });
+      }
     }
   });
 
   if (legacyUnitMap.size > 0) {
     const initial: ATPUnitMapping[] = [];
     let order = 1;
-    legacyUnitMap.forEach((atpIds, title) => {
+    legacyUnitMap.forEach((entry, title) => {
+      const mats: ATPUnitMaterial[] = [];
+      let mOrder = 1;
+      entry.materialsMap.forEach((mEntry, mTitle) => {
+        mats.push({
+          id: `mat-${Date.now()}-${order}-${mOrder}-${Math.random().toString(36).substring(2, 6)}`,
+          title: mTitle,
+          order: mOrder,
+          linkedAtpItemIds: mEntry.atpIds,
+          linkedTpIds: mEntry.tpIds,
+        });
+        mOrder++;
+      });
+
       initial.push({
         id: `unit-${Date.now()}-${order}-${Math.random().toString(36).substring(2, 6)}`,
         title,
         order,
-        linkedAtpItemIds: atpIds,
-        linkedTpIds: deriveUnitLinkedTpIds(atpIds, atpItems),
-        materials: [],
+        linkedAtpItemIds: entry.atpIds,
+        linkedTpIds: deriveUnitLinkedTpIds(entry.atpIds, atpItems),
+        materials: mats,
       });
       order++;
     });
@@ -461,11 +496,23 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
               id="btn-save-mapping"
               type="button"
               onClick={handleSave}
-              disabled={!hasChanges}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-blue-800 hover:bg-blue-900 disabled:bg-slate-200 disabled:text-slate-400 transition cursor-pointer shadow-xs disabled:cursor-not-allowed"
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer shadow-xs ${
+                hasChanges
+                  ? 'text-white bg-blue-800 hover:bg-blue-900 ring-2 ring-blue-500/20'
+                  : 'text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
+              }`}
             >
-              <Save className="w-3.5 h-3.5" />
-              <span>Simpan Pemetaan</span>
+              {hasChanges ? (
+                <>
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Simpan Pemetaan</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Pemetaan Tersimpan</span>
+                </>
+              )}
             </button>
           </div>
         </div>
