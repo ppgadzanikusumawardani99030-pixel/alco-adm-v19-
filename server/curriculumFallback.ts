@@ -892,7 +892,32 @@ export function fallbackGenerateCanonicalATPUnitMapping(
     };
 
     const checkStatementCrossCutting = (statement: string): boolean => {
-      return checkSubstantiveCrossCutting(statement);
+      if (!statement) return false;
+      const clean = statement.toLowerCase().trim();
+
+      // 1. Check strong semantic anchor phrases
+      if (
+        clean.includes('tanggung jawab') ||
+        clean.includes('evaluasi diri') ||
+        clean.includes('profil lulusan') ||
+        clean.includes('profil pelajar pancasila') ||
+        clean.includes('pengembangan karakter') ||
+        clean.includes('gotong royong')
+      ) {
+        return true;
+      }
+
+      // 2. Strong standalone concepts
+      const strongKeywords = [
+        'karakter', 'refleksi', 'kolaborasi', 'sikap', 'akhlak'
+      ];
+
+      const words = clean.replace(/[^a-zA-Z0-9\s]/g, ' ').split(/\s+/).filter(Boolean);
+      if (words.some((w) => strongKeywords.includes(w))) {
+        return true;
+      }
+
+      return false;
     };
 
     // 1. contentScope check (primary signal)
