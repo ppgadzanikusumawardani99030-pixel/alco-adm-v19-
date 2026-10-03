@@ -777,4 +777,110 @@ export async function generateCanonicalATPUnitMappingWithAI(
   }
 }
 
+export interface MappingAnalysisResult {
+  summary: {
+    totalAtp: number;
+    mappedAtp: number;
+    unmappedAtp: number;
+    alignedAtp: number;
+    reviewAtp: number;
+    missingMaterialSuggestions: number;
+    manualMaterialReview: number;
+  };
+
+  atpFindings: Array<{
+    id: string;
+    atpItemId: string;
+    status: 'ALIGNED' | 'UNMAPPED' | 'REVIEW';
+
+    currentUnitId?: string;
+    suggestedUnitId?: string;
+    suggestedMaterialId?: string;
+
+    supportingTpIds: string[];
+
+    strength?: 'STRONG' | 'MODERATE' | 'LOW';
+
+    reason: string;
+
+    action?: {
+      type: 'ASSIGN_ATP_TO_UNIT';
+      atpItemId: string;
+      targetUnitId: string;
+      targetMaterialId?: string;
+    };
+  }>;
+
+  materialFindings: Array<{
+    id: string;
+
+    status:
+      | 'SUPPORTED'
+      | 'MISSING_MATERIAL'
+      | 'MANUAL_REVIEW';
+
+    unitId: string;
+    materialId?: string;
+
+    suggestedTitle?: string;
+
+    supportingTpIds: string[];
+    supportingAtpItemIds: string[];
+
+    strength?: 'STRONG' | 'MODERATE' | 'LOW';
+
+    reason: string;
+
+    action?: {
+      type: 'ADD_MATERIAL_TO_UNIT';
+      targetUnitId: string;
+      title: string;
+      linkedTpIds: string[];
+      linkedAtpItemIds: string[];
+    };
+  }>;
+}
+
+export interface AnalyzeATPUnitMappingParams {
+  subject?: string;
+  grade?: string;
+  phase?: string;
+  tpData: TPData;
+  atpData: ATPData;
+  currentMapping: ATPUnitMappingData;
+}
+
+export async function analyzeATPUnitMappingWithAI(
+  params: AnalyzeATPUnitMappingParams
+): Promise<MappingAnalysisResult> {
+  try {
+    const res = await aiFetch('/api/ai/analyze-atp-unit-mapping', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      if (errData.code === 'AI_NOT_CONFIGURED') {
+        throw new Error('Layanan AI belum dikonfigurasi pada server.');
+      }
+      throw new Error(errData.error || `Gagal menganalisis pemetaan Unit/Bab (Status ${res.status})`);
+    }
+
+    const data = await res.json();
+    if (
+      !data.data ||
+      typeof data.data.summary !== 'object' ||
+      !Array.isArray(data.data.atpFindings) ||
+      !Array.isArray(data.data.materialFindings)
+    ) {
+      throw new Error('Hasil respon Analisis Pemetaan tidak memuat struktur data yang valid.');
+    }
+    return data.data;
+  } catch (err) {
+    throw new Error(formatAIErrorMessage(err, 'menganalisis pemetaan Bab & Lingkup Materi'));
+  }
+}
+
 

@@ -25,6 +25,10 @@ import {
   ATPUnitMapping,
   ATPUnitMaterial,
 } from '../types';
+import {
+  analyzeATPUnitMappingWithAI,
+  MappingAnalysisResult,
+} from '../services/aiService';
 
 export interface ATPUnitMappingManagerProps {
   atp: ATPData;
@@ -336,6 +340,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setHasChanges(true);
     setSaveSuccessNotice(false);
     setSaveErrorNotice(null);
+    setAnalysisResult(null);
+    setSelectedAnalysisActionIds(new Set());
+    setAppliedNotice(null);
   };
 
   const handleAddEmptyBab = () => {
@@ -352,6 +359,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setHasChanges(true);
     setSaveSuccessNotice(false);
     setSaveErrorNotice(null);
+    setAnalysisResult(null);
+    setSelectedAnalysisActionIds(new Set());
+    setAppliedNotice(null);
   };
 
   const handleRemoveBab = (unitId: string) => {
@@ -362,6 +372,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setHasChanges(true);
     setSaveSuccessNotice(false);
     setSaveErrorNotice(null);
+    setAnalysisResult(null);
+    setSelectedAnalysisActionIds(new Set());
+    setAppliedNotice(null);
   };
 
   const handleTargetCountChange = (newCount: number) => {
@@ -384,6 +397,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       setHasChanges(true);
       setSaveSuccessNotice(false);
       setSaveErrorNotice(null);
+      setAnalysisResult(null);
+      setSelectedAnalysisActionIds(new Set());
+      setAppliedNotice(null);
     } else if (clamped < units.length) {
       const removableCount = units.length - clamped;
       let removed = 0;
@@ -399,6 +415,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         setHasChanges(true);
         setSaveSuccessNotice(false);
         setSaveErrorNotice(null);
+        setAnalysisResult(null);
+        setSelectedAnalysisActionIds(new Set());
+        setAppliedNotice(null);
       }
     }
   };
@@ -425,6 +444,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setHasChanges(true);
     setSaveSuccessNotice(false);
     setSaveErrorNotice(null);
+    setAnalysisResult(null);
+    setSelectedAnalysisActionIds(new Set());
+    setAppliedNotice(null);
   };
 
   // Handlers for Lingkup Materi (Materials)
@@ -449,6 +471,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setHasChanges(true);
     setSaveSuccessNotice(false);
     setSaveErrorNotice(null);
+    setAnalysisResult(null);
+    setSelectedAnalysisActionIds(new Set());
+    setAppliedNotice(null);
   };
 
   const handleMaterialTitleChange = (unitId: string, materialId: string, title: string) => {
@@ -467,6 +492,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setHasChanges(true);
     setSaveSuccessNotice(false);
     setSaveErrorNotice(null);
+    setAnalysisResult(null);
+    setSelectedAnalysisActionIds(new Set());
+    setAppliedNotice(null);
   };
 
   const handleRemoveMaterial = (unitId: string, materialId: string) => {
@@ -487,6 +515,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setHasChanges(true);
     setSaveSuccessNotice(false);
     setSaveErrorNotice(null);
+    setAnalysisResult(null);
+    setSelectedAnalysisActionIds(new Set());
+    setAppliedNotice(null);
   };
 
   const handleMoveMaterial = (unitId: string, materialIndex: number, direction: 'up' | 'down') => {
@@ -510,10 +541,13 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setHasChanges(true);
     setSaveSuccessNotice(false);
     setSaveErrorNotice(null);
+    setAnalysisResult(null);
+    setSelectedAnalysisActionIds(new Set());
+    setAppliedNotice(null);
   };
 
-  // Save Mapping Canonical
-  const handleSave = (): boolean => {
+  // Helper to build canonical ATPUnitMappingData from current live draft
+  const buildCurrentMappingDraft = (): ATPUnitMappingData => {
     const finalUnits: ATPUnitMapping[] = units.map((u, idx) => {
       const uId = u.id && u.id.trim() ? u.id.trim() : `unit-${Date.now()}-${idx + 1}`;
       const uTitle = u.title !== undefined ? u.title : `Bab ${idx + 1}`;
@@ -537,7 +571,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       };
     });
 
-    const result: ATPUnitMappingData = {
+    return {
       id: mapping?.id && mapping.id.trim() ? mapping.id.trim() : (atp.id ? `mapping-${atp.id}` : `atp-mapping-${Date.now()}`),
       academicSettingId: academicSetting?.id || atp.academicSettingId || '',
       atpId: atp.id,
@@ -547,6 +581,181 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       basedOnAtpUpdatedAt: atp.updatedAt,
       updatedAt: new Date().toISOString(),
     };
+  };
+
+  // AI Analysis State
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisResult, setAnalysisResult] = useState<MappingAnalysisResult | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [selectedAnalysisActionIds, setSelectedAnalysisActionIds] = useState<Set<string>>(new Set());
+  const [appliedNotice, setAppliedNotice] = useState<string | null>(null);
+
+  const handleAnalyzeMapping = async () => {
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+    setAppliedNotice(null);
+
+    try {
+      const currentDraft = buildCurrentMappingDraft();
+      const result = await analyzeATPUnitMappingWithAI({
+        subject: academicSetting?.subject,
+        grade: academicSetting?.grade,
+        phase: academicSetting?.phase,
+        tpData: tp,
+        atpData: atp,
+        currentMapping: currentDraft,
+      });
+
+      setAnalysisResult(result);
+      setSelectedAnalysisActionIds(new Set());
+    } catch (err: any) {
+      setAnalysisError(err?.message || 'Gagal menganalisis pemetaan Bab & Lingkup Materi.');
+      setAnalysisResult(null);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleToggleAction = (findingId: string) => {
+    setSelectedAnalysisActionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(findingId)) {
+        next.delete(findingId);
+      } else {
+        next.add(findingId);
+      }
+      return next;
+    });
+  };
+
+  const handleSelectAllActionable = () => {
+    if (!analysisResult) return;
+    const allActionIds = new Set<string>();
+    analysisResult.atpFindings.forEach((f) => {
+      if (f.action) allActionIds.add(f.id);
+    });
+    analysisResult.materialFindings.forEach((m) => {
+      if (m.action) allActionIds.add(m.id);
+    });
+    setSelectedAnalysisActionIds(allActionIds);
+  };
+
+  const handleDeselectAllActionable = () => {
+    setSelectedAnalysisActionIds(new Set());
+  };
+
+  const handleApplySelectedActions = () => {
+    if (!analysisResult || selectedAnalysisActionIds.size === 0) return;
+
+    let nextUnits = [...units];
+
+    const selectedAtpFindings = analysisResult.atpFindings.filter(
+      (f) => f.action && selectedAnalysisActionIds.has(f.id)
+    );
+    const selectedMaterialFindings = analysisResult.materialFindings.filter(
+      (m) => m.action && selectedAnalysisActionIds.has(m.id)
+    );
+
+    // 1. Apply ASSIGN_ATP_TO_UNIT actions
+    selectedAtpFindings.forEach((f) => {
+      const action = f.action!;
+      const atpItemId = action.atpItemId;
+      const targetUnitId = action.targetUnitId;
+      const targetMaterialId = action.targetMaterialId;
+
+      // Remove atpItemId from other units to prevent duplication
+      nextUnits = nextUnits.map((u) => {
+        const nextLinkedAtp = (u.linkedAtpItemIds || []).filter((id) => id !== atpItemId);
+        const nextMaterials = (u.materials || []).map((m) => {
+          const mNextLinkedAtp = (m.linkedAtpItemIds || []).filter((id) => id !== atpItemId);
+          return {
+            ...m,
+            linkedAtpItemIds: mNextLinkedAtp,
+          };
+        });
+        return {
+          ...u,
+          linkedAtpItemIds: nextLinkedAtp,
+          linkedTpIds: deriveUnitLinkedTpIds(nextLinkedAtp, atp.items || []),
+          materials: nextMaterials,
+        };
+      });
+
+      // Add atpItemId to targetUnit
+      nextUnits = nextUnits.map((u) => {
+        if (u.id !== targetUnitId) return u;
+        const nextLinkedAtp = [...(u.linkedAtpItemIds || [])];
+        if (!nextLinkedAtp.includes(atpItemId)) {
+          nextLinkedAtp.push(atpItemId);
+        }
+        const nextTpIds = deriveUnitLinkedTpIds(nextLinkedAtp, atp.items || []);
+
+        const nextMaterials = (u.materials || []).map((m) => {
+          if (targetMaterialId && m.id === targetMaterialId) {
+            const mNextAtp = [...(m.linkedAtpItemIds || [])];
+            if (!mNextAtp.includes(atpItemId)) {
+              mNextAtp.push(atpItemId);
+            }
+            const item = (atp.items || []).find((it) => it.id === atpItemId);
+            const itemTps = Array.isArray(item?.linkedTpIds) && item.linkedTpIds.length > 0
+              ? item.linkedTpIds
+              : item?.tpId
+              ? [item.tpId]
+              : [];
+            const mNextTp = Array.from(new Set([...(m.linkedTpIds || []), ...itemTps]));
+            return {
+              ...m,
+              linkedAtpItemIds: mNextAtp,
+              linkedTpIds: mNextTp,
+            };
+          }
+          return m;
+        });
+
+        return {
+          ...u,
+          linkedAtpItemIds: nextLinkedAtp,
+          linkedTpIds: nextTpIds,
+          materials: nextMaterials,
+        };
+      });
+    });
+
+    // 2. Apply ADD_MATERIAL_TO_UNIT actions
+    selectedMaterialFindings.forEach((m) => {
+      const action = m.action!;
+      const targetUnitId = action.targetUnitId;
+
+      nextUnits = nextUnits.map((u) => {
+        if (u.id !== targetUnitId) return u;
+        const currentMats = u.materials || [];
+        const newMat: ATPUnitMaterial = {
+          id: `mat-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          title: action.title,
+          order: currentMats.length + 1,
+          linkedTpIds: action.linkedTpIds || [],
+          linkedAtpItemIds: action.linkedAtpItemIds || [],
+        };
+        return {
+          ...u,
+          materials: [...currentMats, newMat],
+        };
+      });
+    });
+
+    setUnits(nextUnits);
+    setHasChanges(true);
+    setSelectedAnalysisActionIds(new Set());
+    setAnalysisResult(null);
+    setSaveSuccessNotice(false);
+    setAppliedNotice(
+      'Saran terpilih telah diterapkan ke draft Pemetaan. Simpan perubahan, lalu jalankan Analisis Pemetaan kembali untuk verifikasi.'
+    );
+  };
+
+  // Save Mapping Canonical
+  const handleSave = (): boolean => {
+    const result = buildCurrentMappingDraft();
 
     const saved = onSaveMapping(result);
     if (saved) {
@@ -694,6 +903,40 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
           </div>
         )}
 
+        {/* Applied Analysis Notice */}
+        {appliedNotice && (
+          <div className="mt-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{appliedNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAppliedNotice(null)}
+              className="text-xs font-bold text-emerald-700 hover:underline cursor-pointer"
+            >
+              Tutup
+            </button>
+          </div>
+        )}
+
+        {/* AI Analysis Error Notice */}
+        {analysisError && (
+          <div className="mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>Analisis Pemetaan gagal: {analysisError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAnalysisError(null)}
+              className="text-xs font-bold text-rose-600 hover:underline cursor-pointer"
+            >
+              Tutup
+            </button>
+          </div>
+        )}
+
         {/* Structural Status Summary Banner */}
         <div className="mt-3">
           {localValidation.isComplete ? (
@@ -717,11 +960,11 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         )}
       </div>
 
-      {/* Top Controls: Target Count, AI Status & Add Bab */}
+      {/* Top Controls: Target Count & AI Analysis */}
       <div className="bg-white rounded-2xl border border-indigo-100 shadow-xs p-5 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          {/* Target Count Input */}
-          <div className="flex items-center gap-3">
+          {/* Target Count Input & Add Bab */}
+          <div className="flex items-center gap-3 flex-wrap">
             <div className="flex items-center gap-2 bg-slate-50 px-3.5 py-2 rounded-xl border border-slate-200">
               <label htmlFor="target-unit-count" className="text-xs font-bold text-slate-800 whitespace-nowrap">
                 Jumlah Bab:
@@ -765,28 +1008,17 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
             </button>
           </div>
 
-          {/* AI Status Buttons (Disabled during F3.1 manual editor milestone) */}
-          <div className="flex items-center gap-2.5 flex-wrap">
+          {/* AI Analysis Trigger Button */}
+          <div className="flex items-center gap-2.5">
             <button
-              id="btn-generate-ai-mapping"
+              id="btn-analyze-mapping"
               type="button"
-              disabled={true}
-              title="AI Generator Pemetaan Bab & Lingkup Materi akan diaktifkan pada milestone berikutnya"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed shadow-2xs"
+              onClick={handleAnalyzeMapping}
+              disabled={isAnalyzing || units.length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-700 to-blue-700 hover:from-indigo-800 hover:to-blue-800 text-white text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Sparkles className="w-4 h-4 text-slate-400" />
-              <span>Generate Pemetaan AI (Segera Hadir)</span>
-            </button>
-
-            <button
-              id="btn-complete-missing-mapping"
-              type="button"
-              disabled={true}
-              title="AI Lengkapi Kosong akan diaktifkan pada milestone berikutnya"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold text-slate-400 bg-slate-100 border border-slate-200 cursor-not-allowed shadow-2xs"
-            >
-              <ListPlus className="w-4 h-4 text-slate-400" />
-              <span>Lengkapi yang Kosong (Segera Hadir)</span>
+              <Sparkles className={`w-4 h-4 ${isAnalyzing ? 'animate-spin' : ''}`} />
+              <span>{isAnalyzing ? 'Menganalisis...' : 'Analisis Pemetaan'}</span>
             </button>
           </div>
         </div>
@@ -795,10 +1027,339 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 flex items-start gap-2.5 text-xs text-slate-600">
           <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
           <p>
-            <strong>Struktur Canonical:</strong> Guru menyusun judul Bab dan mendefinisikan Lingkup Materi secara terstruktur. Setiap Bab dapat memuat banyak Lingkup Materi dan menaungi beberapa langkah ATP.
+            <strong>Authority Struktur Guru:</strong> Struktur Bab & Lingkup Materi manual adalah acuan utama. Fitur <em>Analisis Pemetaan</em> memberikan telaah keselarasan TP ↔ ATP dan saran opsional tanpa mengubah struktur Bab secara otomatis.
           </p>
         </div>
       </div>
+
+      {/* AI Analysis Findings Panel */}
+      {analysisResult && (
+        <div className="bg-white rounded-2xl border-2 border-indigo-300 shadow-md p-5 space-y-5 animate-fadeIn">
+          {/* Analysis Header & Summary Metrics */}
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-indigo-100">
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-indigo-700" />
+                <h4 className="text-sm font-bold text-slate-900">
+                  Hasil Analisis Pemetaan Manual ↔ TP ↔ ATP
+                </h4>
+                <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 text-[11px] font-bold border border-indigo-200">
+                  Read-Only Analysis
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Tinjau temuan keselarasan di bawah. Pilih saran yang ingin diterapkan ke draft, lalu klik <strong>Terapkan Pilihan</strong>.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleSelectAllActionable}
+                className="text-xs font-bold text-indigo-700 hover:underline cursor-pointer"
+              >
+                Pilih Semua Saran
+              </button>
+              <span className="text-slate-300">•</span>
+              <button
+                type="button"
+                onClick={handleDeselectAllActionable}
+                className="text-xs font-bold text-slate-600 hover:underline cursor-pointer"
+              >
+                Kosongkan Pilihan
+              </button>
+              <span className="text-slate-300">•</span>
+              <button
+                type="button"
+                onClick={() => setAnalysisResult(null)}
+                className="text-xs font-bold text-slate-500 hover:underline cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+
+          {/* Metrics Overview Pills */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3">
+              <div className="text-[11px] font-bold text-emerald-800 uppercase">ATP Selaras</div>
+              <div className="text-lg font-extrabold text-emerald-900 mt-0.5">
+                {analysisResult.summary.alignedAtp} <span className="text-xs font-normal text-emerald-700">Langkah</span>
+              </div>
+            </div>
+
+            <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3">
+              <div className="text-[11px] font-bold text-amber-800 uppercase">ATP Belum Dipetakan</div>
+              <div className="text-lg font-extrabold text-amber-900 mt-0.5">
+                {analysisResult.summary.unmappedAtp} <span className="text-xs font-normal text-amber-700">Langkah</span>
+              </div>
+            </div>
+
+            <div className="bg-rose-50/80 border border-rose-200 rounded-xl p-3">
+              <div className="text-[11px] font-bold text-rose-800 uppercase">Perlu Ditinjau</div>
+              <div className="text-lg font-extrabold text-rose-900 mt-0.5">
+                {analysisResult.summary.reviewAtp} <span className="text-xs font-normal text-rose-700">Langkah</span>
+              </div>
+            </div>
+
+            <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3">
+              <div className="text-[11px] font-bold text-blue-800 uppercase">Saran Lingkup Materi</div>
+              <div className="text-lg font-extrabold text-blue-900 mt-0.5">
+                {analysisResult.summary.missingMaterialSuggestions} <span className="text-xs font-normal text-blue-700">Saran</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Findings Detail List */}
+          <div className="space-y-4 pt-1">
+            {/* 1. Unmapped ATP Findings with Suggestions */}
+            {analysisResult.atpFindings.filter((f) => f.status === 'UNMAPPED').length > 0 && (
+              <div className="space-y-2.5">
+                <h5 className="text-xs font-bold text-amber-950 uppercase tracking-wider flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-amber-700" />
+                  <span>Saran Pemetaan Langkah ATP yang Belum Terpetakan</span>
+                </h5>
+
+                <div className="space-y-2">
+                  {analysisResult.atpFindings
+                    .filter((f) => f.status === 'UNMAPPED')
+                    .map((finding) => {
+                      const atpItem = atpItemMap.get(finding.atpItemId);
+                      const targetUnit = units.find((u) => u.id === finding.suggestedUnitId);
+                      const isSelected = selectedAnalysisActionIds.has(finding.id);
+
+                      return (
+                        <div
+                          key={finding.id}
+                          className={`p-3.5 rounded-xl border transition flex flex-col md:flex-row md:items-center justify-between gap-3 ${
+                            isSelected
+                              ? 'bg-amber-50/90 border-amber-400 ring-1 ring-amber-300'
+                              : 'bg-white border-slate-200 hover:border-amber-200'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3 flex-1">
+                            {finding.action && (
+                              <input
+                                id={`check-${finding.id}`}
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleToggleAction(finding.id)}
+                                className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 mt-1 cursor-pointer"
+                              />
+                            )}
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="px-2 py-0.5 rounded-md bg-amber-800 text-white font-bold text-xs">
+                                  Langkah {atpItem?.stepNumber || '?'}
+                                </span>
+                                {atpItem?.focus && (
+                                  <span className="font-semibold text-xs text-slate-800">
+                                    {atpItem.focus}
+                                  </span>
+                                )}
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                                  Kekuatan: {finding.strength === 'STRONG' ? 'Kuat' : finding.strength === 'LOW' ? 'Rendah' : 'Sedang'}
+                                </span>
+                              </div>
+
+                              <p className="text-xs text-slate-600 leading-relaxed">
+                                {finding.reason}
+                              </p>
+
+                              {targetUnit && (
+                                <div className="text-xs font-bold text-indigo-900 bg-indigo-50/80 px-2.5 py-1 rounded-lg inline-block border border-indigo-200">
+                                  Saran Bab: Bab {targetUnit.order}: {targetUnit.title}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {finding.action && (
+                            <label
+                              htmlFor={`check-${finding.id}`}
+                              className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl border border-indigo-200 shrink-0 cursor-pointer text-center"
+                            >
+                              {isSelected ? '✓ Terpilih' : 'Terapkan saran ini'}
+                            </label>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {/* 2. Review ATP Findings */}
+            {analysisResult.atpFindings.filter((f) => f.status === 'REVIEW').length > 0 && (
+              <div className="space-y-2.5">
+                <h5 className="text-xs font-bold text-rose-950 uppercase tracking-wider flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-rose-700" />
+                  <span>Langkah ATP yang Perlu Ditinjau Guru</span>
+                </h5>
+
+                <div className="space-y-2">
+                  {analysisResult.atpFindings
+                    .filter((f) => f.status === 'REVIEW')
+                    .map((finding) => {
+                      const atpItem = atpItemMap.get(finding.atpItemId);
+                      const currentUnit = units.find((u) => u.id === finding.currentUnitId);
+
+                      return (
+                        <div
+                          key={finding.id}
+                          className="p-3.5 rounded-xl bg-rose-50/50 border border-rose-200 flex flex-col md:flex-row md:items-center justify-between gap-3"
+                        >
+                          <div className="space-y-1 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="px-2 py-0.5 rounded-md bg-rose-800 text-white font-bold text-xs">
+                                Langkah {atpItem?.stepNumber || '?'}
+                              </span>
+                              {currentUnit && (
+                                <span className="text-xs text-slate-600 font-semibold">
+                                  (Saat ini di Bab {currentUnit.order}: {currentUnit.title})
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-rose-900 leading-relaxed">
+                              {finding.reason}
+                            </p>
+                          </div>
+                          <span className="text-[11px] font-bold text-rose-700 bg-rose-100 px-2.5 py-1 rounded-lg border border-rose-300 shrink-0">
+                            Perlu ditinjau manual
+                          </span>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {/* 3. Missing Material Findings */}
+            {analysisResult.materialFindings.filter((m) => m.status === 'MISSING_MATERIAL').length > 0 && (
+              <div className="space-y-2.5">
+                <h5 className="text-xs font-bold text-blue-950 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-blue-700" />
+                  <span>Saran Penambahan Lingkup Materi</span>
+                </h5>
+
+                <div className="space-y-2">
+                  {analysisResult.materialFindings
+                    .filter((m) => m.status === 'MISSING_MATERIAL')
+                    .map((finding) => {
+                      const targetUnit = units.find((u) => u.id === finding.unitId);
+                      const isSelected = selectedAnalysisActionIds.has(finding.id);
+
+                      return (
+                        <div
+                          key={finding.id}
+                          className={`p-3.5 rounded-xl border transition flex flex-col md:flex-row md:items-center justify-between gap-3 ${
+                            isSelected
+                              ? 'bg-blue-50/90 border-blue-400 ring-1 ring-blue-300'
+                              : 'bg-white border-slate-200 hover:border-blue-200'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3 flex-1">
+                            {finding.action && (
+                              <input
+                                id={`check-${finding.id}`}
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleToggleAction(finding.id)}
+                                className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 mt-1 cursor-pointer"
+                              />
+                            )}
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2">
+                                <span className="px-2 py-0.5 rounded-md bg-blue-800 text-white font-bold text-xs">
+                                  + {finding.suggestedTitle || finding.action?.title}
+                                </span>
+                                {targetUnit && (
+                                  <span className="text-xs text-slate-700 font-semibold">
+                                    untuk Bab {targetUnit.order}: {targetUnit.title}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-600 leading-relaxed">
+                                {finding.reason}
+                              </p>
+                            </div>
+                          </div>
+
+                          {finding.action && (
+                            <label
+                              htmlFor={`check-${finding.id}`}
+                              className="text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-xl border border-blue-200 shrink-0 cursor-pointer text-center"
+                            >
+                              {isSelected ? '✓ Terpilih' : 'Tambahkan materi ini'}
+                            </label>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {/* 4. Aligned ATP List (Collapsed overview) */}
+            {analysisResult.atpFindings.filter((f) => f.status === 'ALIGNED').length > 0 && (
+              <details className="bg-slate-50/70 p-3 rounded-xl border border-slate-200 text-xs text-slate-700 space-y-2">
+                <summary className="font-bold text-emerald-800 cursor-pointer hover:underline">
+                  Lihat {analysisResult.summary.alignedAtp} Langkah ATP yang Sudah Selaras
+                </summary>
+                <div className="space-y-1.5 pt-2">
+                  {analysisResult.atpFindings
+                    .filter((f) => f.status === 'ALIGNED')
+                    .map((finding) => {
+                      const atpItem = atpItemMap.get(finding.atpItemId);
+                      const unit = units.find((u) => u.id === finding.currentUnitId);
+                      return (
+                        <div key={finding.id} className="flex items-center justify-between text-xs py-1 border-b border-slate-200/60 last:border-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900">Langkah {atpItem?.stepNumber || '?'}:</span>
+                            <span>{atpItem?.focus || 'Fokus ATP'}</span>
+                          </div>
+                          {unit && (
+                            <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                              Bab {unit.order}: {unit.title}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </details>
+            )}
+          </div>
+
+          {/* Action Footer inside Panel */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-indigo-100">
+            <div className="text-xs text-slate-500">
+              Terpilih: <strong className="text-slate-800">{selectedAnalysisActionIds.size}</strong> saran untuk diterapkan.
+            </div>
+
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <button
+                type="button"
+                onClick={() => setAnalysisResult(null)}
+                className="w-full sm:w-auto px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 border border-slate-200 transition cursor-pointer"
+              >
+                Tutup Hasil
+              </button>
+
+              <button
+                id="btn-apply-analysis-actions"
+                type="button"
+                onClick={handleApplySelectedActions}
+                disabled={selectedAnalysisActionIds.size === 0}
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-5 py-2 rounded-xl text-xs font-bold text-white bg-indigo-800 hover:bg-indigo-900 disabled:bg-slate-200 disabled:text-slate-400 transition cursor-pointer shadow-xs disabled:cursor-not-allowed"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Terapkan Pilihan ({selectedAnalysisActionIds.size})</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Overview Stat Bar */}
       <div className="flex items-center justify-between text-xs text-slate-500 px-1">

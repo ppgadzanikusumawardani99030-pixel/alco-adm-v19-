@@ -21,6 +21,11 @@ import {
   fallbackGenerateCanonicalATPUnitMapping,
   enforceCanonicalMappingInvariants,
 } from './server/curriculumFallback';
+import {
+  buildMappingAnalysisPrompt,
+  sanitizeMappingAnalysisResult,
+  fallbackAnalyzeMapping,
+} from './server/mappingAnalysis';
 import { validateGraduateProfileDimensions } from './src/constants/graduateProfileDimensions';
 
 dotenv.config();
@@ -1770,6 +1775,79 @@ Kembalikan respon JSON dengan skema:
     targetMaterialCountPerUnit,
   });
 
+  return res.json({
+    success: true,
+    data: fallbackResult,
+    engine: 'pedagogical_engine',
+  });
+});
+
+// Endpoint: AI Analyze ATP Unit Mapping (Read-Only Analysis)
+app.post('/api/ai/analyze-atp-unit-mapping', async (req, res) => {
+  const { subject, grade, phase, tpData, atpData, currentMapping } = req.body || {};
+
+  if (!tpData || !Array.isArray(tpData.items) || tpData.items.length === 0) {
+    return res.status(400).json({ error: 'Data TP canonical diperlukan untuk analisis pemetaan.' });
+  }
+
+  if (!atpData || !Array.isArray(atpData.items) || atpData.items.length === 0) {
+    return res.status(400).json({ error: 'Data ATP canonical diperlukan untuk analisis pemetaan.' });
+  }
+
+  if (!currentMapping || !Array.isArray(currentMapping.units) || currentMapping.units.length === 0) {
+    return res.status(400).json({ error: 'Data draft Bab / Unit diperlukan untuk analisis pemetaan.' });
+  }
+
+  const serverParams = {
+    subject,
+    grade,
+    phase,
+    tpData,
+    atpData,
+    currentMapping,
+  };
+
+  const apiKey = resolveApiKey(req);
+  if (apiKey) {
+    try {
+      const ai = createAIClient(apiKey);
+      const prompt = buildMappingAnalysisPrompt(serverParams);
+
+      const response = await generateContentWithRetry(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          temperature: 0.2,
+        },
+      });
+
+      if (response && response.text) {
+        let parsed: any;
+        try {
+          parsed = JSON.parse(response.text);
+        } catch {
+          const jsonMatch = response.text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+          if (jsonMatch && jsonMatch[1]) {
+            parsed = JSON.parse(jsonMatch[1]);
+          }
+        }
+
+        if (parsed && (Array.isArray(parsed.atpFindings) || Array.isArray(parsed.materialFindings))) {
+          const sanitized = sanitizeMappingAnalysisResult(parsed, serverParams);
+          return res.json({
+            success: true,
+            data: sanitized,
+            engine: 'gemini_ai',
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn('[AI Mapping Analysis] AI call failed, falling back to deterministic analyzer:', err?.message || err);
+    }
+  }
+
+  // Fallback deterministic analysis
+  const fallbackResult = fallbackAnalyzeMapping(serverParams);
   return res.json({
     success: true,
     data: fallbackResult,
