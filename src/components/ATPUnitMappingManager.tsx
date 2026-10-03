@@ -31,7 +31,7 @@ export interface ATPUnitMappingManagerProps {
   tp: TPData;
   mapping?: ATPUnitMappingData;
   academicSetting?: AcademicSetting;
-  onSaveMapping: (updatedMapping: ATPUnitMappingData) => void;
+  onSaveMapping: (updatedMapping: ATPUnitMappingData) => boolean;
   onNextStep: () => void;
   onBackToATP: () => void;
 }
@@ -142,14 +142,16 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   );
   const [hasChanges, setHasChanges] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
+  const [saveErrorNotice, setSaveErrorNotice] = useState<string | null>(null);
 
   // Sync state if canonical mapping prop updates
   useEffect(() => {
     if (mapping && Array.isArray(mapping.units) && mapping.units.length > 0) {
-      setUnits(createInitialUnits(mapping, atp.items || []));
-      setHasChanges(false);
+      if (!hasChanges) {
+        setUnits(createInitialUnits(mapping, atp.items || []));
+      }
     }
-  }, [mapping]);
+  }, [mapping, hasChanges, atp.items]);
 
   // Sorted canonical ATP items by stepNumber
   const sortedAtpItems = useMemo(() => {
@@ -197,6 +199,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     );
     setHasChanges(true);
     setSaveSuccessNotice(false);
+    setSaveErrorNotice(null);
   };
 
   const handleAddEmptyBab = () => {
@@ -212,6 +215,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setUnits((prev) => [...prev, newUnit]);
     setHasChanges(true);
     setSaveSuccessNotice(false);
+    setSaveErrorNotice(null);
   };
 
   const handleRemoveBab = (unitId: string) => {
@@ -221,6 +225,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     });
     setHasChanges(true);
     setSaveSuccessNotice(false);
+    setSaveErrorNotice(null);
   };
 
   const handleTargetCountChange = (newCount: number) => {
@@ -241,6 +246,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       }
       setUnits((prev) => [...prev, ...additions]);
       setHasChanges(true);
+      setSaveSuccessNotice(false);
+      setSaveErrorNotice(null);
     } else if (clamped < units.length) {
       const removableCount = units.length - clamped;
       let removed = 0;
@@ -254,6 +261,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       if (removed > 0) {
         setUnits(nextUnits.map((u, idx) => ({ ...u, order: idx + 1 })));
         setHasChanges(true);
+        setSaveSuccessNotice(false);
+        setSaveErrorNotice(null);
       }
     }
   };
@@ -279,6 +288,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     });
     setHasChanges(true);
     setSaveSuccessNotice(false);
+    setSaveErrorNotice(null);
   };
 
   // Handlers for Lingkup Materi (Materials)
@@ -302,6 +312,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     );
     setHasChanges(true);
     setSaveSuccessNotice(false);
+    setSaveErrorNotice(null);
   };
 
   const handleMaterialTitleChange = (unitId: string, materialId: string, title: string) => {
@@ -319,6 +330,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     );
     setHasChanges(true);
     setSaveSuccessNotice(false);
+    setSaveErrorNotice(null);
   };
 
   const handleRemoveMaterial = (unitId: string, materialId: string) => {
@@ -338,6 +350,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     );
     setHasChanges(true);
     setSaveSuccessNotice(false);
+    setSaveErrorNotice(null);
   };
 
   const handleMoveMaterial = (unitId: string, materialIndex: number, direction: 'up' | 'down') => {
@@ -360,41 +373,65 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     );
     setHasChanges(true);
     setSaveSuccessNotice(false);
+    setSaveErrorNotice(null);
   };
 
   // Save Mapping Canonical
-  const handleSave = () => {
+  const handleSave = (): boolean => {
+    const finalUnits: ATPUnitMapping[] = units.map((u, idx) => {
+      const uId = u.id && u.id.trim() ? u.id.trim() : `unit-${Date.now()}-${idx + 1}`;
+      const uTitle = u.title !== undefined ? u.title : `Bab ${idx + 1}`;
+      const linkedAtpItemIds = Array.isArray(u.linkedAtpItemIds) ? [...u.linkedAtpItemIds] : [];
+      const linkedTpIds = deriveUnitLinkedTpIds(linkedAtpItemIds, atp.items || []);
+      const materials: ATPUnitMaterial[] = (u.materials || []).map((m, mIdx) => ({
+        id: m.id && m.id.trim() ? m.id.trim() : `mat-${Date.now()}-${mIdx + 1}`,
+        title: m.title !== undefined ? m.title : '',
+        order: mIdx + 1,
+        linkedTpIds: Array.isArray(m.linkedTpIds) ? [...m.linkedTpIds] : [],
+        linkedAtpItemIds: Array.isArray(m.linkedAtpItemIds) ? [...m.linkedAtpItemIds] : [],
+      }));
+
+      return {
+        id: uId,
+        title: uTitle,
+        order: idx + 1,
+        linkedAtpItemIds,
+        linkedTpIds,
+        materials,
+      };
+    });
+
     const result: ATPUnitMappingData = {
-      id: mapping?.id && mapping.id.trim() ? mapping.id : `atp-mapping-${Date.now()}`,
+      id: mapping?.id && mapping.id.trim() ? mapping.id.trim() : (atp.id ? `mapping-${atp.id}` : `atp-mapping-${Date.now()}`),
       academicSettingId: academicSetting?.id || atp.academicSettingId || '',
       atpId: atp.id,
-      tpDataId: tp.id || atp.tpDataId,
-      units: units.map((u, idx) => ({
-        ...u,
-        order: idx + 1,
-        linkedAtpItemIds: u.linkedAtpItemIds || [],
-        linkedTpIds: deriveUnitLinkedTpIds(u.linkedAtpItemIds || [], atp.items || []),
-        materials: (u.materials || []).map((m, mIdx) => ({
-          ...m,
-          order: mIdx + 1,
-          linkedTpIds: m.linkedTpIds || [],
-          linkedAtpItemIds: m.linkedAtpItemIds || [],
-        })),
-      })),
+      tpDataId: tp.id || atp.tpDataId || '',
+      units: finalUnits,
       basedOnTpUpdatedAt: tp.updatedAt || atp.basedOnTpUpdatedAt,
       basedOnAtpUpdatedAt: atp.updatedAt,
       updatedAt: new Date().toISOString(),
     };
 
-    onSaveMapping(result);
-    setHasChanges(false);
-    setSaveSuccessNotice(true);
-    setTimeout(() => setSaveSuccessNotice(false), 3500);
+    const saved = onSaveMapping(result);
+    if (saved) {
+      setHasChanges(false);
+      setSaveSuccessNotice(true);
+      setSaveErrorNotice(null);
+      setTimeout(() => setSaveSuccessNotice(false), 3500);
+      return true;
+    } else {
+      setSaveSuccessNotice(false);
+      setSaveErrorNotice(
+        'Pemetaan belum tersimpan. Periksa pesan kesalahan di atas lalu coba Simpan kembali.'
+      );
+      return false;
+    }
   };
 
   const handleProceedNext = () => {
     if (hasChanges) {
-      handleSave();
+      const saved = handleSave();
+      if (!saved) return;
     }
     onNextStep();
   };
@@ -434,6 +471,22 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         </div>
 
         {/* Status Alerts */}
+        {saveErrorNotice && (
+          <div className="mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{saveErrorNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setSaveErrorNotice(null)}
+              className="text-xs font-bold text-rose-600 hover:underline cursor-pointer"
+            >
+              Tutup
+            </button>
+          </div>
+        )}
+
         {saveSuccessNotice && (
           <div className="mt-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2 animate-fadeIn">
             <Check className="w-4 h-4 text-emerald-600" />
@@ -441,7 +494,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
           </div>
         )}
 
-        {hasChanges && !saveSuccessNotice && (
+        {hasChanges && !saveSuccessNotice && !saveErrorNotice && (
           <div className="mt-3 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
             <span>Terdapat perubahan Unit/Bab atau Lingkup Materi yang belum disimpan. Klik "Simpan Pemetaan" atau lanjutkan untuk menyimpan.</span>

@@ -805,23 +805,26 @@ export function App() {
     }
   };
 
-  const handleSaveATPUnitMapping = (mapping: ATPUnitMappingData) => {
+  const handleSaveATPUnitMapping = (mapping: ATPUnitMappingData): boolean => {
     if (!activeYearPlan) {
       setAppNotice({
         type: 'error',
         message: 'Tidak ada Tahun Ajaran (YearPlan) aktif untuk menyimpan Pemetaan Bab & Lingkup Materi.',
       });
-      return;
+      return false;
     }
 
     try {
       saveATPUnitMappingV5(activeYearPlan.id, mapping);
       refreshV5();
+      return true;
     } catch (err: any) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       setAppNotice({
         type: 'error',
-        message: err instanceof Error ? err.message : 'Gagal menyimpan Pemetaan Bab & Lingkup Materi ke penyimpanan tahunan.',
+        message: `Gagal menyimpan Pemetaan Bab & Lingkup Materi: ${errMsg}`,
       });
+      return false;
     }
   };
 
