@@ -178,6 +178,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   const [hasChanges, setHasChanges] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
   const [saveErrorNotice, setSaveErrorNotice] = useState<string | null>(null);
+  const [localValidationNotice, setLocalValidationNotice] = useState<string | null>(null);
 
   // Sync state if canonical mapping prop updates
   useEffect(() => {
@@ -187,6 +188,106 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       }
     }
   }, [mapping, hasChanges, atp.items]);
+
+  // Canonical mapping existence and unsaved draft checks
+  const hasCanonicalMapping = Boolean(
+    mapping && Array.isArray(mapping.units) && mapping.units.length > 0
+  );
+
+  const hasMeaningfulUnsavedDraft =
+    !hasCanonicalMapping &&
+    units.some(
+      (unit) =>
+        (unit.linkedAtpItemIds && unit.linkedAtpItemIds.length > 0) ||
+        (unit.materials && unit.materials.some((mat) => mat.title && mat.title.trim().length > 0))
+    );
+
+  const canSave = hasChanges || hasMeaningfulUnsavedDraft;
+
+  // Local structural validator (deterministic check)
+  const localValidation = useMemo(() => {
+    const validAtpIds = new Set((atp.items || []).map((i) => i.id));
+    const issues: string[] = [];
+
+    let emptyTitleCount = 0;
+    let missingMaterialsCount = 0;
+    let invalidAtpRefCount = 0;
+    let duplicateAtpCount = 0;
+    const seenAtpInUnits = new Set<string>();
+
+    if (units.length === 0) {
+      issues.push('Belum ada Bab yang dibuat.');
+    } else {
+      units.forEach((u) => {
+        if (!u.title || !u.title.trim()) {
+          emptyTitleCount++;
+        }
+
+        if (!Array.isArray(u.materials) || u.materials.length === 0) {
+          missingMaterialsCount++;
+        } else {
+          const hasInvalidMat = u.materials.some((m) => !m.title || !m.title.trim());
+          if (hasInvalidMat) {
+            missingMaterialsCount++;
+          }
+          u.materials.forEach((mat) => {
+            if (Array.isArray(mat.linkedAtpItemIds)) {
+              mat.linkedAtpItemIds.forEach((matAtpId) => {
+                if (matAtpId && !validAtpIds.has(matAtpId)) {
+                  invalidAtpRefCount++;
+                }
+              });
+            }
+          });
+        }
+
+        if (Array.isArray(u.linkedAtpItemIds)) {
+          u.linkedAtpItemIds.forEach((id) => {
+            if (!id || !validAtpIds.has(id)) {
+              invalidAtpRefCount++;
+            } else {
+              if (seenAtpInUnits.has(id)) {
+                duplicateAtpCount++;
+              }
+              seenAtpInUnits.add(id);
+            }
+          });
+        }
+      });
+
+      let unmappedCount = 0;
+      validAtpIds.forEach((id) => {
+        if (!seenAtpInUnits.has(id)) {
+          unmappedCount++;
+        }
+      });
+
+      if (emptyTitleCount > 0) {
+        issues.push(`${emptyTitleCount} Bab belum memiliki judul.`);
+      }
+      if (missingMaterialsCount > 0) {
+        issues.push(`${missingMaterialsCount} Bab belum memiliki Lingkup Materi yang valid.`);
+      }
+      if (invalidAtpRefCount > 0) {
+        issues.push(`${invalidAtpRefCount} referensi ID ATP tidak valid.`);
+      }
+      if (duplicateAtpCount > 0) {
+        issues.push(`${duplicateAtpCount} langkah ATP terduplikasi di lebih dari satu Bab.`);
+      }
+      if (unmappedCount > 0) {
+        issues.push(`${unmappedCount} langkah ATP belum dipetakan ke Bab.`);
+      }
+    }
+
+    const isComplete = issues.length === 0 && (atp.items || []).length > 0;
+    return {
+      isComplete,
+      issues,
+      summaryMessage: isComplete
+        ? 'Pemetaan Bab dan Lingkup Materi lengkap.'
+        : `Belum lengkap: ${issues.join(' ')}`,
+    };
+  }, [units, atp.items]);
 
   // Sorted canonical ATP items by stepNumber
   const sortedAtpItems = useMemo(() => {
@@ -452,6 +553,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       setHasChanges(false);
       setSaveSuccessNotice(true);
       setSaveErrorNotice(null);
+      setLocalValidationNotice(null);
       setTimeout(() => setSaveSuccessNotice(false), 3500);
       return true;
     } else {
@@ -464,12 +566,55 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   };
 
   const handleProceedNext = () => {
-    if (hasChanges) {
+    setLocalValidationNotice(null);
+
+    // If there are changes or an unsaved meaningful draft, save first
+    if (canSave) {
       const saved = handleSave();
       if (!saved) return;
     }
+
+    // Strict check: proceed only if structurally complete
+    if (!localValidation.isComplete) {
+      setLocalValidationNotice(
+        `Tidak dapat melanjutkan ke Rencana Tahunan: ${localValidation.summaryMessage}`
+      );
+      return;
+    }
+
     onNextStep();
   };
+
+  // Button state logic for 4 conditions
+  let saveButtonText = 'Simpan Pemetaan';
+  let isSaveButtonDisabled = true;
+  let saveButtonClass = 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed';
+
+  if (hasCanonicalMapping) {
+    if (hasChanges) {
+      // Condition B: mapping ADA + hasChanges
+      saveButtonText = 'Simpan Perubahan';
+      isSaveButtonDisabled = false;
+      saveButtonClass = 'text-white bg-blue-800 hover:bg-blue-900 ring-2 ring-blue-500/20 cursor-pointer shadow-xs';
+    } else {
+      // Condition A: mapping ADA + !hasChanges
+      saveButtonText = '✓ Tersimpan';
+      isSaveButtonDisabled = true;
+      saveButtonClass = 'text-emerald-700 bg-emerald-50 border border-emerald-200 cursor-default opacity-90';
+    }
+  } else {
+    if (hasMeaningfulUnsavedDraft || hasChanges) {
+      // Condition C: mapping BELUM ADA + hasMeaningfulUnsavedDraft
+      saveButtonText = 'Simpan Pemetaan';
+      isSaveButtonDisabled = false;
+      saveButtonClass = 'text-white bg-blue-800 hover:bg-blue-900 ring-2 ring-blue-500/20 cursor-pointer shadow-xs';
+    } else {
+      // Condition D: mapping BELUM ADA + !hasChanges + !hasMeaningfulUnsavedDraft
+      saveButtonText = 'Simpan Pemetaan';
+      isSaveButtonDisabled = true;
+      saveButtonClass = 'bg-slate-100 text-slate-400 border border-slate-200 cursor-not-allowed';
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -496,28 +641,36 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
               id="btn-save-mapping"
               type="button"
               onClick={handleSave}
-              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer shadow-xs ${
-                hasChanges
-                  ? 'text-white bg-blue-800 hover:bg-blue-900 ring-2 ring-blue-500/20'
-                  : 'text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200'
-              }`}
+              disabled={isSaveButtonDisabled}
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition shadow-xs ${saveButtonClass}`}
             >
-              {hasChanges ? (
-                <>
-                  <Save className="w-3.5 h-3.5" />
-                  <span>Simpan Pemetaan</span>
-                </>
+              {hasCanonicalMapping && !hasChanges ? (
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
               ) : (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Pemetaan Tersimpan</span>
-                </>
+                <Save className="w-3.5 h-3.5" />
               )}
+              <span>{saveButtonText}</span>
             </button>
           </div>
         </div>
 
         {/* Status Alerts */}
+        {localValidationNotice && (
+          <div className="mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{localValidationNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLocalValidationNotice(null)}
+              className="text-xs font-bold text-rose-600 hover:underline cursor-pointer"
+            >
+              Tutup
+            </button>
+          </div>
+        )}
+
         {saveErrorNotice && (
           <div className="mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn">
             <div className="flex items-center gap-2">
@@ -541,10 +694,25 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
           </div>
         )}
 
-        {hasChanges && !saveSuccessNotice && !saveErrorNotice && (
-          <div className="mt-3 p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-medium flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-            <span>Terdapat perubahan Unit/Bab atau Lingkup Materi yang belum disimpan. Klik "Simpan Pemetaan" atau lanjutkan untuk menyimpan.</span>
+        {/* Structural Status Summary Banner */}
+        <div className="mt-3">
+          {localValidation.isComplete ? (
+            <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Pemetaan Bab dan Lingkup Materi lengkap.</span>
+            </div>
+          ) : (
+            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium flex items-center gap-2">
+              <Info className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>{localValidation.summaryMessage}</span>
+            </div>
+          )}
+        </div>
+
+        {hasChanges && !saveSuccessNotice && !saveErrorNotice && !localValidationNotice && (
+          <div className="mt-3 p-2.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs font-medium flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-blue-600 shrink-0" />
+            <span>Terdapat perubahan Unit/Bab atau Lingkup Materi yang belum disimpan. Klik "{saveButtonText}" atau lanjutkan untuk menyimpan.</span>
           </div>
         )}
       </div>

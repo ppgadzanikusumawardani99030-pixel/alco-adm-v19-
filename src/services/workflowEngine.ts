@@ -641,37 +641,118 @@ export function validateWorkflowDependencies(
     };
 
     // 5b. Pemetaan Unit/Bab step state (Canonical ATPUnitMappingData authority)
+    const validAtpIds = new Set((atpItems || []).map((i) => i.id));
     const mappingUnits = atpUnitMapping?.units || [];
+    const hasCanonicalMapping = Boolean(atpUnitMapping && Array.isArray(atpUnitMapping.units));
     const hasUnits = mappingUnits.length > 0;
-    const allUnitsHaveTitle = hasUnits && mappingUnits.every((u) => u.title && u.title.trim().length > 0);
-    // Lingkup Materi kosong tidak dianggap selesai: each unit must have materials and each material must have non-empty title
-    const allUnitsHaveMaterials =
-      hasUnits &&
-      mappingUnits.every(
-        (u) =>
-          Array.isArray(u.materials) &&
-          u.materials.length > 0 &&
-          u.materials.every((m) => m.title && m.title.trim().length > 0)
-      );
 
-    // Check all ATP items assigned to at least one unit
-    const assignedAtpIds = new Set<string>();
-    mappingUnits.forEach((u) => {
-      (u.linkedAtpItemIds || []).forEach((id) => assignedAtpIds.add(id));
-    });
-    const allAtpItemsAssigned = atpItems.length > 0 && atpItems.every((it) => assignedAtpIds.has(it.id));
+    let hasEmptyBabTitle = false;
+    let hasInvalidMaterials = false;
+    let hasInvalidAtpRef = false;
+    let hasDuplicateAtpAssignment = false;
+    let hasUnmappedAtp = false;
 
-    const isMappingComplete =
-      isATPComplete &&
+    if (!hasCanonicalMapping || !hasUnits) {
+      // Incomplete by default
+    } else {
+      const seenAtpInUnits = new Set<string>();
+
+      for (const unit of mappingUnits) {
+        if (!unit.id?.trim() || !unit.title?.trim()) {
+          hasEmptyBabTitle = true;
+        }
+
+        if (!Array.isArray(unit.materials) || unit.materials.length === 0) {
+          hasInvalidMaterials = true;
+        } else {
+          for (const mat of unit.materials) {
+            if (!mat.id?.trim() || !mat.title?.trim()) {
+              hasInvalidMaterials = true;
+            }
+            if (Array.isArray(mat.linkedAtpItemIds)) {
+              for (const matAtpId of mat.linkedAtpItemIds) {
+                if (matAtpId && !validAtpIds.has(matAtpId)) {
+                  hasInvalidAtpRef = true;
+                }
+              }
+            }
+          }
+        }
+
+        if (Array.isArray(unit.linkedAtpItemIds)) {
+          for (const atpId of unit.linkedAtpItemIds) {
+            if (!atpId || !validAtpIds.has(atpId)) {
+              hasInvalidAtpRef = true;
+            } else {
+              if (seenAtpInUnits.has(atpId)) {
+                hasDuplicateAtpAssignment = true;
+              }
+              seenAtpInUnits.add(atpId);
+            }
+          }
+        }
+      }
+
+      for (const validId of validAtpIds) {
+        if (!seenAtpInUnits.has(validId)) {
+          hasUnmappedAtp = true;
+        }
+      }
+    }
+
+    const isMappingStructurallyComplete =
+      hasCanonicalMapping &&
       hasUnits &&
-      allUnitsHaveTitle &&
-      allUnitsHaveMaterials &&
-      allAtpItemsAssigned;
+      !hasEmptyBabTitle &&
+      !hasInvalidMaterials &&
+      !hasInvalidAtpRef &&
+      !hasDuplicateAtpAssignment &&
+      !hasUnmappedAtp;
+
+    const isMappingComplete = isATPComplete && isMappingStructurallyComplete;
 
     const isMappingStale =
       isATPComplete &&
       (isUpstreamStale(atp?.updatedAt, atpUnitMapping?.basedOnAtpUpdatedAt) ||
         isUpstreamStale(tp?.updatedAt, atpUnitMapping?.basedOnTpUpdatedAt));
+
+    // Priority Reason determination
+    let mappingReason: string | undefined = undefined;
+    if (!isATPComplete) {
+      mappingReason = 'Memerlukan penyusunan Alur Tujuan Pembelajaran (ATP) terlebih dahulu';
+    } else if (isMappingStale) {
+      mappingReason = 'Alur ATP telah diperbarui, pemetaan Unit/Bab perlu diselaraskan';
+    } else if (!hasCanonicalMapping || !hasUnits) {
+      mappingReason = 'Memerlukan pemetaan ATP ke Unit / Bab & Lingkup Materi';
+    } else if (hasEmptyBabTitle) {
+      mappingReason = 'Masih ada Bab tanpa judul';
+    } else if (hasInvalidMaterials) {
+      mappingReason = 'Masih ada Bab tanpa Lingkup Materi yang valid';
+    } else if (hasInvalidAtpRef) {
+      mappingReason = 'Pemetaan memiliki referensi ATP yang tidak valid';
+    } else if (hasDuplicateAtpAssignment) {
+      mappingReason = 'Satu atau lebih langkah ATP dipetakan ke lebih dari satu Bab';
+    } else if (hasUnmappedAtp) {
+      mappingReason = 'Masih ada langkah ATP yang belum dipetakan ke Bab';
+    }
+
+    if (hasInvalidAtpRef) {
+      issues.push({
+        severity: 'ERROR',
+        module: 'atp-mapping',
+        code: 'INVALID_ATP_REFERENCE_IN_MAPPING',
+        message: 'Pemetaan memiliki referensi ATP yang tidak valid.',
+      });
+    }
+
+    if (hasDuplicateAtpAssignment) {
+      issues.push({
+        severity: 'WARNING',
+        module: 'atp-mapping',
+        code: 'DUPLICATE_ATP_IN_MAPPING',
+        message: 'Satu atau lebih langkah ATP dipetakan ke lebih dari satu Bab.',
+      });
+    }
 
     stepStates['atp-mapping'] = {
       id: 'atp-mapping',
@@ -683,21 +764,13 @@ export function validateWorkflowDependencies(
         ? 'STALE'
         : isMappingComplete
         ? 'COMPLETE'
-        : hasUnits
+        : (hasUnits || hasCanonicalMapping)
         ? 'IN_PROGRESS'
         : 'READY',
       isBlocked: !isATPComplete,
       isComplete: isMappingComplete,
       isStale: isMappingStale,
-      reason: !isATPComplete
-        ? 'Memerlukan penyusunan Alur Tujuan Pembelajaran (ATP) terlebih dahulu'
-        : isMappingStale
-        ? 'Alur ATP telah diperbarui, pemetaan Unit/Bab perlu diselaraskan'
-        : !allUnitsHaveMaterials
-        ? 'Setiap Unit/Bab harus memiliki minimal satu Lingkup Materi yang terisi'
-        : !allAtpItemsAssigned
-        ? 'Belum semua langkah ATP dipetakan ke dalam Unit/Bab'
-        : undefined,
+      reason: mappingReason,
       missingDependencies: !isATPComplete ? ['Alur Tujuan Pembelajaran (ATP)'] : undefined,
     };
 
