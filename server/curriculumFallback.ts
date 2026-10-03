@@ -147,6 +147,182 @@ export interface FallbackGenerateTPParams {
   count?: number;
 }
 
+/**
+ * Helper to split a clear comma-separated enumeration list.
+ * Conservative: avoids splitting explanatory phrases like ", yaitu" or plain sentences.
+ */
+function splitCommaList(text: string): string[] | null {
+  if (!text || !text.includes(',')) {
+    return null;
+  }
+
+  // Safety check: Don't split if comma is followed by explanatory appositions
+  if (/,\s*(?:yaitu|yakni|seperti|contohnya|misalnya)\b/i.test(text)) {
+    return null;
+  }
+
+  let normalized = text.trim();
+
+  // Normalize trailing conjunction in comma series:
+  // e.g. "A, B, dan C" -> "A, B, C"
+  // e.g. "A, B dan C"  -> "A, B, C"
+  const trailingConjunctionRegex = /,\s*(?:dan|serta|atau)\s+/i;
+  const noCommaConjunctionRegex = /\s+(?:dan|serta|atau)\s+/i;
+
+  if (trailingConjunctionRegex.test(normalized)) {
+    normalized = normalized.replace(trailingConjunctionRegex, ', ');
+  } else if (noCommaConjunctionRegex.test(normalized)) {
+    // Only replace " dan " if there was already a comma earlier in the string
+    const lastDanIdx = normalized.search(noCommaConjunctionRegex);
+    const firstCommaIdx = normalized.indexOf(',');
+    if (firstCommaIdx !== -1 && firstCommaIdx < lastDanIdx) {
+      normalized = normalized.slice(0, lastDanIdx) + ', ' + normalized.slice(lastDanIdx).replace(noCommaConjunctionRegex, '');
+    }
+  }
+
+  const rawParts = normalized
+    .split(/,\s+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length > 1);
+
+  if (rawParts.length < 2) {
+    return null;
+  }
+
+  // If any part is an excessively long clause (> 80 chars), it's likely a sentence pause rather than a topic list
+  if (rawParts.some((p) => p.length > 80)) {
+    return null;
+  }
+
+  return rawParts;
+}
+
+/**
+ * Distribute shared contextual modifier (tail or prefix) across coordinated list items.
+ * Example: ["Penjumlahan", "pengurangan", "perkalian", "pembagian pecahan"]
+ * -> ["Penjumlahan pecahan", "Pengurangan pecahan", "Perkalian pecahan", "Pembagian pecahan"]
+ * Example: ["Lokomotor", "Non-Lokomotor", "Manipulatif"]
+ * -> ["Lokomotor", "Non-Lokomotor", "Manipulatif"]
+ */
+function distributeSharedContext(rawParts: string[]): string[] {
+  if (rawParts.length < 2) return rawParts;
+
+  let parts = rawParts.map((p) => p.trim()).filter((p) => p.length > 0);
+  if (parts.length < 2) return parts;
+
+  // 1. Check for shared trailing modifier/context
+  const lastPart = parts[parts.length - 1];
+  const lastWords = lastPart.split(/\s+/);
+  const precedingParts = parts.slice(0, parts.length - 1);
+  const precedingLengths = precedingParts.map((p) => p.split(/\s+/).length);
+  const minPrecedingLen = Math.min(...precedingLengths);
+  const maxPrecedingLen = Math.max(...precedingLengths);
+
+  // If earlier parts have similar length (e.g. 1-2 words), and last part has strictly more words:
+  if (minPrecedingLen >= 1 && maxPrecedingLen <= minPrecedingLen + 1 && lastWords.length > maxPrecedingLen) {
+    const headWordCount = maxPrecedingLen;
+    const candidateTail = lastWords.slice(headWordCount).join(' ');
+
+    const noneHaveTail = precedingParts.every(
+      (p) => !p.toLowerCase().endsWith(candidateTail.toLowerCase())
+    );
+
+    if (noneHaveTail && candidateTail.length > 1) {
+      parts = parts.map((p, idx) => {
+        if (idx === parts.length - 1) return p;
+        return `${p} ${candidateTail}`;
+      });
+    }
+  }
+
+  // 2. Check for shared leading prefix
+  const firstPart = parts[0];
+  const firstWords = firstPart.split(/\s+/);
+  const subsequentParts = parts.slice(1);
+  const subsequentLengths = subsequentParts.map((p) => p.split(/\s+/).length);
+  const minSubsequentLen = Math.min(...subsequentLengths);
+  const maxSubsequentLen = Math.max(...subsequentLengths);
+
+  if (minSubsequentLen >= 1 && maxSubsequentLen <= minSubsequentLen + 1 && firstWords.length > maxSubsequentLen) {
+    const prefixWordCount = firstWords.length - maxSubsequentLen;
+    const candidatePrefix = firstWords.slice(0, prefixWordCount).join(' ');
+
+    const noneHavePrefix = subsequentParts.every(
+      (p) => !p.toLowerCase().startsWith(candidatePrefix.toLowerCase())
+    );
+
+    if (noneHavePrefix && candidatePrefix.length > 1) {
+      parts = parts.map((p, idx) => {
+        if (idx === 0) return p;
+        return `${candidatePrefix} ${p}`;
+      });
+    }
+  }
+
+  // Capitalize first letter of each part cleanly
+  return parts.map((p) => {
+    const trimmed = p.trim();
+    if (!trimmed) return trimmed;
+    return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+  });
+}
+
+/**
+ * Subject-agnostic, conservative helper to decompose a compound material scope into atomic units.
+ */
+function decomposeCompoundScope(scope: string): string[] {
+  if (!scope || typeof scope !== 'string') return [];
+  const trimmed = scope.trim();
+  if (trimmed.length < 3) return [trimmed];
+
+  // 1. Strip generic metadata prefixes if present (e.g. "Lingkup Materi:", "Materi:", "Topik:")
+  const cleanScope = trimmed.replace(/^(?:lingkup\s+materi|materi\s+pokok|materi|topik)\s*:\s*/i, '').trim();
+
+  // 2. Check for explicit semicolons ';'
+  if (cleanScope.includes(';')) {
+    const parts = cleanScope
+      .split(/;+/)
+      .map((p) => p.replace(/^\s*(?:\d+[\.\)]|[-*•]|\([0-9a-zA-Z]+\))\s*/, '').trim())
+      .filter((p) => p.length > 1);
+    if (parts.length > 1) {
+      return distributeSharedContext(parts);
+    }
+  }
+
+  // 3. Check for explicit newlines
+  if (cleanScope.includes('\n')) {
+    const parts = cleanScope
+      .split(/[\r\n]+/)
+      .map((p) => p.replace(/^\s*(?:\d+[\.\)]|[-*•]|\([0-9a-zA-Z]+\))\s*/, '').trim())
+      .filter((p) => p.length > 1);
+    if (parts.length > 1) {
+      return distributeSharedContext(parts);
+    }
+  }
+
+  // 4. Check for explicit inline enumeration patterns like:
+  // "1. ... 2. ... 3. ..." or "(1) ... (2) ... (3) ..." or "a) ... b) ... c) ..."
+  const enumRegex = /(?:^|\s)(?:\d+[\.\)]|\([0-9a-zA-Z]\)|[a-zA-Z]\))\s+/;
+  if (enumRegex.test(cleanScope)) {
+    const parts = cleanScope
+      .split(enumRegex)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 1);
+    if (parts.length > 1) {
+      return distributeSharedContext(parts);
+    }
+  }
+
+  // 5. Check for clear comma-separated list
+  const commaParts = splitCommaList(cleanScope);
+  if (commaParts && commaParts.length > 1) {
+    return distributeSharedContext(commaParts);
+  }
+
+  // Conservative fallback: maintain single atomic scope
+  return [cleanScope];
+}
+
 export function fallbackGenerateTP(params: FallbackGenerateTPParams) {
   const cpGeneralText = (params.cpGeneral || '').trim();
   const validElements = (params.cpElements || []).filter((e) => e && e.content && e.content.trim().length > 0);
@@ -197,8 +373,8 @@ export function fallbackGenerateTP(params: FallbackGenerateTPParams) {
       const scope = (cpa.materialScope || '').trim();
       const analysisId = String(cpa.id);
 
-      // Check for decomposition: If single item has clearly distinct compound scopes separated by semicolon or newline
-      const compoundParts = scope.split(/[;\n]/).map((p) => p.trim()).filter((p) => p.length > 2);
+      // Check for decomposition using robust, subject-agnostic helper
+      const compoundParts = decomposeCompoundScope(scope);
 
       if (compoundParts.length > 1) {
         // Decompose into focused atomic TPs, each referencing this single CPAnalysisItem
@@ -217,24 +393,47 @@ export function fallbackGenerateTP(params: FallbackGenerateTPParams) {
           });
         });
       } else {
-        // Single atomic TP
-        const finalScope = scope || 'Materi Pokok';
-        const statement = cpa.suggestedTp && cpa.suggestedTp.length > 15
-          ? cpa.suggestedTp
-          : `Peserta didik mampu ${comp.toLowerCase()} ${finalScope} secara mandiri dan bernalar kritis.`;
+        // Check if competence has explicit independent components via ; or \n
+        const compParts = comp.includes(';') || comp.includes('\n')
+          ? comp.split(/[;\n]+/).map((c) => c.trim()).filter((c) => c.length > 2)
+          : [comp];
 
-        const { code, scopeCode } = getSemanticCode(elemName, finalScope, undefined, cpa.scopeCode);
-        rawGeneratedItems.push({
-          code,
-          scopeCode,
-          elementName: elemName,
-          statement,
-          competence: comp,
-          contentScope: finalScope,
-          p3Dimensions: ['Bernalar Kritis', 'Mandiri'],
-          graduateProfileDimensions: ['Bernalar Kritis', 'Mandiri'],
-          cpAnalysisItemIds: [analysisId],
-        });
+        if (compParts.length > 1) {
+          const finalScope = compoundParts[0] || scope || 'Materi Pokok';
+          compParts.forEach((cPart) => {
+            const { code, scopeCode } = getSemanticCode(elemName, finalScope, undefined, cpa.scopeCode);
+            rawGeneratedItems.push({
+              code,
+              scopeCode,
+              elementName: elemName,
+              statement: `Peserta didik mampu ${cPart.toLowerCase()} ${finalScope} secara mandiri dan bernalar kritis.`,
+              competence: cPart,
+              contentScope: finalScope,
+              p3Dimensions: ['Bernalar Kritis', 'Mandiri'],
+              graduateProfileDimensions: ['Bernalar Kritis', 'Mandiri'],
+              cpAnalysisItemIds: [analysisId],
+            });
+          });
+        } else {
+          // Single atomic TP
+          const finalScope = compoundParts[0] || scope || 'Materi Pokok';
+          const statement = cpa.suggestedTp && cpa.suggestedTp.length > 15
+            ? cpa.suggestedTp
+            : `Peserta didik mampu ${comp.toLowerCase()} ${finalScope} secara mandiri dan bernalar kritis.`;
+
+          const { code, scopeCode } = getSemanticCode(elemName, finalScope, undefined, cpa.scopeCode);
+          rawGeneratedItems.push({
+            code,
+            scopeCode,
+            elementName: elemName,
+            statement,
+            competence: comp,
+            contentScope: finalScope,
+            p3Dimensions: ['Bernalar Kritis', 'Mandiri'],
+            graduateProfileDimensions: ['Bernalar Kritis', 'Mandiri'],
+            cpAnalysisItemIds: [analysisId],
+          });
+        }
       }
     }
   } else if (validElements.length > 0) {
