@@ -598,33 +598,29 @@ export function validateTPDataWorkflow(
         issues.push(`Butir TP ke-${i + 1} (${item.code || 'Tanpa Kode'}) belum mengisi Lingkup Materi.`);
       }
 
-      // 3. Setiap TP harus memiliki cpAnalysisItemIds
+      // 3. Setiap TP harus memiliki cpAnalysisItemIds tepat 1 ID (ATOMIC TP CONTRACT)
       const analysisIds = Array.isArray(item.cpAnalysisItemIds) ? item.cpAnalysisItemIds : [];
       if (analysisIds.length === 0) {
         issues.push(`Butir TP ke-${i + 1} (${item.code || 'Tanpa Kode'}) belum menautkan butir Analisis CP.`);
-      } else {
-        // 4. Semua ID tersebut harus valid terhadap cpAnalysis.items
-        // 5. Semua ID dalam satu TP harus berasal dari elemen CP yang sama
-        let firstElemKey: string | null = null;
-        let isCrossElement = false;
-
+      } else if (analysisIds.length > 1) {
+        issues.push(
+          `Butir TP ke-${i + 1} (${item.code || 'Tanpa Kode'}) menautkan lebih dari satu butir Analisis CP (${analysisIds.length} butir). Sesuai kontrak TP atomik, satu TP hanya boleh merujuk tepat satu butir Analisis CP.`
+        );
         for (const anaId of analysisIds) {
           const matched = analysisItemMap.get(anaId);
           if (!matched) {
             issues.push(`Butir TP ke-${i + 1} (${item.code || 'Tanpa Kode'}) menautkan ID Analisis CP (${anaId}) yang tidak ditemukan.`);
           } else {
             referencedAnalysisItemIds.add(anaId);
-            const elemKey = matched.elementId || matched.elementName || '';
-            if (firstElemKey === null) {
-              firstElemKey = elemKey;
-            } else if (elemKey && firstElemKey && elemKey !== firstElemKey) {
-              isCrossElement = true;
-            }
           }
         }
-
-        if (isCrossElement) {
-          issues.push(`Butir TP ke-${i + 1} (${item.code || 'Tanpa Kode'}) menautkan butir Analisis CP dari elemen CP yang berbeda.`);
+      } else {
+        const anaId = analysisIds[0];
+        const matched = analysisItemMap.get(anaId);
+        if (!matched) {
+          issues.push(`Butir TP ke-${i + 1} (${item.code || 'Tanpa Kode'}) menautkan ID Analisis CP (${anaId}) yang tidak ditemukan.`);
+        } else {
+          referencedAnalysisItemIds.add(anaId);
         }
       }
     }

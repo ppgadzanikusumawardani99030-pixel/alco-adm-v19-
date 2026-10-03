@@ -678,22 +678,36 @@ app.post('/api/ai/generate-tp', async (req, res) => {
 Tugas Anda adalah merumuskan Tujuan Pembelajaran (TP) yang diturunkan melalui analisis pedagogis bertahap:
 CP → Elemen CP → Analisis CP → Rumusan TP.
 
-PRINSIP PEDAGOGIS & KONTRAK ELEMEN CP → TP (WAJIB DIPATUHI):
-1. BUKAN KUOTA & ELEMEN SEBAGAI BOUNDARY:
-   - Jumlah TP adalah hasil murni analisis kurikulum, BUKAN berdasarkan target kuota angka.
-   - Elemen CP adalah batas turunan TP. Kelompokkan CPAnalysisItem berdasarkan elemen CP, dan proses setiap elemen secara terpisah.
-   - JANGAN PERNAH menggabungkan (merge) item Analisis CP dari dua elemen yang berbeda menjadi satu TP! Semua cpAnalysisItemIds pada satu TP HARUS berasal dari elemen CP yang sama.
-2. PROSES PER ELEMEN (1..N TP PER ELEMEN):
-   - MERGE HANYA DALAM ELEMEN YANG SAMA: Jika dalam satu elemen terdapat beberapa butir Analisis CP yang sangat erat dan membentuk satu tujuan belajar yang utuh, baru dapat digabungkan menjadi 1 TP koheren.
-   - DEKOMPOSISI (DECOMPOSE): Jika satu butir/elemen Analisis CP memuat beberapa kompetensi atau lingkup materi yang berbeda secara pedagogis, AI HARUS memecahnya menjadi beberapa TP terfokus.
-   - Pertahankan TP berbeda jika kompetensi (misal: pengetahuan vs keterampilan vs praktik) atau lingkup materinya berbeda.
-3. KUALITAS BUTIR TP:
+PRINSIP PEDAGOGIS & KONTRAK ATOMIK TP (WAJIB DIPATUHI - ATOMIC TP CONTRACT):
+1. ATOMIC TP CONTRACT (1 TP = 1 TUJUAN PEMBELAJARAN SPESIFIK):
+   - Setiap butir TP HANYA BOLEH merujuk ke TEPAT 1 BUTIR Analisis CP (CPAnalysisItem).
+   - Properti "cpAnalysisItemIds" WAJIB berupa array yang berisi TEPAT 1 ID valid (panjang array = 1).
+   - JANGAN PERNAH menggabungkan (merge) dua atau lebih butir Analisis CP menjadi satu TP!
+     DILARANG merge meskipun:
+     * Berada pada elemen yang sama
+     * Memiliki competence tier / KKO yang sama
+     * Memiliki lingkup materi yang mirip
+     * Terdapat irisan kata kunci (keyword overlap).
+2. PROSES INDEPENDEN SETIAP BUTIR ANALISIS CP (1..N TP PER ANALISIS ITEM):
+   - Proses setiap butir Analisis CP secara independen.
+   - 1 butir Analisis CP dapat menghasilkan 1 TP atomik.
+   - DEKOMPOSISI (DECOMPOSE): Jika satu butir Analisis CP memuat beberapa kompetensi atau beberapa lingkup materi yang berbeda secara pedagogis (misalnya dipisahkan tanda titik koma atau bermakna ganda), pecah menjadi beberapa butir TP atomik terfokus.
+   - Semua butir TP hasil dekomposisi tersebut WAJIB merujuk ke ID CPAnalysisItem yang sama pada "cpAnalysisItemIds" (masing-masing tetap berupa array dengan tepat 1 ID tersebut).
+   Contoh:
+   Analisis Item A: Kompetensi = Mempraktikkan, Lingkup Materi = Lokomotor; Non-Lokomotor; Manipulatif
+   Maka dihasilkan:
+   * TP 1: Mempraktikkan gerak lokomotor (cpAnalysisItemIds: ["A"])
+   * TP 2: Mempraktikkan gerak non-lokomotor (cpAnalysisItemIds: ["A"])
+   * TP 3: Mempraktikkan gerak manipulatif (cpAnalysisItemIds: ["A"])
+   DILARANG KERAS menggabungkan Analisis A + Analisis B menjadi satu TP!
+3. BUKAN KUOTA:
+   - Jumlah TP adalah hasil murni analisis kurikulum dan dekomposisi atomik, BUKAN berdasarkan target kuota angka.
+4. KUALITAS BUTIR TP:
    - Setiap TP harus eksplisit memuat: Kompetensi (KKO operasional terukur) dan Lingkup Materi (konten esensial).
    - Format standar: "Peserta didik mampu [Kompetensi/KKO] [Lingkup Materi] melalui [Konteks/Aktivitas/Kondisi] secara [Karakter/Kriteria]."
-4. PELACAKAN SILSILAH (LINEAGE):
-   - Setiap butir TP HARUS mencantumkan ID butir Analisis CP pendukungnya dari elemen yang sama pada "cpAnalysisItemIds" (bisa 1 ID atau lebih dari elemen yang sama). JANGAN PERNAH mengarang ID fiktif.
-
-5. FORMAT KODE TP SEMANTIK:
+5. PELACAKAN SILSILAH (LINEAGE):
+   - Properti "cpAnalysisItemIds" WAJIB berupa array dengan TEPAT 1 ID rujukan dari daftar HASIL ANALISIS CP di bawah. JANGAN PERNAH mengarang ID fiktif dan JANGAN memasukkan lebih dari 1 ID.
+6. FORMAT KODE TP SEMANTIK:
    - Kode TP HARUS menggunakan format: [elementCode]-[scopeCode]-[sequence 2 digit]
    - Contoh: E1-PGD-01, E1-PGD-02, E1-PGD-03, E2-PGD-01.
    - Urutan sequence dihitung per kombinasi elementCode + scopeCode.
@@ -743,7 +757,7 @@ Kembalikan respon dalam format JSON sesuai schema:`;
                 cpAnalysisItemIds: {
                   type: Type.ARRAY,
                   items: { type: Type.STRING },
-                  description: 'Daftar ID butir Analisis CP dari elemen yang sama yang menjadi rujukan',
+                  description: 'Tepat 1 ID butir Analisis CP rujukan yang sah (array berisi tepat 1 ID)',
                 },
               },
               required: ['code', 'scopeCode', 'elementName', 'statement', 'competence', 'contentScope', 'p3Dimensions', 'cpAnalysisItemIds'],
@@ -756,89 +770,84 @@ Kembalikan respon dalam format JSON sesuai schema:`;
       const validation = validateAITPPayload(parsed);
 
       if (validation.isValid && Array.isArray(parsed)) {
-        // Lineage & code sanitization
-        const sequenceCounters = new Map<string, number>();
-        const elemCodeMap = new Map<string, string>();
-        if (Array.isArray(cpElements)) {
-          cpElements.forEach((e: any, idx: number) => {
-            const code = e.code || `E${idx + 1}`;
-            if (e.id) elemCodeMap.set(String(e.id), code);
-            if (e.name) elemCodeMap.set(e.name.toLowerCase().trim(), code);
-          });
+        // Enforce strict Atomic Contract on AI output:
+        // When CP Analysis items exist, every TP must contain EXACTLY 1 valid CPAnalysisItem ID.
+        // If 0 IDs, >1 IDs, or invalid IDs, do not silently pick first ID or do positional fallback.
+        // Fall back to pedagogical rule engine instead.
+        let isAtomicContractValid = true;
+        if (validAnalysisItems.length > 0) {
+          for (const item of parsed) {
+            const rawIds = Array.isArray(item.cpAnalysisItemIds) ? item.cpAnalysisItemIds : [];
+            if (rawIds.length !== 1 || !validAnalysisIdSet.has(String(rawIds[0]))) {
+              isAtomicContractValid = false;
+              break;
+            }
+          }
         }
 
-        const analysisScopeCodeMap = new Map<string, { elemCode: string; scopeCode: string }>();
-        validAnalysisItems.forEach((a: any, idx: number) => {
-          if (a.id) {
-            const eCode = (a.elementId && elemCodeMap.get(String(a.elementId))) ||
-                          (a.elementName && elemCodeMap.get(a.elementName.toLowerCase().trim())) ||
-                          `E${idx + 1}`;
-            const sCode = a.scopeCode || deriveScopeCode(a.materialScope);
-            analysisScopeCodeMap.set(String(a.id), { elemCode: eCode, scopeCode: sCode });
-          }
-        });
-
-        const sanitizedItems = parsed.map((item: any) => {
-          const rawIds = Array.isArray(item.cpAnalysisItemIds) ? item.cpAnalysisItemIds : [];
-          let filteredIds = rawIds.filter((id: string) => validAnalysisIdSet.has(String(id)));
-
-          // Enforce single-element boundary: if filteredIds contain IDs from multiple elements, retain only those matching first element
-          if (filteredIds.length > 1) {
-            const firstElem = analysisElemMap.get(String(filteredIds[0]));
-            if (firstElem) {
-              filteredIds = filteredIds.filter((id: string) => analysisElemMap.get(String(id)) === firstElem);
-            }
-          }
-
-          // If no valid IDs matched but CP Analysis items exist, match based on element name
-          if (filteredIds.length === 0 && validAnalysisItems.length > 0) {
-            const itemElem = (item.elementName || '').toLowerCase().trim();
-            const itemScope = (item.contentScope || '').toLowerCase().trim();
-            const matchedAnalysis = validAnalysisItems.filter((a: any) => {
-              const aElem = (a.elementName || '').toLowerCase().trim();
-              const aScope = (a.materialScope || '').toLowerCase().trim();
-              return (itemElem && aElem && (itemElem === aElem || itemElem.includes(aElem))) ||
-                     (itemScope && aScope && (itemScope.includes(aScope) || aScope.includes(itemScope)));
+        if (!isAtomicContractValid) {
+          console.warn('AI TP output failed atomic contract (each TP must reference exactly 1 valid CPAnalysisItem). Falling back to pedagogical engine.');
+        } else {
+          // Lineage & code sanitization
+          const sequenceCounters = new Map<string, number>();
+          const elemCodeMap = new Map<string, string>();
+          if (Array.isArray(cpElements)) {
+            cpElements.forEach((e: any, idx: number) => {
+              const code = e.code || `E${idx + 1}`;
+              if (e.id) elemCodeMap.set(String(e.id), code);
+              if (e.name) elemCodeMap.set(e.name.toLowerCase().trim(), code);
             });
-            if (matchedAnalysis.length > 0) {
-              const firstMatchedElem = (matchedAnalysis[0].elementId || matchedAnalysis[0].elementName || '').toLowerCase().trim();
-              filteredIds = matchedAnalysis
-                .filter((a: any) => (a.elementId || a.elementName || '').toLowerCase().trim() === firstMatchedElem)
-                .map((a: any) => a.id);
+          }
+
+          const analysisScopeCodeMap = new Map<string, { elemCode: string; scopeCode: string }>();
+          validAnalysisItems.forEach((a: any, idx: number) => {
+            if (a.id) {
+              const eCode = (a.elementId && elemCodeMap.get(String(a.elementId))) ||
+                            (a.elementName && elemCodeMap.get(a.elementName.toLowerCase().trim())) ||
+                            `E${idx + 1}`;
+              const sCode = a.scopeCode || deriveScopeCode(a.materialScope);
+              analysisScopeCodeMap.set(String(a.id), { elemCode: eCode, scopeCode: sCode });
             }
-          }
+          });
 
-          // Resolve semantic code format: E1-PGD-01
-          let elemCode = 'E1';
-          let scopeCode = 'MAT';
+          const sanitizedItems = parsed.map((item: any) => {
+            const rawIds = Array.isArray(item.cpAnalysisItemIds) ? item.cpAnalysisItemIds : [];
+            const singleId = rawIds.length === 1 && validAnalysisIdSet.has(String(rawIds[0]))
+              ? String(rawIds[0])
+              : null;
 
-          if (filteredIds.length > 0 && analysisScopeCodeMap.has(filteredIds[0])) {
-            const info = analysisScopeCodeMap.get(filteredIds[0])!;
-            elemCode = info.elemCode;
-            scopeCode = info.scopeCode;
-          } else {
-            const itemElem = (item.elementName || '').toLowerCase().trim();
-            elemCode = elemCodeMap.get(itemElem) || 'E1';
-            scopeCode = item.scopeCode && typeof item.scopeCode === 'string' && item.scopeCode.trim().length >= 2
-              ? item.scopeCode.trim().toUpperCase()
-              : deriveScopeCode(item.contentScope || item.elementName);
-          }
+            // Resolve semantic code format: E1-PGD-01
+            let elemCode = 'E1';
+            let scopeCode = 'MAT';
 
-          const key = `${elemCode}-${scopeCode}`;
-          const seq = (sequenceCounters.get(key) || 0) + 1;
-          sequenceCounters.set(key, seq);
+            if (singleId && analysisScopeCodeMap.has(singleId)) {
+              const info = analysisScopeCodeMap.get(singleId)!;
+              elemCode = info.elemCode;
+              scopeCode = info.scopeCode;
+            } else {
+              const itemElem = (item.elementName || '').toLowerCase().trim();
+              elemCode = elemCodeMap.get(itemElem) || 'E1';
+              scopeCode = item.scopeCode && typeof item.scopeCode === 'string' && item.scopeCode.trim().length >= 2
+                ? item.scopeCode.trim().toUpperCase()
+                : deriveScopeCode(item.contentScope || item.elementName);
+            }
 
-          const generatedCode = `${elemCode}-${scopeCode}-${String(seq).padStart(2, '0')}`;
+            const key = `${elemCode}-${scopeCode}`;
+            const seq = (sequenceCounters.get(key) || 0) + 1;
+            sequenceCounters.set(key, seq);
 
-          return {
-            ...item,
-            code: generatedCode,
-            scopeCode,
-            cpAnalysisItemIds: filteredIds,
-          };
-        });
+            const generatedCode = `${elemCode}-${scopeCode}-${String(seq).padStart(2, '0')}`;
 
-        return res.json({ success: true, items: sanitizedItems, engine: 'gemini' });
+            return {
+              ...item,
+              code: generatedCode,
+              scopeCode,
+              cpAnalysisItemIds: singleId ? [singleId] : [],
+            };
+          });
+
+          return res.json({ success: true, items: sanitizedItems, engine: 'gemini' });
+        }
       }
     } catch (error: any) {
       console.warn('Gemini generate TP failed, falling back to pedagogical engine:', error);
