@@ -17,6 +17,7 @@ import {
   CalendarDay,
   TimeAllocation,
   SubjectWeeklySchedule,
+  LearningMeetingScheduleData,
   LearningPlan,
   AssessmentCriterion,
   AssessmentPlan,
@@ -103,6 +104,7 @@ export interface SemesterDataStoreV5 {
   academicCalendar: SemesterScopedEntry<SemesterCalendarEntry>[];
   timeAllocation: SemesterScopedEntry<TimeAllocation[]>[];
   subjectWeeklySchedules?: SemesterScopedEntry<SubjectWeeklySchedule>[];
+  learningMeetingSchedules?: SemesterScopedEntry<LearningMeetingScheduleData>[];
   learningPlan: SemesterScopedEntry<LearningPlan[]>[];
   assessmentCriteria: SemesterScopedEntry<AssessmentCriterion[]>[];
   assessmentPlan: SemesterScopedEntry<AssessmentPlan[]>[];

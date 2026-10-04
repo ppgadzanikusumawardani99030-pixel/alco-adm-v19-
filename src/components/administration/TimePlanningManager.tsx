@@ -13,6 +13,7 @@ import {
   CalendarWorkflowStatus,
   CalendarResolutionStatus,
   SubjectWeeklySchedule,
+  LearningMeetingScheduleData,
   ATPUnitMappingData,
   UnitExecutionPlanData,
 } from '../../types';
@@ -107,6 +108,7 @@ export interface TimePlanningManagerProps {
   mapping?: ATPUnitMappingData;
   unitExecutionPlan?: UnitExecutionPlanData;
   semester?: 1 | 2;
+  persistedSchedule?: LearningMeetingScheduleData;
   afterTimeSetup?: React.ReactNode;
   viewMode?: 'ALL' | 'TIME_SETUP' | 'ALLOCATION';
   explicitSemesterPlanId?: string;
@@ -114,6 +116,7 @@ export interface TimePlanningManagerProps {
   onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => boolean;
   onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => boolean;
   onSaveSubjectWeeklySchedule?: (schedule: SubjectWeeklySchedule, explicitSemesterPlanId?: string) => boolean;
+  onSaveLearningMeetingSchedule?: (schedule: LearningMeetingScheduleData, explicitSemesterPlanId?: string) => boolean;
 }
 
 export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
@@ -130,6 +133,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   mapping,
   unitExecutionPlan,
   semester: propSemester,
+  persistedSchedule,
   afterTimeSetup,
   viewMode = 'ALL',
   explicitSemesterPlanId,
@@ -137,6 +141,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   onSaveSemesterJPSetting,
   onSaveTimeAllocations,
   onSaveSubjectWeeklySchedule,
+  onSaveLearningMeetingSchedule,
 }) => {
   const isK13Curriculum =
     academicSetting.curriculumType === 'K13' || academicSetting.curriculum?.includes('2013');
@@ -2559,6 +2564,12 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
               calendar={calendar}
               calendarDays={days}
               schoolDaysPerWeek={calendar?.schoolDaysPerWeek ?? null}
+              persistedSchedule={persistedSchedule}
+              onSaveLearningMeetingSchedule={(data, spId) =>
+                onSaveLearningMeetingSchedule
+                  ? onSaveLearningMeetingSchedule(data, spId)
+                  : false
+              }
             />
           )}
 

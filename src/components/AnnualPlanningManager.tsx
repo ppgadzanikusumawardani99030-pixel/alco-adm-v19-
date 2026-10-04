@@ -23,6 +23,7 @@ import {
   UnitExecutionPlanData,
   K13Analysis,
   SubjectWeeklySchedule,
+  LearningMeetingScheduleData,
 } from '../types';
 import {
   AnnualPlanningTaskRail,
@@ -59,6 +60,7 @@ export interface AnnualPlanningManagerProps {
   onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => boolean;
   onSaveUnitExecutionPlan?: (plan: UnitExecutionPlanData) => boolean;
   onSaveSubjectWeeklySchedule?: (schedule: SubjectWeeklySchedule, explicitSemesterPlanId?: string) => boolean;
+  onSaveLearningMeetingSchedule?: (schedule: LearningMeetingScheduleData, explicitSemesterPlanId?: string) => boolean;
   onNextStep: () => void;
   onBackToMapping: () => void;
 }
@@ -79,6 +81,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
   onSaveTimeAllocations,
   onSaveUnitExecutionPlan,
   onSaveSubjectWeeklySchedule,
+  onSaveLearningMeetingSchedule,
   onNextStep,
   onBackToMapping,
 }) => {
@@ -847,6 +850,8 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                     onSaveSemesterJPSetting={onSaveSemesterJPSetting}
                     onSaveTimeAllocations={onSaveTimeAllocations}
                     onSaveSubjectWeeklySchedule={onSaveSubjectWeeklySchedule}
+                    persistedSchedule={activeSelectedData?.learningMeetingSchedule}
+                    onSaveLearningMeetingSchedule={onSaveLearningMeetingSchedule}
                     afterTimeSetup={activeTaskId === 'time-allocation' ? (
                       /* Dalam Task 5 boleh tampil sub-selector kecil */
                       <div className="flex items-center gap-2 mb-4 bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">

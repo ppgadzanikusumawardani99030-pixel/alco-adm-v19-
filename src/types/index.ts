@@ -1796,6 +1796,28 @@ export interface LearningMeetingScheduleResult {
   isValid: boolean;
 }
 
+export type LearningMeetingScheduleStatus =
+  | 'DRAFT'
+  | 'COMPLETE';
+
+export interface LearningMeetingScheduleData {
+  id: string;
+  semesterPlanId: string;
+
+  entries: LearningMeetingScheduleEntry[];
+  unresolvedMeetingIds: string[];
+
+  status: LearningMeetingScheduleStatus;
+
+  basedOnMappingUpdatedAt: string;
+  basedOnUnitExecutionPlanUpdatedAt: string;
+  basedOnSubjectWeeklyScheduleUpdatedAt: string;
+  basedOnCalendarUpdatedAt: string;
+  basedOnWeeklyJP: number;
+
+  updatedAt: string;
+}
+
 export * from './assessmentGeneration';
 export * from './assessmentValidation';
 export * from './assessmentRegeneration';

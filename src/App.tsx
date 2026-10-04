@@ -33,6 +33,7 @@ import {
   AnnualJPReference,
   UnitExecutionPlanData,
   SubjectWeeklySchedule,
+  LearningMeetingScheduleData,
 } from './types';
 import { getSubjectJP, resolveSemesterCapacityV5 } from './services/jpEngine';
 import {
@@ -67,6 +68,7 @@ import {
   deleteSemesterJPSettingV5,
   saveTimeAllocationV5,
   saveSubjectWeeklyScheduleV5,
+  saveLearningMeetingScheduleV5,
   saveLearningPlansV5,
   saveAssessmentCriteriaV5,
   saveAssessmentPlansV5,
@@ -1060,6 +1062,28 @@ export function App() {
     }
   }, [activeSemesterPlan?.id, v5State, refreshV5]);
 
+  const handleSaveLearningMeetingSchedule = useCallback((schedule: LearningMeetingScheduleData, explicitSemesterPlanId?: string): boolean => {
+    const targetSemesterPlanId = explicitSemesterPlanId || activeSemesterPlan?.id;
+    if (!targetSemesterPlanId) {
+      setAppNotice({
+        type: 'error',
+        message: 'Pilih Semester aktif atau tentukan target semester sebelum menyimpan jadwal pertemuan.',
+      });
+      return false;
+    }
+    try {
+      saveLearningMeetingScheduleV5(targetSemesterPlanId, schedule);
+      refreshV5();
+      return true;
+    } catch (err: any) {
+      setAppNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal menyimpan jadwal pertemuan.',
+      });
+      return false;
+    }
+  }, [activeSemesterPlan?.id, refreshV5]);
+
   const handleSaveStudents = (stdList: Student[]) => {
     if (!activeSemesterPlan) {
       setAppNotice({
@@ -1611,6 +1635,7 @@ export function App() {
               onSaveTimeAllocations={handleSaveTimeAllocations}
               onSaveUnitExecutionPlan={handleSaveUnitExecutionPlan}
               onSaveSubjectWeeklySchedule={handleSaveSubjectWeeklySchedule}
+              onSaveLearningMeetingSchedule={handleSaveLearningMeetingSchedule}
               onNextStep={() => setCurrentStep('semester')}
               onBackToMapping={() => setCurrentStep('atp-mapping')}
             />

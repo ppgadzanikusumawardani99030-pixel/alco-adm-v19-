@@ -27,6 +27,7 @@ import {
   SemesterJPSetting,
   TimeAllocation,
   SubjectWeeklySchedule,
+  LearningMeetingScheduleData,
   LearningPlan,
   AssessmentCriterion,
   AssessmentPlan,
@@ -37,6 +38,7 @@ import {
 } from '../types';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from './unitSemesterPlanningService';
+import { validateLearningMeetingScheduleData } from './learningMeetingScheduleService';
 
 export { STORAGE_KEY_V5 };
 
@@ -59,6 +61,7 @@ export interface SemesterDataV5Result {
   academicCalendar: SemesterCalendarEntry | undefined;
   timeAllocation: TimeAllocation[] | undefined;
   subjectWeeklySchedule: SubjectWeeklySchedule | undefined;
+  learningMeetingSchedule: LearningMeetingScheduleData | undefined;
   learningPlan: LearningPlan[] | undefined;
   assessmentCriteria: AssessmentCriterion[] | undefined;
   assessmentPlan: AssessmentPlan[] | undefined;
@@ -118,6 +121,7 @@ export function createInitialStorageV5(): AppStorageStateV5 {
       academicCalendar: [],
       timeAllocation: [],
       subjectWeeklySchedules: [],
+      learningMeetingSchedules: [],
       learningPlan: [],
       assessmentCriteria: [],
       assessmentPlan: [],
@@ -217,6 +221,10 @@ export function validateStorageStateV5(value: unknown): AppStorageStateV5 {
     semesterData.subjectWeeklySchedules = [];
   }
   assertArray(semesterData, 'subjectWeeklySchedules', 'data.semesterData');
+  if (semesterData.learningMeetingSchedules === undefined) {
+    semesterData.learningMeetingSchedules = [];
+  }
+  assertArray(semesterData, 'learningMeetingSchedules', 'data.semesterData');
   assertArray(semesterData, 'learningPlan', 'data.semesterData');
   assertArray(semesterData, 'assessmentCriteria', 'data.semesterData');
   assertArray(semesterData, 'assessmentPlan', 'data.semesterData');
@@ -618,7 +626,8 @@ export function validateStorageStateV5(value: unknown): AppStorageStateV5 {
         'semesterData.academicCalendar',
         'semesterData.attendance',
         'semesterData.grade',
-        'semesterData.subjectWeeklySchedules'
+        'semesterData.subjectWeeklySchedules',
+        'semesterData.learningMeetingSchedules'
       ];
 
       if (arrayValuedCollections.includes(collName)) {
@@ -700,6 +709,12 @@ export function validateStorageStateV5(value: unknown): AppStorageStateV5 {
     semesterData.subjectWeeklySchedules as Array<Record<string, unknown>>,
     'semesterData.subjectWeeklySchedules'
   );
+  if (Array.isArray(semesterData.learningMeetingSchedules)) {
+    validateSemesterScopedCollection(
+      semesterData.learningMeetingSchedules as Array<Record<string, unknown>>,
+      'semesterData.learningMeetingSchedules'
+    );
+  }
 
   // 7. Active Context Pointer Validation
   const checkActivePointer = (val: unknown, name: string) => {
@@ -1528,6 +1543,9 @@ export function getSemesterDataV5(semesterPlanId: string): SemesterDataV5Result 
   const subjectWeeklySchedule = state.semesterData.subjectWeeklySchedules?.find(
     (e) => e.semesterPlanId === semesterPlanId
   )?.value;
+  const learningMeetingSchedule = state.semesterData.learningMeetingSchedules?.find(
+    (e) => e.semesterPlanId === semesterPlanId
+  )?.value;
   const learningPlan = state.semesterData.learningPlan.find(
     (e) => e.semesterPlanId === semesterPlanId
   )?.value;
@@ -1563,6 +1581,7 @@ export function getSemesterDataV5(semesterPlanId: string): SemesterDataV5Result 
     academicCalendar,
     timeAllocation,
     subjectWeeklySchedule,
+    learningMeetingSchedule,
     learningPlan,
     assessmentCriteria,
     assessmentPlan,
@@ -1638,6 +1657,151 @@ export function deleteSubjectWeeklyScheduleV5(semesterPlanId: string): void {
   assertSemesterPlanAndParentExist(state, semesterPlanId);
   if (!state.semesterData.subjectWeeklySchedules) return;
   const changed = deleteSemesterScopedEntry(state.semesterData.subjectWeeklySchedules, semesterPlanId);
+  if (changed) {
+    saveStorageV5(state);
+  }
+}
+
+export function saveLearningMeetingScheduleV5(
+  semesterPlanId: string,
+  value: LearningMeetingScheduleData
+): LearningMeetingScheduleData {
+  if (!value || typeof value !== 'object') {
+    throw new Error('LearningMeetingScheduleData harus berupa objek valid');
+  }
+  if (value.semesterPlanId !== semesterPlanId) {
+    throw new Error(
+      `LearningMeetingScheduleData inner semesterPlanId "${value.semesterPlanId}" does not match outer semesterPlanId "${semesterPlanId}"`
+    );
+  }
+  if (!value.id || typeof value.id !== 'string' || !value.id.trim()) {
+    throw new Error('LearningMeetingScheduleData id tidak boleh kosong');
+  }
+  if (!Array.isArray(value.entries)) {
+    throw new Error('LearningMeetingScheduleData entries harus berupa array');
+  }
+  if (!Array.isArray(value.unresolvedMeetingIds)) {
+    throw new Error('LearningMeetingScheduleData unresolvedMeetingIds harus berupa array');
+  }
+  if (value.status !== 'DRAFT' && value.status !== 'COMPLETE') {
+    throw new Error('LearningMeetingScheduleData status harus DRAFT atau COMPLETE');
+  }
+  if (!value.basedOnMappingUpdatedAt || typeof value.basedOnMappingUpdatedAt !== 'string') {
+    throw new Error('basedOnMappingUpdatedAt wajib diisi');
+  }
+  if (!value.basedOnUnitExecutionPlanUpdatedAt || typeof value.basedOnUnitExecutionPlanUpdatedAt !== 'string') {
+    throw new Error('basedOnUnitExecutionPlanUpdatedAt wajib diisi');
+  }
+  if (!value.basedOnSubjectWeeklyScheduleUpdatedAt || typeof value.basedOnSubjectWeeklyScheduleUpdatedAt !== 'string') {
+    throw new Error('basedOnSubjectWeeklyScheduleUpdatedAt wajib diisi');
+  }
+  if (!value.basedOnCalendarUpdatedAt || typeof value.basedOnCalendarUpdatedAt !== 'string') {
+    throw new Error('basedOnCalendarUpdatedAt wajib diisi');
+  }
+  if (typeof value.basedOnWeeklyJP !== 'number' || value.basedOnWeeklyJP <= 0) {
+    throw new Error('basedOnWeeklyJP harus integer positif');
+  }
+  if (!value.updatedAt || typeof value.updatedAt !== 'string') {
+    throw new Error('updatedAt wajib diisi');
+  }
+
+  const meetingIds = new Set<string>();
+  const slotIds = new Set<string>();
+  for (const e of value.entries) {
+    if (e.semesterPlanId !== semesterPlanId) {
+      throw new Error(`Entry semesterPlanId "${e.semesterPlanId}" tidak cocok dengan "${semesterPlanId}"`);
+    }
+    if (!e.meetingId || typeof e.meetingId !== 'string' || !e.meetingId.trim()) {
+      throw new Error('Entry meetingId tidak boleh kosong');
+    }
+    if (meetingIds.has(e.meetingId)) {
+      throw new Error(`Duplicate meetingId pada entries: ${e.meetingId}`);
+    }
+    meetingIds.add(e.meetingId);
+
+    if (!e.unitId || typeof e.unitId !== 'string' || !e.unitId.trim()) {
+      throw new Error('Entry unitId tidak boleh kosong');
+    }
+    if (!e.sessionId || typeof e.sessionId !== 'string' || !e.sessionId.trim()) {
+      throw new Error('Entry sessionId tidak boleh kosong');
+    }
+    if (!e.sourceSlotId || typeof e.sourceSlotId !== 'string' || !e.sourceSlotId.trim()) {
+      throw new Error('Entry sourceSlotId tidak boleh kosong');
+    }
+    if (slotIds.has(e.sourceSlotId)) {
+      throw new Error(`Duplicate sourceSlotId pada entries: ${e.sourceSlotId}`);
+    }
+    slotIds.add(e.sourceSlotId);
+
+    if (!e.date || !/^\d{4}-\d{2}-\d{2}$/.test(e.date)) {
+      throw new Error(`Format tanggal tidak valid: "${e.date}"`);
+    }
+    if (typeof e.dayOfWeek !== 'number' || e.dayOfWeek < 1 || e.dayOfWeek > 6) {
+      throw new Error(`dayOfWeek tidak valid: ${e.dayOfWeek}`);
+    }
+    if (typeof e.jp !== 'number' || e.jp <= 0) {
+      throw new Error(`JP harus integer positif: ${e.jp}`);
+    }
+    if (typeof e.weekIndex !== 'number' || e.weekIndex <= 0) {
+      throw new Error(`weekIndex harus integer positif: ${e.weekIndex}`);
+    }
+    if (e.mode !== 'AUTO' && e.mode !== 'MANUAL_OVERRIDE') {
+      throw new Error(`Mode entry tidak valid: ${e.mode}`);
+    }
+  }
+
+  const state = loadStorageV5();
+  const { semesterPlan, yearPlan } = assertSemesterPlanAndParentExist(state, semesterPlanId);
+
+  // Lineage resolution & validation
+  const mapping = (state.annualData.atpUnitMappings || []).find((entry) => entry.yearPlanId === yearPlan.id)?.value;
+  if (!mapping) {
+    throw new Error('Pemetaan Unit/Bab (ATPUnitMapping) tidak ditemukan untuk Tahun Ajaran terkait.');
+  }
+
+  const unitExecutionPlan = (state.annualData.unitExecutionPlans || []).find((entry) => entry.yearPlanId === yearPlan.id)?.value;
+  if (!unitExecutionPlan) {
+    throw new Error('Rencana Pelaksanaan (UnitExecutionPlan) tidak ditemukan untuk Tahun Ajaran terkait.');
+  }
+
+  const subjectWeeklySchedule = (state.semesterData.subjectWeeklySchedules || []).find((entry) => entry.semesterPlanId === semesterPlanId)?.value;
+  if (!subjectWeeklySchedule) {
+    throw new Error('Pola Jadwal Mingguan (SubjectWeeklySchedule) tidak ditemukan untuk Semester terkait.');
+  }
+
+  const calendarEntry = (state.semesterData.academicCalendar || []).find((entry) => entry.semesterPlanId === semesterPlanId)?.value;
+  if (!calendarEntry || !calendarEntry.calendar) {
+    throw new Error('Kalender Pendidikan tidak ditemukan untuk Semester terkait.');
+  }
+
+  const validation = validateLearningMeetingScheduleData({
+    data: value,
+    semester: semesterPlan.semester,
+    mapping,
+    unitExecutionPlan,
+    subjectWeeklySchedule,
+    expectedWeeklyJP: value.basedOnWeeklyJP,
+    calendar: calendarEntry.calendar,
+    calendarDays: calendarEntry.days || [],
+  });
+
+  if (!validation.isValid) {
+    throw new Error(`Validasi jadwal pertemuan gagal: ${validation.errors.join('; ')}`);
+  }
+
+  if (!state.semesterData.learningMeetingSchedules) {
+    state.semesterData.learningMeetingSchedules = [];
+  }
+  upsertSemesterScopedEntry(state.semesterData.learningMeetingSchedules, semesterPlanId, value);
+  saveStorageV5(state);
+  return value;
+}
+
+export function deleteLearningMeetingScheduleV5(semesterPlanId: string): void {
+  const state = loadStorageV5();
+  assertSemesterPlanAndParentExist(state, semesterPlanId);
+  if (!state.semesterData.learningMeetingSchedules) return;
+  const changed = deleteSemesterScopedEntry(state.semesterData.learningMeetingSchedules, semesterPlanId);
   if (changed) {
     saveStorageV5(state);
   }
@@ -2393,6 +2557,9 @@ function performDeleteYearHierarchyInState(
   state.semesterData.enrichment = state.semesterData.enrichment.filter((e) => !targetSemesterPlanIds.has(e.semesterPlanId));
   if (Array.isArray(state.semesterData.subjectWeeklySchedules)) {
     state.semesterData.subjectWeeklySchedules = state.semesterData.subjectWeeklySchedules.filter((e) => !targetSemesterPlanIds.has(e.semesterPlanId));
+  }
+  if (Array.isArray(state.semesterData.learningMeetingSchedules)) {
+    state.semesterData.learningMeetingSchedules = state.semesterData.learningMeetingSchedules.filter((e) => !targetSemesterPlanIds.has(e.semesterPlanId));
   }
 
   // 4. Documents cascade removal (authority: document.workspaceId)

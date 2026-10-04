@@ -1,14 +1,21 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import {
   ATPUnitMappingData,
   UnitExecutionPlanData,
   SubjectWeeklySchedule,
   AcademicCalendar,
   CalendarDay,
+  LearningMeetingScheduleData,
+  LearningMeetingScheduleEntry,
 } from '../types';
 import { resolveEffectiveSubjectSlots } from '../services/subjectScheduleService';
-import { resolveLearningMeetingSchedule } from '../services/learningMeetingScheduleService';
+import {
+  resolveLearningMeetingSchedule,
+  isLearningMeetingScheduleStale,
+  buildLearningMeetingScheduleData,
+} from '../services/learningMeetingScheduleService';
 import { resolveUnitSemesterPlacement } from '../services/unitSemesterPlanningService';
+import { getEffectiveWeeksList, normalizeCalendarDayStatus } from '../services/jpEngine';
 import {
   Calendar,
   AlertTriangle,
@@ -16,6 +23,9 @@ import {
   CheckCircle2,
   Ban,
   Layers,
+  Save,
+  Wrench,
+  AlertCircle,
 } from 'lucide-react';
 
 interface LearningMeetingSchedulePreviewProps {
@@ -28,6 +38,11 @@ interface LearningMeetingSchedulePreviewProps {
   calendar?: AcademicCalendar;
   calendarDays?: CalendarDay[];
   schoolDaysPerWeek?: number | null;
+  persistedSchedule?: LearningMeetingScheduleData;
+  onSaveLearningMeetingSchedule?: (
+    data: LearningMeetingScheduleData,
+    semesterPlanId: string
+  ) => boolean;
 }
 
 const DAY_NAMES = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
@@ -66,6 +81,11 @@ function mapExcludedReason(reason: string): string {
   }
 }
 
+interface ManualSelection {
+  date: string;
+  sessionId: string;
+}
+
 export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePreviewProps> = ({
   semesterPlanId,
   semester,
@@ -76,7 +96,14 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   calendar,
   calendarDays = [],
   schoolDaysPerWeek,
+  persistedSchedule,
+  onSaveLearningMeetingSchedule,
 }) => {
+  // Manual reconciliation draft selections: meetingId -> { date, sessionId }
+  const [manualSelections, setManualSelections] = useState<Record<string, ManualSelection>>({});
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const [saveMessage, setSaveMessage] = useState<string>('');
+
   // 1. Resolve exact subject slots using existing resolver
   const subjectSlotResult = useMemo(() => {
     return resolveEffectiveSubjectSlots({
@@ -171,6 +198,75 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
     }
     return flat;
   }, [unitExecutionPlan, semesterUnitIds, mappingUnitOrderMap, unitMap]);
+
+  // Check if persisted schedule is stale
+  const isPersistedStale = useMemo(() => {
+    if (!persistedSchedule || !mapping || !unitExecutionPlan || !schedule || !calendar || !expectedWeeklyJP) {
+      return false;
+    }
+    return isLearningMeetingScheduleStale({
+      schedule: persistedSchedule,
+      mappingUpdatedAt: mapping.updatedAt,
+      unitExecutionPlanUpdatedAt: unitExecutionPlan.updatedAt,
+      subjectWeeklyScheduleUpdatedAt: schedule.updatedAt,
+      calendarUpdatedAt: calendar.updatedAt,
+      expectedWeeklyJP,
+    });
+  }, [persistedSchedule, mapping, unitExecutionPlan, schedule, calendar, expectedWeeklyJP]);
+
+  // Initialize/restore manual overrides from non-stale persistedSchedule
+  useEffect(() => {
+    if (persistedSchedule && !isPersistedStale) {
+      const initial: Record<string, ManualSelection> = {};
+      for (const entry of persistedSchedule.entries) {
+        if (entry.mode === 'MANUAL_OVERRIDE') {
+          initial[entry.meetingId] = {
+            date: entry.date,
+            sessionId: entry.sessionId,
+          };
+        }
+      }
+      setManualSelections(initial);
+    } else {
+      setManualSelections({});
+    }
+    setSaveStatus('idle');
+    setSaveMessage('');
+  }, [persistedSchedule, isPersistedStale]);
+
+  // Candidate effective dates for manual selection
+  const effectiveLearningDates = useMemo(() => {
+    if (!calendar?.startDate || !calendar?.endDate || !calendarDays) return [];
+    const start = calendar.startDate;
+    const end = calendar.endDate;
+
+    const dates: Array<{ date: string; label: string; dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 }> = [];
+
+    for (const day of calendarDays) {
+      if (!day || !day.date) continue;
+      if (day.date < start || day.date > end) continue;
+      if (normalizeCalendarDayStatus(day.status) !== 'EFFECTIVE_LEARNING') continue;
+
+      const parts = day.date.split('-');
+      const d = new Date(parseInt(parts[0], 10), parseInt(parts[1], 10) - 1, parseInt(parts[2], 10));
+      const jsDay = d.getDay();
+      if (jsDay === 0) continue; // Sunday
+
+      dates.push({
+        date: day.date,
+        label: formatIndonesianDate(day.date),
+        dayOfWeek: jsDay as 1 | 2 | 3 | 4 | 5 | 6,
+      });
+    }
+
+    dates.sort((a, b) => a.date.localeCompare(b.date));
+    return dates;
+  }, [calendar?.startDate, calendar?.endDate, calendarDays]);
+
+  // Available sessions from subjectWeeklySchedule
+  const availableSessions = useMemo(() => {
+    return [...(schedule?.sessions || [])].sort((a, b) => a.order - b.order);
+  }, [schedule?.sessions]);
 
   // 1. Prerequisite check for mapping & execution plan
   if (!mapping || !unitExecutionPlan) {
@@ -325,19 +421,188 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   }
 
   // 7. When scheduleResult is valid and ready
-  const scheduledEntryMap = new Map(
-    (scheduleResult.scheduledEntries || []).map((e) => [e.meetingId, e])
-  );
+  const effectiveWeeks = getEffectiveWeeksList(calendar, calendarDays);
+
+  // Validate manual overrides: check collisions & chronology
+  const autoDateSessions = new Set<string>();
+  (scheduleResult.scheduledEntries || []).forEach((e) => {
+    autoDateSessions.add(`${e.date}:${e.sessionId}`);
+  });
+
+  const canonicalOrderMap = new Map<string, number>();
+  semesterMeetings.forEach((m, idx) => canonicalOrderMap.set(m.meetingId, idx));
+
+  // Compute resolved manual entries
+  const manualEntries: LearningMeetingScheduleEntry[] = [];
+  const manualErrors: Record<string, string> = {};
+  const manualDateSessions = new Set<string>();
+
+  for (const mId of scheduleResult.unscheduledMeetingIds) {
+    const sel = manualSelections[mId];
+    if (!sel || !sel.date || !sel.sessionId) continue;
+
+    const dateSessionKey = `${sel.date}:${sel.sessionId}`;
+    if (autoDateSessions.has(dateSessionKey)) {
+      manualErrors[mId] = `Konflik: Tanggal dan sesi ${dateSessionKey} sudah dipakai oleh jadwal otomatis.`;
+      continue;
+    }
+    if (manualDateSessions.has(dateSessionKey)) {
+      manualErrors[mId] = `Konflik: Tanggal dan sesi ${dateSessionKey} sudah dipilih oleh Pertemuan lain.`;
+      continue;
+    }
+    manualDateSessions.add(dateSessionKey);
+
+    const sessionObj = availableSessions.find((s) => s.id === sel.sessionId);
+    if (!sessionObj) {
+      manualErrors[mId] = 'Sesi tidak valid.';
+      continue;
+    }
+
+    const dParts = sel.date.split('-');
+    const dObj = new Date(parseInt(dParts[0], 10), parseInt(dParts[1], 10) - 1, parseInt(dParts[2], 10));
+    const jsDay = dObj.getDay();
+    const wk = effectiveWeeks.find((w) => sel.date >= w.startDate && sel.date <= w.endDate);
+    const mInfo = semesterMeetings.find((m) => m.meetingId === mId);
+
+    manualEntries.push({
+      meetingId: mId,
+      unitId: mInfo?.unitId || '',
+      semesterPlanId,
+      sessionId: sel.sessionId,
+      sourceSlotId: `manual-slot:${semesterPlanId}:${mId}:${sel.date}:${sel.sessionId}`,
+      date: sel.date,
+      dayOfWeek: jsDay as 1 | 2 | 3 | 4 | 5 | 6,
+      jp: sessionObj.jp,
+      weekIndex: wk ? wk.weekIndex : 1,
+      mode: 'MANUAL_OVERRIDE',
+    });
+  }
+
+  // Combined entries (AUTO + valid MANUAL)
+  const combinedEntries = [...scheduleResult.scheduledEntries, ...manualEntries].sort((a, b) => {
+    const idxA = canonicalOrderMap.get(a.meetingId) ?? 999;
+    const idxB = canonicalOrderMap.get(b.meetingId) ?? 999;
+    return idxA - idxB;
+  });
+
+  // Verify chronology of combined entries
+  for (let i = 1; i < combinedEntries.length; i++) {
+    const prev = combinedEntries[i - 1];
+    const curr = combinedEntries[i];
+    if (curr.date < prev.date) {
+      if (curr.mode === 'MANUAL_OVERRIDE') {
+        manualErrors[curr.meetingId] = `Urutan kronologis salah: Tanggal (${formatIndonesianDate(curr.date)}) lebih awal dari Pertemuan sebelumnya (${formatIndonesianDate(prev.date)}).`;
+      }
+    }
+  }
+
+  const hasAnyManualErrors = Object.keys(manualErrors).length > 0;
+
+  // Final map of active entries for render
+  const activeEntryMap = new Map<string, LearningMeetingScheduleEntry>();
+  for (const entry of combinedEntries) {
+    if (!manualErrors[entry.meetingId]) {
+      activeEntryMap.set(entry.meetingId, entry);
+    }
+  }
 
   const totalMeetings = scheduleResult.totalMeetings;
-  const totalAvailableSlots = scheduleResult.totalAvailableSlots;
-  const totalScheduledMeetings = scheduleResult.totalScheduledMeetings;
-  const totalUnscheduledMeetings = scheduleResult.totalUnscheduledMeetings;
-  const totalActualJP = scheduleResult.totalActualJP;
+  const totalScheduledMeetings = activeEntryMap.size;
+  const totalUnscheduledMeetings = totalMeetings - totalScheduledMeetings;
+  const totalAvailableSlots = scheduleResult.totalAvailableSlots + manualEntries.length;
+  const totalActualJP = Array.from(activeEntryMap.values()).reduce((sum, e) => sum + e.jp, 0);
   const totalExcludedOccurrences = scheduleResult.totalExcludedOccurrences;
+
+  const handleDateChange = (meetingId: string, newDate: string) => {
+    setManualSelections((prev) => ({
+      ...prev,
+      [meetingId]: {
+        date: newDate,
+        sessionId: prev[meetingId]?.sessionId || availableSessions[0]?.id || '',
+      },
+    }));
+    setSaveStatus('idle');
+    setSaveMessage('');
+  };
+
+  const handleSessionChange = (meetingId: string, newSessionId: string) => {
+    setManualSelections((prev) => ({
+      ...prev,
+      [meetingId]: {
+        date: prev[meetingId]?.date || effectiveLearningDates[0]?.date || '',
+        sessionId: newSessionId,
+      },
+    }));
+    setSaveStatus('idle');
+    setSaveMessage('');
+  };
+
+  const handleSave = () => {
+    if (
+      !onSaveLearningMeetingSchedule ||
+      !schedule ||
+      !calendar ||
+      !mapping ||
+      !unitExecutionPlan ||
+      !expectedWeeklyJP ||
+      hasAnyManualErrors
+    ) {
+      return;
+    }
+
+    try {
+      const validManuals = manualEntries.filter((e) => !manualErrors[e.meetingId]);
+      const dataToSave = buildLearningMeetingScheduleData({
+        semesterPlanId,
+        semester,
+        mapping,
+        unitExecutionPlan,
+        subjectWeeklySchedule: schedule,
+        expectedWeeklyJP,
+        calendar,
+        autoResult: scheduleResult,
+        manualOverrides: validManuals,
+        persistedId: persistedSchedule?.id,
+      });
+
+      const success = onSaveLearningMeetingSchedule(dataToSave, semesterPlanId);
+      if (success) {
+        setSaveStatus('success');
+        setSaveMessage(
+          dataToSave.status === 'COMPLETE'
+            ? 'Jadwal aktual semester berhasil disimpan lengkap (COMPLETE).'
+            : 'Draf rekonsiliasi jadwal berhasil disimpan (DRAFT).'
+        );
+      } else {
+        setSaveStatus('error');
+        setSaveMessage('Gagal menyimpan jadwal pertemuan semester.');
+      }
+    } catch (err: any) {
+      setSaveStatus('error');
+      setSaveMessage(`Gagal menyimpan: ${err.message || String(err)}`);
+    }
+  };
+
+  const isCompleteStatus = totalUnscheduledMeetings === 0 && !hasAnyManualErrors;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-6">
+      {/* Stale Warning Banner */}
+      {persistedSchedule && isPersistedStale && (
+        <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-xs flex items-start gap-2.5">
+          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">
+              Jadwal tersimpan perlu disusun ulang karena sumber perencanaan berubah.
+            </p>
+            <p className="text-amber-800 mt-0.5">
+              Data kalender, jam mingguan, atau alur materi telah diperbarui. Silakan tinjau jadwal dan simpan kembali.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4">
         <div className="flex items-center gap-2">
           <Calendar className="w-5 h-5 text-indigo-600" />
@@ -399,26 +664,124 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
       </div>
 
       {/* Mismatch Diagnostics */}
-      {totalMeetings > totalAvailableSlots && (
+      {scheduleResult.totalMeetings > scheduleResult.totalAvailableSlots && (
         <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-xs flex items-start gap-2.5">
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
           <div>
             <p className="font-semibold">
-              Terdapat {totalMeetings - totalAvailableSlots} Pertemuan yang belum memperoleh slot jadwal aktual.
+              Terdapat {scheduleResult.totalMeetings - scheduleResult.totalAvailableSlots} Pertemuan yang belum memperoleh slot jadwal aktual otomatis.
             </p>
             <p className="text-amber-800 mt-0.5">
-              Pertemuan tidak dihapus atau dipindahkan otomatis.
+              Pertemuan tidak dihapus atau dipindahkan otomatis. Gunakan bagian <strong>Rekonsiliasi Jadwal</strong> di bawah untuk memilih tanggal pengganti.
             </p>
           </div>
         </div>
       )}
 
-      {totalAvailableSlots > totalMeetings && (
+      {scheduleResult.totalAvailableSlots > scheduleResult.totalMeetings && (
         <div className="p-3.5 bg-blue-50 border border-blue-200 rounded-xl text-blue-900 text-xs flex items-start gap-2.5">
           <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
           <p className="font-medium">
-            Terdapat {totalAvailableSlots - totalMeetings} slot jadwal aktual yang belum digunakan.
+            Terdapat {scheduleResult.totalAvailableSlots - scheduleResult.totalMeetings} slot jadwal aktual yang belum digunakan.
           </p>
+        </div>
+      )}
+
+      {/* Manual Reconciliation Section */}
+      {scheduleResult.totalUnscheduledMeetings > 0 && (
+        <div className="space-y-3 p-4 bg-amber-50/40 rounded-xl border border-amber-200">
+          <div className="flex items-center gap-2">
+            <Wrench className="w-4 h-4 text-amber-700" />
+            <h4 className="font-bold text-slate-800 text-xs tracking-wide uppercase">
+              Rekonsiliasi Jadwal ({scheduleResult.totalUnscheduledMeetings} Pertemuan Belum Terjadwal)
+            </h4>
+          </div>
+          <p className="text-xs text-slate-600">
+            Pilih tanggal efektif dan sesi mengajar pengganti untuk pertemuan yang belum memperoleh slot otomatis.
+          </p>
+
+          <div className="space-y-2.5">
+            {scheduleResult.unscheduledMeetingIds.map((mId) => {
+              const mInfo = semesterMeetings.find((m) => m.meetingId === mId);
+              const sel = manualSelections[mId] || { date: '', sessionId: '' };
+              const selectedSess = availableSessions.find((s) => s.id === sel.sessionId);
+              const err = manualErrors[mId];
+
+              return (
+                <div
+                  key={mId}
+                  className={`p-3 bg-white rounded-lg border text-xs space-y-2 transition-all ${
+                    err ? 'border-rose-300 ring-1 ring-rose-200' : 'border-slate-200 shadow-2xs'
+                  }`}
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                    <div>
+                      <span className="font-bold text-slate-800">{mInfo?.unitTitle}</span>
+                      <span className="text-slate-500 mx-1.5">•</span>
+                      <span className="font-semibold text-indigo-700">{mInfo?.meetingTitle}</span>
+                    </div>
+                    <span className="text-[11px] text-amber-800 bg-amber-100/70 px-2 py-0.5 rounded font-medium">
+                      Slot jadwal aktual otomatis belum tersedia
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-1 items-center">
+                    <div className="sm:col-span-6">
+                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                        Pilih Tanggal Pengganti (Hari Efektif):
+                      </label>
+                      <select
+                        value={sel.date}
+                        onChange={(e) => handleDateChange(mId, e.target.value)}
+                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded bg-white font-medium focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                      >
+                        <option value="">-- Pilih Tanggal --</option>
+                        {effectiveLearningDates.map((d) => (
+                          <option key={d.date} value={d.date}>
+                            {d.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-4">
+                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                        Pilih Sesi Mengajar:
+                      </label>
+                      <select
+                        value={sel.sessionId}
+                        onChange={(e) => handleSessionChange(mId, e.target.value)}
+                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded bg-white font-medium focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                      >
+                        <option value="">-- Pilih Sesi --</option>
+                        {availableSessions.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            Sesi {s.order} ({s.jp} JP)
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                        Alokasi JP:
+                      </label>
+                      <div className="px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded text-center font-bold text-slate-700">
+                        {selectedSess ? `${selectedSess.jp} JP` : '-'}
+                      </div>
+                    </div>
+                  </div>
+
+                  {err && (
+                    <div className="text-[11px] text-rose-700 flex items-center gap-1.5 pt-0.5">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{err}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -436,7 +799,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
                 <th className="py-2.5 px-3 min-w-[160px]">Pertemuan</th>
                 <th className="py-2.5 px-3 min-w-[180px]">Hari/Tanggal</th>
                 <th className="py-2.5 px-3 w-20 text-center">JP</th>
-                <th className="py-2.5 px-3 w-36 text-center">Status</th>
+                <th className="py-2.5 px-3 w-40 text-center">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -448,8 +811,9 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
                 </tr>
               ) : (
                 semesterMeetings.map((m, idx) => {
-                  const entry = scheduledEntryMap.get(m.meetingId);
+                  const entry = activeEntryMap.get(m.meetingId);
                   const isScheduled = Boolean(entry);
+                  const isManual = entry?.mode === 'MANUAL_OVERRIDE';
 
                   return (
                     <tr
@@ -481,10 +845,17 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
                       </td>
                       <td className="py-2.5 px-3 text-center whitespace-nowrap">
                         {isScheduled ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-full font-semibold text-[11px]">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            Terjadwal
-                          </span>
+                          isManual ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-blue-100 text-blue-800 border border-blue-200 rounded-full font-semibold text-[11px]">
+                              <CheckCircle2 className="w-3 h-3 text-blue-600" />
+                              Terjadwal (Manual)
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-full font-semibold text-[11px]">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              Terjadwal
+                            </span>
+                          )
                         ) : (
                           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-100 text-amber-800 border border-amber-200 rounded-full font-semibold text-[11px]">
                             <AlertTriangle className="w-3 h-3 text-amber-600" />
@@ -502,7 +873,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
       </div>
 
       {/* Excluded Occurrences Section */}
-      {scheduleResult?.excludedOccurrences && scheduleResult.excludedOccurrences.length > 0 && (
+      {scheduleResult.excludedOccurrences && scheduleResult.excludedOccurrences.length > 0 && (
         <div className="space-y-2 pt-2 border-t border-slate-100">
           <div className="flex items-center gap-2">
             <Ban className="w-4 h-4 text-rose-600" />
@@ -546,6 +917,49 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Save Action Bar */}
+      {onSaveLearningMeetingSchedule && (
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-4 border-t border-slate-200">
+          <div className="text-xs">
+            {saveStatus === 'success' && (
+              <span className="text-emerald-700 font-semibold flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                {saveMessage}
+              </span>
+            )}
+            {saveStatus === 'error' && (
+              <span className="text-rose-700 font-semibold flex items-center gap-1.5">
+                <AlertCircle className="w-4 h-4 text-rose-600" />
+                {saveMessage}
+              </span>
+            )}
+            {saveStatus === 'idle' && (
+              <span className="text-slate-500">
+                {isCompleteStatus
+                  ? 'Seluruh pertemuan telah memiliki slot jadwal aktual (Status: COMPLETE).'
+                  : `Terdapat ${totalUnscheduledMeetings} pertemuan belum terjadwal (Status: DRAFT).`}
+              </span>
+            )}
+          </div>
+
+          <button
+            type="button"
+            disabled={hasAnyManualErrors}
+            onClick={handleSave}
+            className={`px-5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition ${
+              hasAnyManualErrors
+                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                : isCompleteStatus
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs cursor-pointer'
+                : 'bg-blue-900 hover:bg-blue-950 text-white shadow-xs cursor-pointer'
+            }`}
+          >
+            <Save className="w-4 h-4" />
+            {isCompleteStatus ? 'Simpan Jadwal Aktual' : 'Simpan Draf Rekonsiliasi'}
+          </button>
         </div>
       )}
     </div>
