@@ -518,7 +518,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
       ...prev,
       [meetingId]: {
         date: newDate,
-        sessionId: prev[meetingId]?.sessionId || availableSessions[0]?.id || '',
+        sessionId: prev[meetingId]?.sessionId || '',
       },
     }));
     setSaveStatus('idle');
@@ -529,7 +529,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
     setManualSelections((prev) => ({
       ...prev,
       [meetingId]: {
-        date: prev[meetingId]?.date || effectiveLearningDates[0]?.date || '',
+        date: prev[meetingId]?.date || '',
         sessionId: newSessionId,
       },
     }));

@@ -1739,10 +1739,10 @@ export function saveLearningMeetingScheduleV5(
     if (typeof e.dayOfWeek !== 'number' || e.dayOfWeek < 1 || e.dayOfWeek > 6) {
       throw new Error(`dayOfWeek tidak valid: ${e.dayOfWeek}`);
     }
-    if (typeof e.jp !== 'number' || e.jp <= 0) {
+    if (typeof e.jp !== 'number' || !Number.isInteger(e.jp) || e.jp <= 0) {
       throw new Error(`JP harus integer positif: ${e.jp}`);
     }
-    if (typeof e.weekIndex !== 'number' || e.weekIndex <= 0) {
+    if (typeof e.weekIndex !== 'number' || !Number.isInteger(e.weekIndex) || e.weekIndex <= 0) {
       throw new Error(`weekIndex harus integer positif: ${e.weekIndex}`);
     }
     if (e.mode !== 'AUTO' && e.mode !== 'MANUAL_OVERRIDE') {
@@ -1752,6 +1752,20 @@ export function saveLearningMeetingScheduleV5(
 
   const state = loadStorageV5();
   const { semesterPlan, yearPlan } = assertSemesterPlanAndParentExist(state, semesterPlanId);
+
+  // Authority check: current weekly JP from SemesterJPSetting
+  const currentSemesterJPSetting = (state.semesterJPSettings || []).find(
+    (entry) => entry.semesterPlanId === semesterPlanId
+  )?.value;
+
+  const currentWeeklyJP = currentSemesterJPSetting?.actualScheduledWeeklyJP;
+  if (
+    typeof currentWeeklyJP !== 'number' ||
+    !Number.isFinite(currentWeeklyJP) ||
+    currentWeeklyJP <= 0
+  ) {
+    throw new Error('JP mingguan semester (SemesterJPSetting) belum valid atau tidak tersedia.');
+  }
 
   // Lineage resolution & validation
   const mapping = (state.annualData.atpUnitMappings || []).find((entry) => entry.yearPlanId === yearPlan.id)?.value;
@@ -1780,7 +1794,7 @@ export function saveLearningMeetingScheduleV5(
     mapping,
     unitExecutionPlan,
     subjectWeeklySchedule,
-    expectedWeeklyJP: value.basedOnWeeklyJP,
+    expectedWeeklyJP: currentWeeklyJP,
     calendar: calendarEntry.calendar,
     calendarDays: calendarEntry.days || [],
   });
