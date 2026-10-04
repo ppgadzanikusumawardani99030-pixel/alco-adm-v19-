@@ -15,6 +15,7 @@ import {
   SubjectWeeklySchedule,
 } from '../../types';
 import { SubjectWeeklyScheduleManager } from '../SubjectWeeklyScheduleManager';
+import { SubjectWeekdayAllocationEditor } from '../SubjectWeekdayAllocationEditor';
 import {
   calculateEffectiveDays,
   calculateEffectiveWeeks,
@@ -2522,8 +2523,22 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
       {afterTimeSetup}
 
       {viewMode !== 'TIME_SETUP' && (
-        <div id="annual-section-time-allocation" className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4 mb-4">
+        <div className="space-y-6">
+          {!isK13Curriculum && viewMode === 'ALLOCATION' && (
+            <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-xs">
+              <SubjectWeekdayAllocationEditor
+                semesterPlanId={effectiveSemesterPlanId}
+                schedule={subjectWeeklySchedule}
+                schoolDaysPerWeek={calendar?.schoolDaysPerWeek ?? null}
+                onSaveSubjectWeeklySchedule={(sched, spId) => {
+                  onSaveSubjectWeeklySchedule?.(sched, spId);
+                }}
+              />
+            </div>
+          )}
+
+          <div id="annual-section-time-allocation" className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4 mb-4">
           <div className="flex items-center gap-2">
             <Layers className="w-5 h-5 text-indigo-600" />
             <div>
