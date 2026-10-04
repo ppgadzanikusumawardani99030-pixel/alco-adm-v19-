@@ -1750,6 +1750,52 @@ export interface WorkflowStepInfo {
   description: string;
 }
 
+export type LearningMeetingScheduleEntryMode =
+  | 'AUTO'
+  | 'MANUAL_OVERRIDE';
+
+export interface LearningMeetingScheduleEntry {
+  meetingId: string;
+  unitId: string;
+
+  semesterPlanId: string;
+
+  sessionId: string;
+  sourceSlotId: string;
+
+  date: string;
+  dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6;
+  jp: number;
+
+  weekIndex: number;
+
+  mode: LearningMeetingScheduleEntryMode;
+}
+
+export interface LearningMeetingScheduleResult {
+  totalMeetings: number;
+  totalAvailableSlots: number;
+  totalScheduledMeetings: number;
+  totalUnscheduledMeetings: number;
+  totalActualJP: number;
+  totalExcludedOccurrences: number;
+
+  scheduledEntries: LearningMeetingScheduleEntry[];
+  unscheduledMeetingIds: string[];
+  excludedOccurrences: {
+    sessionId: string;
+    date: string;
+    dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6;
+    jp: number;
+    reason: string;
+  }[];
+  errors: string[];
+  warnings: string[];
+  isReady: boolean;
+  isComplete: boolean;
+  isValid: boolean;
+}
+
 export * from './assessmentGeneration';
 export * from './assessmentValidation';
 export * from './assessmentRegeneration';

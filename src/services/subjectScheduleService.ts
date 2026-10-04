@@ -25,6 +25,7 @@ export interface EffectiveSubjectSlot {
   weekIndex: number;
   month: number;
   year: number;
+  sessionOrder?: number;
 }
 
 export interface ExcludedSubjectOccurrence {
@@ -338,6 +339,7 @@ export function resolveEffectiveSubjectSlots(params: {
           weekIndex,
           month,
           year,
+          sessionOrder: s.order,
         });
       }
     } else if (
