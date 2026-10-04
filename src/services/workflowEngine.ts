@@ -26,10 +26,11 @@ import { resolveCurriculumContext, resolveSubjectInput } from '../data/curriculu
 import { ResolvedCurriculumContext } from '../data/curriculum/types';
 import { getPhaseFromGrade } from '../data/curriculumDefaults';
 import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences } from './cpWorkflowService';
-import { loadStorageV5 } from './storageV5';
+import { loadStorageV5, getSemesterDataV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from './unitSemesterPlanningService';
+import { resolveEffectiveSubjectSlots } from './subjectScheduleService';
 
 export type WorkflowStatus = 'BLOCKED' | 'READY' | 'IN_PROGRESS' | 'COMPLETE' | 'STALE';
 
@@ -826,12 +827,48 @@ export function validateWorkflowDependencies(
         placementReason = 'Tetapkan pembagian Unit/Bab ke Semester 1 dan Semester 2.';
       }
 
-      // 3. Check Calendar Capacity & Time Allocation
+      // 3. Check Subject Weekly Schedule completeness (Merdeka Only)
+      let isSubjectScheduleReady = true;
+      let subjectScheduleReason: string | undefined = undefined;
+
+      if (curriculumType === 'KURIKULUM_MERDEKA' && s1 && s2) {
+        const s1Data = getSemesterDataV5(s1.id);
+        const s2Data = getSemesterDataV5(s2.id);
+        const s1Cap = resolveSemesterCapacityV5(s1.id, v5State);
+        const s2Cap = resolveSemesterCapacityV5(s2.id, v5State);
+
+        const s1Slots = s1Data.academicCalendar && s1Data.subjectWeeklySchedule && s1Cap?.actualScheduledWeeklyJP
+          ? resolveEffectiveSubjectSlots({
+              semesterPlanId: s1.id,
+              schedule: s1Data.subjectWeeklySchedule,
+              expectedWeeklyJP: s1Cap.actualScheduledWeeklyJP,
+              calendar: s1Data.academicCalendar.calendar,
+              calendarDays: s1Data.academicCalendar.days,
+              schoolDaysPerWeek: s1Data.academicCalendar.calendar.schoolDaysPerWeek,
+            })
+          : { isReady: false };
+
+        const s2Slots = s2Data.academicCalendar && s2Data.subjectWeeklySchedule && s2Cap?.actualScheduledWeeklyJP
+          ? resolveEffectiveSubjectSlots({
+              semesterPlanId: s2.id,
+              schedule: s2Data.subjectWeeklySchedule,
+              expectedWeeklyJP: s2Cap.actualScheduledWeeklyJP,
+              calendar: s2Data.academicCalendar.calendar,
+              calendarDays: s2Data.academicCalendar.days,
+              schoolDaysPerWeek: s2Data.academicCalendar.calendar.schoolDaysPerWeek,
+            })
+          : { isReady: false };
+
+        isSubjectScheduleReady = Boolean(s1Slots.isReady && s2Slots.isReady);
+        if (!isSubjectScheduleReady) {
+          subjectScheduleReason = 'Tetapkan pola jadwal mapel dan pastikan slot Pertemuan efektif tersedia pada Semester 1 dan Semester 2.';
+        }
+      }
+
+      // 4. Check Calendar Capacity & Time Allocation
       const sPlans = currentYearPlanId
         ? v5State.semesterPlans.filter((sp) => sp.yearPlanId === currentYearPlanId)
         : [];
-      const s1 = sPlans.find((sp) => sp.semester === 1);
-      const s2 = sPlans.find((sp) => sp.semester === 2);
 
       let isCapReady = false;
       let hasTimeAllocationsSaved = false;
@@ -866,7 +903,7 @@ export function validateWorkflowDependencies(
         }
       }
 
-      isAnnualPlanningComplete = isMeetingComplete && isPlacementComplete && isCapReady && hasTimeAllocationsSaved;
+      isAnnualPlanningComplete = isMeetingComplete && isPlacementComplete && isCapReady && isSubjectScheduleReady && hasTimeAllocationsSaved;
 
       if (!isMappingComplete) {
         annualPlanningReason = 'Memerlukan penyelesaian Pemetaan Unit/Bab & Lingkup Materi (07) terlebih dahulu';
@@ -876,6 +913,8 @@ export function validateWorkflowDependencies(
         annualPlanningReason = placementReason;
       } else if (!isCapReady) {
         annualPlanningReason = calendarReason;
+      } else if (!isSubjectScheduleReady) {
+        annualPlanningReason = subjectScheduleReason;
       } else if (!hasTimeAllocationsSaved) {
         annualPlanningReason = allocationReason;
       }

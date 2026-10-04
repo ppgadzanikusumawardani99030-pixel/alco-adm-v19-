@@ -28,6 +28,7 @@ import {
   ATPUnitMappingData,
   UnitExecutionPlanData,
   K13Analysis,
+  SubjectWeeklySchedule,
 } from '../types';
 import { getSemesterDataV5, loadStorageV5 } from '../services/storageV5';
 import { resolveSemesterCapacityV5, getSubjectJP } from '../services/jpEngine';
@@ -39,6 +40,7 @@ import {
   createEmptyUnitExecutionPlanData,
 } from '../services/unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from '../services/unitSemesterPlanningService';
+import { resolveEffectiveSubjectSlots } from '../services/subjectScheduleService';
 
 export interface AnnualPlanningManagerProps {
   school: SchoolData;
@@ -55,6 +57,7 @@ export interface AnnualPlanningManagerProps {
   onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => boolean;
   onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => boolean;
   onSaveUnitExecutionPlan?: (plan: UnitExecutionPlanData) => boolean;
+  onSaveSubjectWeeklySchedule?: (schedule: SubjectWeeklySchedule, explicitSemesterPlanId?: string) => boolean;
   onNextStep: () => void;
   onBackToMapping: () => void;
 }
@@ -74,6 +77,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
   onSaveSemesterJPSetting,
   onSaveTimeAllocations,
   onSaveUnitExecutionPlan,
+  onSaveSubjectWeeklySchedule,
   onNextStep,
   onBackToMapping,
 }) => {
@@ -207,11 +211,43 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     placementValidation.isComplete
   );
 
+  const s1SubjectSlots = useMemo(() => {
+    if (!sem1Plan || !s1Data?.academicCalendar || !s1Data?.subjectWeeklySchedule || !s1Capacity?.actualScheduledWeeklyJP) {
+      return { isReady: false, totalMeetingSlots: 0, totalJP: 0 };
+    }
+    return resolveEffectiveSubjectSlots({
+      semesterPlanId: sem1Plan.id,
+      schedule: s1Data.subjectWeeklySchedule,
+      expectedWeeklyJP: s1Capacity.actualScheduledWeeklyJP,
+      calendar: s1Data.academicCalendar.calendar,
+      calendarDays: s1Data.academicCalendar.days,
+      schoolDaysPerWeek: s1Data.academicCalendar.calendar.schoolDaysPerWeek,
+    });
+  }, [sem1Plan, s1Data, s1Capacity]);
+
+  const s2SubjectSlots = useMemo(() => {
+    if (!sem2Plan || !s2Data?.academicCalendar || !s2Data?.subjectWeeklySchedule || !s2Capacity?.actualScheduledWeeklyJP) {
+      return { isReady: false, totalMeetingSlots: 0, totalJP: 0 };
+    }
+    return resolveEffectiveSubjectSlots({
+      semesterPlanId: sem2Plan.id,
+      schedule: s2Data.subjectWeeklySchedule,
+      expectedWeeklyJP: s2Capacity.actualScheduledWeeklyJP,
+      calendar: s2Data.academicCalendar.calendar,
+      calendarDays: s2Data.academicCalendar.days,
+      schoolDaysPerWeek: s2Data.academicCalendar.calendar.schoolDaysPerWeek,
+    });
+  }, [sem2Plan, s2Data, s2Capacity]);
+
+  const isK13Curriculum = academicSetting.curriculumType === 'K13' || academicSetting.curriculum?.includes('2013');
+  const subjectScheduleReady = Boolean(isK13Curriculum || (s1SubjectSlots?.isReady && s2SubjectSlots?.isReady));
+
   const isAnnualReady = Boolean(
     meetingReady &&
     placementReady &&
     s1Capacity?.isReady &&
     s2Capacity?.isReady &&
+    subjectScheduleReady &&
     hasS1SavedAllocation &&
     hasS2SavedAllocation
   );
@@ -227,11 +263,14 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     if (!s1Capacity?.isReady || !s2Capacity?.isReady) {
       return 'Lengkapi Kalender Pendidikan dan JP Mingguan Semester 1 dan Semester 2.';
     }
+    if (!isK13Curriculum && !subjectScheduleReady) {
+      return 'Tetapkan pola jadwal mapel pada Semester 1 dan Semester 2 agar jumlah Pertemuan efektif dapat dihitung dari kalender.';
+    }
     if (!hasS1SavedAllocation || !hasS2SavedAllocation) {
       return 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
     }
     return 'Lengkapi perencanaan tahunan S1 & S2 terlebih dahulu.';
-  }, [isAnnualReady, meetingReady, placementReady, s1Capacity?.isReady, s2Capacity?.isReady, hasS1SavedAllocation, hasS2SavedAllocation]);
+  }, [isAnnualReady, meetingReady, placementReady, s1Capacity?.isReady, s2Capacity?.isReady, subjectScheduleReady, hasS1SavedAllocation, hasS2SavedAllocation, isK13Curriculum]);
 
   return (
     <div className="space-y-6">
@@ -328,7 +367,11 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
             <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
               <div className="text-[10px] text-slate-500 font-medium">JP Aktual • Tersedia</div>
               <div className="font-bold text-blue-900 mt-0.5">
-                {s1Capacity?.actualScheduledWeeklyJP ?? '-'} JP/mgg • {s1Capacity?.availableJP ?? '-'} Total JP
+                {!isK13Curriculum && s1SubjectSlots.isReady ? (
+                  <span>{s1SubjectSlots.totalMeetingSlots} Pertemuan • {s1SubjectSlots.totalJP} JP Aktual</span>
+                ) : (
+                  <span>{s1Capacity?.actualScheduledWeeklyJP ?? '-'} JP/mgg • {s1Capacity?.availableJP ?? '-'} Total JP</span>
+                )}
               </div>
             </div>
           </div>
@@ -369,7 +412,11 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
             <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
               <div className="text-[10px] text-slate-500 font-medium">JP Aktual • Tersedia</div>
               <div className="font-bold text-blue-900 mt-0.5">
-                {s2Capacity?.actualScheduledWeeklyJP ?? '-'} JP/mgg • {s2Capacity?.availableJP ?? '-'} Total JP
+                {!isK13Curriculum && s2SubjectSlots.isReady ? (
+                  <span>{s2SubjectSlots.totalMeetingSlots} Pertemuan • {s2SubjectSlots.totalJP} JP Aktual</span>
+                ) : (
+                  <span>{s2Capacity?.actualScheduledWeeklyJP ?? '-'} JP/mgg • {s2Capacity?.availableJP ?? '-'} Total JP</span>
+                )}
               </div>
             </div>
           </div>
@@ -391,7 +438,11 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
             <div className="bg-slate-800/90 p-2 rounded-xl border border-slate-700/60">
               <div className="text-[10px] text-slate-400 font-medium">Total JP Efektif (S1+S2)</div>
               <div className="font-bold text-white mt-0.5">
-                {totalAnnualAvailableJP !== null ? `${totalAnnualAvailableJP} JP` : 'Belum Lengkap'}
+                {!isK13Curriculum && s1SubjectSlots.isReady && s2SubjectSlots.isReady ? (
+                  <span>{s1SubjectSlots.totalJP + s2SubjectSlots.totalJP} JP Aktual ({s1SubjectSlots.totalMeetingSlots + s2SubjectSlots.totalMeetingSlots} Pertemuan)</span>
+                ) : (
+                  <span>{totalAnnualAvailableJP !== null ? `${totalAnnualAvailableJP} JP` : 'Belum Lengkap'}</span>
+                )}
               </div>
             </div>
             <div className="bg-slate-800/90 p-2 rounded-xl border border-slate-700/60">
@@ -452,10 +503,12 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
             calendarDays={activeSelectedData?.academicCalendar?.days || []}
             timeAllocations={activeSelectedData?.timeAllocation || []}
             semesterJPSetting={activeSelectedData?.semesterJPSetting}
+            subjectWeeklySchedule={activeSelectedData?.subjectWeeklySchedule}
             explicitSemesterPlanId={activeSelectedPlan.id}
             onSaveCalendar={onSaveCalendar}
             onSaveSemesterJPSetting={onSaveSemesterJPSetting}
             onSaveTimeAllocations={onSaveTimeAllocations}
+            onSaveSubjectWeeklySchedule={onSaveSubjectWeeklySchedule}
           />
         </div>
       )}

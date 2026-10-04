@@ -128,6 +128,9 @@ export function getRuntimeContextV5(): RuntimeContextV5 {
       timeAllocation: state.semesterData.timeAllocation.find(
         (e) => e.semesterPlanId === semesterPlanId
       )?.value,
+      subjectWeeklySchedule: state.semesterData.subjectWeeklySchedules?.find(
+        (e) => e.semesterPlanId === semesterPlanId
+      )?.value,
       learningPlan: state.semesterData.learningPlan.find(
         (e) => e.semesterPlanId === semesterPlanId
       )?.value,

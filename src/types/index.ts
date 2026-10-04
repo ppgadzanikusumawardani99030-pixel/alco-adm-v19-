@@ -80,6 +80,22 @@ export interface SemesterJPSetting {
     | 'UNRESOLVED';
 }
 
+export type SubjectScheduleDay = 1 | 2 | 3 | 4 | 5 | 6;
+
+export interface SubjectWeeklyScheduleSession {
+  id: string;
+  dayOfWeek: SubjectScheduleDay;
+  jp: number;
+  order: number;
+}
+
+export interface SubjectWeeklySchedule {
+  semesterPlanId: string;
+  sessions: SubjectWeeklyScheduleSession[];
+  basedOnWeeklyJP: number;
+  updatedAt: string;
+}
+
 export type { AssessmentPackageValidationContext } from '../services/assessmentPackageService';
 
 export * from './jpEngine';

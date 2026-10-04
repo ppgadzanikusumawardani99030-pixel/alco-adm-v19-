@@ -32,6 +32,7 @@ import {
   SemesterJPSetting,
   AnnualJPReference,
   UnitExecutionPlanData,
+  SubjectWeeklySchedule,
 } from './types';
 import { getSubjectJP } from './services/jpEngine';
 import {
@@ -64,6 +65,7 @@ import {
   saveSemesterJPSettingV5,
   deleteSemesterJPSettingV5,
   saveTimeAllocationV5,
+  saveSubjectWeeklyScheduleV5,
   saveLearningPlansV5,
   saveAssessmentCriteriaV5,
   saveAssessmentPlansV5,
@@ -79,6 +81,7 @@ import {
   getLocalTodayDocumentDate,
   isValidDocumentDate,
 } from './services/documentDateService';
+import { validateSubjectWeeklySchedule } from './services/subjectScheduleService';
 import { Header } from './components/Header';
 import { WorkflowStepper } from './components/WorkflowStepper';
 import { ProfileManager } from './components/ProfileManager';
@@ -1022,6 +1025,40 @@ export function App() {
       return false;
     }
   };
+
+  const handleSaveSubjectWeeklySchedule = useCallback((schedule: SubjectWeeklySchedule, explicitSemesterPlanId?: string): boolean => {
+    const targetSemesterPlanId = explicitSemesterPlanId || activeSemesterPlan?.id;
+    if (!targetSemesterPlanId) {
+      setAppNotice({
+        type: 'error',
+        message: 'Pilih Semester aktif atau tentukan target semester sebelum menyimpan pola jadwal.',
+      });
+      return false;
+    }
+    try {
+      const semData = getSemesterDataV5(targetSemesterPlanId);
+      const sCap = resolveSemesterCapacityV5(targetSemesterPlanId, v5State);
+      const expectedJP = sCap?.actualScheduledWeeklyJP ?? null;
+      const schoolDays = semData.academicCalendar?.calendar?.schoolDaysPerWeek ?? 5;
+
+      const val = validateSubjectWeeklySchedule(schedule, expectedJP, schoolDays);
+      if (!val.isValid || !val.isComplete) {
+        setAppNotice({ type: 'error', message: 'Pola jadwal mapel tidak valid atau belum lengkap sesuai JP mingguan.' });
+        return false;
+      }
+
+      saveSubjectWeeklyScheduleV5(targetSemesterPlanId, schedule);
+      refreshV5();
+      return true;
+    } catch (err: any) {
+      setAppNotice({
+        type: 'error',
+        message: err instanceof Error ? err.message : 'Gagal menyimpan pola jadwal mapel.',
+      });
+      return false;
+    }
+  }, [activeSemesterPlan?.id, v5State, refreshV5]);
+
   const handleSaveStudents = (stdList: Student[]) => {
     if (!activeSemesterPlan) {
       setAppNotice({
@@ -1572,6 +1609,7 @@ export function App() {
               onSaveSemesterJPSetting={handleSaveSemesterJPSetting}
               onSaveTimeAllocations={handleSaveTimeAllocations}
               onSaveUnitExecutionPlan={handleSaveUnitExecutionPlan}
+              onSaveSubjectWeeklySchedule={handleSaveSubjectWeeklySchedule}
               onNextStep={() => setCurrentStep('semester')}
               onBackToMapping={() => setCurrentStep('atp-mapping')}
             />

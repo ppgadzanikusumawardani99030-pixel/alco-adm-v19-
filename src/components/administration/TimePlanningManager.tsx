@@ -12,7 +12,9 @@ import {
   CalendarSourceType,
   CalendarWorkflowStatus,
   CalendarResolutionStatus,
+  SubjectWeeklySchedule,
 } from '../../types';
+import { SubjectWeeklyScheduleManager } from '../SubjectWeeklyScheduleManager';
 import {
   calculateEffectiveDays,
   calculateEffectiveWeeks,
@@ -97,10 +99,12 @@ export interface TimePlanningManagerProps {
   calendarDays: CalendarDay[];
   timeAllocations: TimeAllocation[];
   semesterJPSetting?: SemesterJPSetting;
+  subjectWeeklySchedule?: SubjectWeeklySchedule;
   explicitSemesterPlanId?: string;
   onSaveCalendar: (calendar: AcademicCalendar, days: CalendarDay[], explicitSemesterPlanId?: string) => boolean;
   onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => boolean;
   onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => boolean;
+  onSaveSubjectWeeklySchedule?: (schedule: SubjectWeeklySchedule, explicitSemesterPlanId?: string) => boolean;
 }
 
 export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
@@ -113,10 +117,12 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   calendarDays = [],
   timeAllocations = [],
   semesterJPSetting,
+  subjectWeeklySchedule,
   explicitSemesterPlanId,
   onSaveCalendar,
   onSaveSemesterJPSetting,
   onSaveTimeAllocations,
+  onSaveSubjectWeeklySchedule,
 }) => {
   const isK13Curriculum =
     academicSetting.curriculumType === 'K13' || academicSetting.curriculum?.includes('2013');
@@ -2491,6 +2497,19 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Subject Weekly Schedule Manager for Kurikulum Merdeka */}
+      {!isK13Curriculum && (
+        <SubjectWeeklyScheduleManager
+          semesterPlanId={effectiveSemesterPlanId}
+          expectedWeeklyJP={semesterJPSetting?.actualScheduledWeeklyJP ?? null}
+          schoolDaysPerWeek={calendar?.schoolDaysPerWeek ?? 5}
+          schedule={subjectWeeklySchedule}
+          calendar={calendar}
+          calendarDays={calendarDays}
+          onSave={(sched) => onSaveSubjectWeeklySchedule ? onSaveSubjectWeeklySchedule(sched, effectiveSemesterPlanId) : false}
+        />
+      )}
 
       {/* Bottom: Weekly Time Allocations mapped to ATP / K13 */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">
