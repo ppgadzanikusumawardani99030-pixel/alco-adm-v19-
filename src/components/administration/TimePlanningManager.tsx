@@ -908,15 +908,15 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
     setDays(generatedDays);
     setCalendarDraftDirty(true);
 
-    if (!onlineDiscovery || onlineDiscovery.sourceLevel === 'NATIONAL') {
+    if (workflowStatus !== 'MANUAL_OVERRIDE') {
       setWorkflowStatus('REVIEWED');
-      setResolutionStatus('PARTIALLY_RESOLVED');
+    }
+
+    if (!onlineDiscovery || onlineDiscovery.sourceLevel === 'NATIONAL') {
       setResolutionMessage(
         'Kalender kerja berhasil dibuat dari Default Perencanaan 2026/2027 dan Acuan Nasional. Silakan sesuaikan jika sekolah memiliki Kalender Pendidikan daerah yang lebih spesifik.'
       );
     } else {
-      setWorkflowStatus('REVIEWED');
-      setResolutionStatus('RESOLVED');
       setResolutionMessage('Kalender kerja berhasil dibuat dari sumber terverifikasi.');
     }
 

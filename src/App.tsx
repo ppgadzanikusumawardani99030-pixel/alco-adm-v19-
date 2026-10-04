@@ -472,6 +472,10 @@ export function App() {
         ? annualJPRef.referenceWeeklyEquivalentJP
         : undefined;
 
+    const weeklyJPSource =
+      annualJPRef?.weeklyJPSource ??
+      (weeklyJP !== undefined ? 'LEGACY_VALUE' : 'UNVERIFIED');
+
     return {
       id: activeYearPlan.id,
       profileId: activeYearPlan.profileId,
@@ -485,6 +489,8 @@ export function App() {
       phase: activeYearPlan.phase || '',
       subject: activeYearPlan.subject,
       totalHoursPerWeek: weeklyJP,
+      hoursSourceType: weeklyJPSource,
+      isHoursOverridden: weeklyJPSource === 'USER_OVERRIDE',
       regulationReference: annualJPRef?.regulationReference,
       updatedAt: activeYearPlan.updatedAt,
     };
@@ -508,6 +514,10 @@ export function App() {
         ? annualJPRef.referenceWeeklyEquivalentJP
         : undefined;
 
+    const weeklyJPSource =
+      annualJPRef?.weeklyJPSource ??
+      (weeklyJP !== undefined ? 'LEGACY_VALUE' : 'UNVERIFIED');
+
     return {
       id: activeSemesterPlan.id,
       profileId: activeYearPlan.profileId,
@@ -523,6 +533,8 @@ export function App() {
       phase: activeYearPlan.phase || '',
       subject: activeYearPlan.subject,
       totalHoursPerWeek: weeklyJP,
+      hoursSourceType: weeklyJPSource,
+      isHoursOverridden: weeklyJPSource === 'USER_OVERRIDE',
       regulationReference: annualJPRef?.regulationReference,
       updatedAt: activeSemesterPlan.updatedAt,
     };
@@ -641,9 +653,15 @@ export function App() {
           ? rawWeeklyVal
           : null;
 
+      const resolvedWeeklyJPSource =
+        confirmedWeeklyJP === null
+          ? 'UNVERIFIED'
+          : setting.hoursSourceType || 'LEGACY_VALUE';
+
       const annualJPRef: AnnualJPReference = {
         officialAnnualJP: officialJpInfo.annualJP ?? null,
         referenceWeeklyEquivalentJP: confirmedWeeklyJP,
+        weeklyJPSource: resolvedWeeklyJPSource,
         regulationReference: setting.regulationReference || officialJpInfo.regulation || undefined,
       };
 

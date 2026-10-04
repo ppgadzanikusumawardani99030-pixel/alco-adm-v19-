@@ -57,6 +57,12 @@ export interface AnnualJPReference {
   officialAnnualJP: number | null;
   referenceWeeklyEquivalentJP?: number | null;
   regulationReference?: string;
+
+  weeklyJPSource?:
+    | 'OFFICIAL'
+    | 'USER_OVERRIDE'
+    | 'UNVERIFIED'
+    | 'LEGACY_VALUE';
 }
 
 /**
