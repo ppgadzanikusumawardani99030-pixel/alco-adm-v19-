@@ -118,6 +118,11 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
       ? false
       : (formData.semester || '') !== (setting.semester || '');
 
+    const isHoursSourceTypeChanged =
+      (formData.hoursSourceType || 'UNVERIFIED') !== (setting.hoursSourceType || 'UNVERIFIED');
+    const isHoursOverriddenChanged =
+      Boolean(formData.isHoursOverridden) !== Boolean(setting.isHoursOverridden);
+
     const isSettingChanged =
       (formData.curriculum || '') !== (setting.curriculum || '') ||
       (formData.academicYear || '') !== (setting.academicYear || '') ||
@@ -126,6 +131,8 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
       (formData.grade || '') !== (setting.grade || '') ||
       (formData.subject || '') !== (setting.subject || '') ||
       formData.totalHoursPerWeek !== (setting.totalHoursPerWeek ?? null) ||
+      isHoursSourceTypeChanged ||
+      isHoursOverriddenChanged ||
       (formData.phase || '') !== (derivedPhase || '');
 
     const isNameChanged = workspace ? workspaceName.trim() !== (workspace.name || '').trim() : false;
@@ -426,7 +433,9 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
                     curriculum: newCur,
                     curriculumType: getCurriculumTypeFromSetting({ curriculum: newCur }),
                     semester: isNewMerdeka ? '' : formData.semester,
-                    totalHoursPerWeek: formData.isHoursOverridden ? formData.totalHoursPerWeek : jp.weeklyJP,
+                    totalHoursPerWeek: null,
+                    isHoursOverridden: false,
+                    hoursSourceType: 'UNVERIFIED',
                     regulationReference: jp.regulationReference,
                   });
                 }}
@@ -644,7 +653,7 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
                 <div className="flex items-center gap-2">
                   {officialJpInfo.isOfficial &&
                     officialJpInfo.weeklyJP !== null &&
-                    formData.totalHoursPerWeek !== officialJpInfo.weeklyJP && (
+                    (formData.hoursSourceType !== 'OFFICIAL' || formData.totalHoursPerWeek !== officialJpInfo.weeklyJP) && (
                       <button
                         type="button"
                         onClick={handleApplyOfficialJP}
@@ -685,7 +694,7 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
 
               {/* Official Status vs Override Note */}
               <div className="text-[11px] flex flex-col gap-1 pt-0.5">
-                {officialJpInfo.isOfficial && formData.totalHoursPerWeek === officialJpInfo.weeklyJP ? (
+                {officialJpInfo.isOfficial && formData.hoursSourceType === 'OFFICIAL' && formData.totalHoursPerWeek === officialJpInfo.weeklyJP ? (
                   <div className="text-emerald-700 font-medium flex items-center gap-1">
                     <ShieldCheck className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                     <span>
@@ -693,12 +702,12 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
                       {officialJpInfo.annualJP ? `${officialJpInfo.annualJP} JP/tahun` : ''}
                     </span>
                   </div>
-                ) : officialJpInfo.isOfficial && officialJpInfo.weeklyJP !== null ? (
+                ) : formData.totalHoursPerWeek !== null ? (
                   <div className="text-amber-700 font-medium flex items-center gap-1">
                     <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
                     <span>
-                      Penyesuaian Manual (Standar Resmi: {officialJpInfo.weeklyJP} JP/minggu &bull;{' '}
-                      {officialJpInfo.regulation})
+                      Input Manual Guru ({formData.totalHoursPerWeek} JP/minggu)
+                      {officialJpInfo.isOfficial && officialJpInfo.weeklyJP !== null ? ` \u2022 Standar Resmi: ${officialJpInfo.weeklyJP} JP/minggu (${officialJpInfo.regulation})` : ''}
                     </span>
                   </div>
                 ) : (
@@ -706,7 +715,7 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
                     <Info className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                     <span>
                       {formData.subject
-                        ? 'Status: Belum diverifikasi dalam regulasi nasional'
+                        ? 'Belum diisi — Klik "Gunakan JP Resmi" atau ketik alokasi JP per minggu'
                         : 'Pilih mapel untuk melihat alokasi JP resmi'}
                     </span>
                   </div>

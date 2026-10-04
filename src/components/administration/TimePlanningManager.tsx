@@ -639,6 +639,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
           setSourceAuthority(onlineRes.selectedSource.authority);
           setSourceDocumentNumber(onlineRes.selectedSource.documentNumber || '');
           setSourceUrl(onlineRes.selectedSource.sourceUrl);
+          setDraftVerifiedAt(undefined);
 
           const projectedDays = projectNationalBaseToSemesterDraft({
             candidate: onlineRes.selectedSource,
@@ -714,7 +715,8 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
         setDays(res.days);
         setIsOverridden(false);
         setWorkflowStatus('AUTO_RESOLVED');
-        setResolutionStatus('RESOLVED');
+        setResolutionStatus(res.calendar.resolutionStatus || 'RESOLVED');
+        setDraftVerifiedAt(res.calendar.verifiedAt);
         setResolutionMessage(res.diagnostic);
 
         if (showNotification) {
@@ -755,6 +757,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
         setSourceAuthority(natCandidate.authority);
         setSourceDocumentNumber(natCandidate.documentNumber || '');
         setSourceUrl(natCandidate.sourceUrl);
+        setDraftVerifiedAt(undefined);
 
         const projectedDays = projectNationalBaseToSemesterDraft({
           candidate: natCandidate,
@@ -800,6 +803,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
     if (!targetStart || !targetEnd) {
       setWorkflowStatus('REVIEWED');
       setResolutionStatus('PARTIALLY_RESOLVED');
+      setDraftVerifiedAt(undefined);
       setResolutionMessage(`Sumber acuan ${candidate.authority} ditemukan, tetapi batas tanggal semester tidak dapat ditentukan secara terverifikasi. Silakan lengkapi tanggal secara manual.`);
       setSaveNotification(`Sumber acuan ditemukan — lengkapi tanggal Semester ${activeSem} secara manual di panel Tinjau.`);
       setTimeout(() => setSaveNotification(null), 4000);
@@ -824,11 +828,17 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
     });
     setDays(projectedDays);
 
-    const isComplete = schoolDaysPerWeek === 5 || schoolDaysPerWeek === 6;
+    const hasCompleteDates = Boolean(targetStart && targetEnd);
+    const hasSchoolDays = schoolDaysPerWeek === 5 || schoolDaysPerWeek === 6;
+    const isResolved = candidate.verificationStatus === 'VERIFIED' && hasCompleteDates && hasSchoolDays;
+
     setWorkflowStatus('REVIEWED');
-    setResolutionStatus(isComplete ? 'RESOLVED' : 'PARTIALLY_RESOLVED');
-    if ((candidate as any).verifiedAt || candidate.retrievedAt) {
-      setDraftVerifiedAt((candidate as any).verifiedAt || candidate.retrievedAt);
+    setResolutionStatus(isResolved ? 'RESOLVED' : 'PARTIALLY_RESOLVED');
+
+    if (candidate.verificationStatus === 'VERIFIED') {
+      setDraftVerifiedAt(candidate.retrievedAt);
+    } else {
+      setDraftVerifiedAt(undefined);
     }
     setCalendarDraftDirty(true);
 
