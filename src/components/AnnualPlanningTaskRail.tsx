@@ -57,10 +57,7 @@ export const AnnualPlanningTaskRail: React.FC<AnnualPlanningTaskRailProps> = ({
   onSelectTask,
 }) => {
   const completedCount = tasks.filter((task) => task.status === 'COMPLETE').length;
-  const nextTask =
-    tasks.find((task) => task.status === 'NEEDS_REVIEW') ||
-    tasks.find((task) => task.status === 'CURRENT') ||
-    tasks.find((task) => task.status !== 'COMPLETE');
+  const nextTask = tasks.find((task) => task.status !== 'COMPLETE');
 
   return (
     <>

@@ -280,12 +280,11 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
         : 'PENDING',
       hasS1SavedAllocation && hasS2SavedAllocation ? 'COMPLETE' : 'PENDING',
     ];
-    const reviewIndex = statuses.findIndex((status) => status === 'NEEDS_REVIEW');
-    const currentIndex = reviewIndex >= 0
-      ? reviewIndex
-      : statuses.findIndex((status) => status !== 'COMPLETE');
-    if (currentIndex >= 0 && statuses[currentIndex] === 'PENDING') {
-      statuses[currentIndex] = 'CURRENT';
+    const currentIndex = statuses.findIndex((status) => status !== 'COMPLETE');
+    if (currentIndex >= 0) {
+      if (statuses[currentIndex] === 'PENDING') {
+        statuses[currentIndex] = 'CURRENT';
+      }
     }
     return statuses;
   }, [
