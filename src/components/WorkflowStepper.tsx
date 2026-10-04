@@ -279,11 +279,19 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
           title: 'SEMESTER',
           sub: 'Pilih Semester Aktif',
           icon: <Calendar className="w-4 h-4" />,
-          status: hasSelectedSemester ? 'COMPLETE' : stepStates.semester.status,
-          isComplete: hasSelectedSemester ? true : stepStates.semester.isComplete,
-          isLocked: hasSelectedSemester ? false : stepStates.semester.isBlocked,
+          status: stepStates.semester.isBlocked
+            ? 'BLOCKED'
+            : hasSelectedSemester
+            ? 'COMPLETE'
+            : stepStates.semester.status,
+          isComplete: stepStates.semester.isBlocked
+            ? false
+            : hasSelectedSemester
+            ? true
+            : stepStates.semester.isComplete,
+          isLocked: stepStates.semester.isBlocked,
           isStale: stepStates.semester.isStale,
-          lockReason: hasSelectedSemester ? undefined : stepStates.semester.reason,
+          lockReason: stepStates.semester.reason,
         },
         {
           id: 'admin',

@@ -845,13 +845,17 @@ export function validateWorkflowDependencies(
     };
 
     // 6. Semester Selection step state
+    const isSemesterBlocked = !isAnnualPlanningComplete;
     stepStates.semester = {
       id: 'semester',
-      status: isATPComplete ? 'READY' : 'BLOCKED',
-      isBlocked: !isATPComplete,
+      status: isSemesterBlocked ? 'BLOCKED' : 'READY',
+      isBlocked: isSemesterBlocked,
       isComplete: false,
-      isStale: isATPStale,
-      reason: !isATPComplete ? 'Memerlukan penyusunan Alur Tujuan Pembelajaran (ATP) terlebih dahulu' : undefined,
+      isStale: isMappingStale,
+      reason: isSemesterBlocked
+        ? (annualPlanningReason || 'Memerlukan penyelesaian Perencanaan Tahunan (08) terlebih dahulu')
+        : undefined,
+      missingDependencies: isSemesterBlocked ? ['Perencanaan Tahunan (08)'] : undefined,
     };
 
     // 7. Administrasi Hub Overall Gating
