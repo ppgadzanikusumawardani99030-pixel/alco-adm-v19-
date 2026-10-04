@@ -123,8 +123,10 @@ export function validateUnitExecutionPlan(
     const seenUnitOrders = new Set<number>();
 
     for (const m of planUnit.meetings || []) {
-      // Global duplicate meeting ID
-      if (globalMeetingIds.has(m.id)) {
+      // Non-empty meeting ID check
+      if (typeof m.id !== 'string' || !m.id.trim()) {
+        errors.push(`Meeting pada Unit '${planUnit.unitId}' memiliki ID kosong.`);
+      } else if (globalMeetingIds.has(m.id)) {
         errors.push(`Terdapat duplikasi meeting ID '${m.id}' secara global`);
       } else {
         globalMeetingIds.add(m.id);

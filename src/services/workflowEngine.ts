@@ -28,6 +28,7 @@ import { getPhaseFromGrade } from '../data/curriculumDefaults';
 import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences } from './cpWorkflowService';
 import { loadStorageV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
+import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 
 export type WorkflowStatus = 'BLOCKED' | 'READY' | 'IN_PROGRESS' | 'COMPLETE' | 'STALE';
 
@@ -219,6 +220,7 @@ export function validateWorkflowDependencies(
   const tp = workspaceData.tp;
   const atp = workspaceData.atp;
   const atpUnitMapping = workspaceData.atpUnitMapping || workspaceData.activeATPUnitMapping;
+  const unitExecutionPlan = workspaceData.unitExecutionPlan || workspaceData.activeUnitExecutionPlan;
   const criteria = workspaceData.assessmentCriteria || [];
   const assessments = workspaceData.assessments || [];
   const assessmentResults = workspaceData.assessmentResults || [];
@@ -781,17 +783,51 @@ export function validateWorkflowDependencies(
     try {
       const v5State = loadStorageV5();
       const currentYearPlanId = v5State.activeYearPlanId;
+
+      // 1. Check UnitExecutionPlan completeness
+      const currentMapping = atpUnitMapping || (currentYearPlanId ? (v5State.annualData.atpUnitMappings || []).find((e) => e.yearPlanId === currentYearPlanId)?.value : undefined);
+      const currentPlan = unitExecutionPlan || (currentYearPlanId ? (v5State.annualData.unitExecutionPlans || []).find((e) => e.yearPlanId === currentYearPlanId)?.value : undefined);
+      const currentATP = atp || (currentYearPlanId ? (v5State.annualData.atp || []).find((e) => e.yearPlanId === currentYearPlanId)?.value : undefined);
+      const currentTP = tp || (currentYearPlanId ? (v5State.annualData.tp || []).find((e) => e.yearPlanId === currentYearPlanId)?.value : undefined);
+
+      let isMeetingComplete = false;
+      let meetingReason: string | undefined = undefined;
+
+      if (!currentMapping) {
+        meetingReason = 'Memerlukan Pemetaan Unit/Bab & Lingkup Materi terlebih dahulu';
+      } else if (!currentPlan) {
+        meetingReason = 'Lengkapi Struktur Pertemuan pada setiap Unit/Bab terlebih dahulu.';
+      } else {
+        const meetingVal = validateUnitExecutionPlan(currentPlan, currentMapping, currentATP, currentTP);
+        if (meetingVal.isStale) {
+          meetingReason = 'Struktur Pertemuan stale relatif terhadap Pemetaan Unit/Bab.';
+        } else if (!meetingVal.isValid) {
+          meetingReason = 'Struktur Pertemuan tidak valid.';
+        } else if (!meetingVal.isComplete) {
+          meetingReason = 'Lengkapi Struktur Pertemuan pada setiap Unit/Bab terlebih dahulu.';
+        } else {
+          isMeetingComplete = true;
+        }
+      }
+
+      // 2. Check Calendar Capacity & Time Allocation
       const sPlans = currentYearPlanId
         ? v5State.semesterPlans.filter((sp) => sp.yearPlanId === currentYearPlanId)
         : [];
       const s1 = sPlans.find((sp) => sp.semester === 1);
       const s2 = sPlans.find((sp) => sp.semester === 2);
+
+      let isCapReady = false;
+      let hasTimeAllocationsSaved = false;
+      let calendarReason: string | undefined = undefined;
+      let allocationReason: string | undefined = undefined;
+
       if (s1 && s2) {
         const s1Cap = resolveSemesterCapacityV5(s1.id, v5State);
         const s2Cap = resolveSemesterCapacityV5(s2.id, v5State);
         const s1Allocations = v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s1.id)?.value || [];
         const s2Allocations = v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s2.id)?.value || [];
-        const isCapReady = Boolean(s1Cap?.isReady && s2Cap?.isReady);
+        isCapReady = Boolean(s1Cap?.isReady && s2Cap?.isReady);
         const isS1AllocValid =
           Array.isArray(s1Allocations) &&
           s1Allocations.length > 0 &&
@@ -804,15 +840,26 @@ export function validateWorkflowDependencies(
           s2Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) > 0 &&
           (s2Cap?.availableJP === null || s2Cap?.availableJP === undefined || s2Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) <= s2Cap.availableJP);
 
-        const hasTimeAllocationsSaved = isS1AllocValid && isS2AllocValid;
-
-        isAnnualPlanningComplete = isCapReady && hasTimeAllocationsSaved;
+        hasTimeAllocationsSaved = isS1AllocValid && isS2AllocValid;
 
         if (!isCapReady) {
-          annualPlanningReason = 'Lengkapi Kalender Pendidikan dan JP Mingguan Semester 1 dan Semester 2.';
-        } else if (!hasTimeAllocationsSaved) {
-          annualPlanningReason = 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
+          calendarReason = 'Lengkapi Kalender Pendidikan dan JP Mingguan Semester 1 dan Semester 2.';
         }
+        if (!hasTimeAllocationsSaved) {
+          allocationReason = 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
+        }
+      }
+
+      isAnnualPlanningComplete = isMeetingComplete && isCapReady && hasTimeAllocationsSaved;
+
+      if (!isMappingComplete) {
+        annualPlanningReason = 'Memerlukan penyelesaian Pemetaan Unit/Bab & Lingkup Materi (07) terlebih dahulu';
+      } else if (!isMeetingComplete) {
+        annualPlanningReason = meetingReason;
+      } else if (!isCapReady) {
+        annualPlanningReason = calendarReason;
+      } else if (!hasTimeAllocationsSaved) {
+        annualPlanningReason = allocationReason;
       }
     } catch {
       isAnnualPlanningComplete = false;

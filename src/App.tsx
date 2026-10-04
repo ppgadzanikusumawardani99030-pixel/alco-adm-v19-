@@ -31,6 +31,7 @@ import {
   TimeAllocation,
   SemesterJPSetting,
   AnnualJPReference,
+  UnitExecutionPlanData,
 } from './types';
 import { getSubjectJP } from './services/jpEngine';
 import {
@@ -58,6 +59,7 @@ import {
   saveTPV5,
   saveATPV5,
   saveATPUnitMappingV5,
+  saveUnitExecutionPlanV5,
   saveAcademicCalendarV5,
   saveSemesterJPSettingV5,
   deleteSemesterJPSettingV5,
@@ -600,6 +602,8 @@ export function App() {
   };
   const activeATPUnitMapping: ATPUnitMappingData | undefined =
     runtimeContext.annualData?.atpUnitMapping;
+  const activeUnitExecutionPlan: UnitExecutionPlanData | undefined =
+    runtimeContext.annualData?.unitExecutionPlan;
 
   // Handlers for Academic Setting & Documents (Transitional compatibility)
   const handleSaveAcademicSetting = (
@@ -843,6 +847,31 @@ export function App() {
       setAppNotice({
         type: 'error',
         message: `Gagal menyimpan Pemetaan Bab & Lingkup Materi: ${errMsg}`,
+      });
+      return false;
+    }
+  };
+
+  const handleSaveUnitExecutionPlan = (
+    plan: UnitExecutionPlanData
+  ): boolean => {
+    if (!activeYearPlan) {
+      setAppNotice({
+        type: 'error',
+        message: 'Tidak ada Tahun Ajaran (YearPlan) aktif untuk menyimpan Struktur Pertemuan.',
+      });
+      return false;
+    }
+
+    try {
+      saveUnitExecutionPlanV5(activeYearPlan.id, plan);
+      refreshV5();
+      return true;
+    } catch (err: any) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setAppNotice({
+        type: 'error',
+        message: `Gagal menyimpan Struktur Pertemuan: ${errMsg}`,
       });
       return false;
     }
@@ -1535,10 +1564,14 @@ export function App() {
               academicSetting={transitionalAcademicSetting}
               yearPlan={activeYearPlan}
               semesterPlans={semesterPlansForActiveYear}
+              mapping={activeATPUnitMapping}
+              unitExecutionPlan={activeUnitExecutionPlan}
+              tp={activeTP}
               atp={activeATP}
               onSaveCalendar={handleSaveCalendar}
               onSaveSemesterJPSetting={handleSaveSemesterJPSetting}
               onSaveTimeAllocations={handleSaveTimeAllocations}
+              onSaveUnitExecutionPlan={handleSaveUnitExecutionPlan}
               onNextStep={() => setCurrentStep('semester')}
               onBackToMapping={() => setCurrentStep('atp-mapping')}
             />

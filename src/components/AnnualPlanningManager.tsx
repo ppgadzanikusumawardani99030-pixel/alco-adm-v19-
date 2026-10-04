@@ -24,11 +24,19 @@ import {
   SemesterPlan,
   YearPlan,
   ATPData,
+  TPData,
+  ATPUnitMappingData,
+  UnitExecutionPlanData,
   K13Analysis,
 } from '../types';
 import { getSemesterDataV5, loadStorageV5 } from '../services/storageV5';
 import { resolveSemesterCapacityV5, getSubjectJP } from '../services/jpEngine';
 import { TimePlanningManager } from './administration/TimePlanningManager';
+import { UnitExecutionPlanManager } from './UnitExecutionPlanManager';
+import {
+  validateUnitExecutionPlan,
+  createEmptyUnitExecutionPlanData,
+} from '../services/unitExecutionPlanService';
 
 export interface AnnualPlanningManagerProps {
   school: SchoolData;
@@ -36,11 +44,15 @@ export interface AnnualPlanningManagerProps {
   academicSetting: AcademicSetting;
   yearPlan?: YearPlan;
   semesterPlans: SemesterPlan[];
+  mapping?: ATPUnitMappingData;
+  unitExecutionPlan?: UnitExecutionPlanData;
+  tp?: TPData;
   atp?: ATPData;
   k13Analysis?: K13Analysis;
   onSaveCalendar: (calendar: AcademicCalendar, days: CalendarDay[], explicitSemesterPlanId?: string) => boolean;
   onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => boolean;
   onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => boolean;
+  onSaveUnitExecutionPlan?: (plan: UnitExecutionPlanData) => boolean;
   onNextStep: () => void;
   onBackToMapping: () => void;
 }
@@ -51,11 +63,15 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
   academicSetting,
   yearPlan,
   semesterPlans,
+  mapping,
+  unitExecutionPlan,
+  tp,
   atp,
   k13Analysis,
   onSaveCalendar,
   onSaveSemesterJPSetting,
   onSaveTimeAllocations,
+  onSaveUnitExecutionPlan,
   onNextStep,
   onBackToMapping,
 }) => {
@@ -161,7 +177,25 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     return true;
   }, [s2Data?.timeAllocation, s2Capacity?.availableJP]);
 
+  const meetingValidation = useMemo(() => {
+    if (!mapping) return null;
+    return validateUnitExecutionPlan(
+      unitExecutionPlan || createEmptyUnitExecutionPlanData(mapping),
+      mapping,
+      atp || null,
+      tp || null
+    );
+  }, [unitExecutionPlan, mapping, atp, tp]);
+
+  const meetingReady = Boolean(
+    mapping &&
+    unitExecutionPlan &&
+    meetingValidation &&
+    meetingValidation.isComplete
+  );
+
   const isAnnualReady = Boolean(
+    meetingReady &&
     s1Capacity?.isReady &&
     s2Capacity?.isReady &&
     hasS1SavedAllocation &&
@@ -170,6 +204,9 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
 
   const step09Guidance = useMemo(() => {
     if (isAnnualReady) return null;
+    if (!meetingReady) {
+      return 'Lengkapi Struktur Pertemuan pada setiap Unit/Bab terlebih dahulu.';
+    }
     if (!s1Capacity?.isReady || !s2Capacity?.isReady) {
       return 'Lengkapi Kalender Pendidikan dan JP Mingguan Semester 1 dan Semester 2.';
     }
@@ -177,7 +214,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
       return 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
     }
     return 'Lengkapi perencanaan tahunan S1 & S2 terlebih dahulu.';
-  }, [isAnnualReady, s1Capacity?.isReady, s2Capacity?.isReady, hasS1SavedAllocation, hasS2SavedAllocation]);
+  }, [isAnnualReady, meetingReady, s1Capacity?.isReady, s2Capacity?.isReady, hasS1SavedAllocation, hasS2SavedAllocation]);
 
   return (
     <div className="space-y-6">
@@ -191,11 +228,11 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
               </span>
               <h3 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
                 <CalendarRange className="w-5 h-5 text-blue-700" />
-                <span>Perencanaan Tahunan — Kalender Akademik & JP Semester 1 & 2</span>
+                <span>Perencanaan Tahunan — Pertemuan, Kalender & Alokasi Waktu</span>
               </h3>
             </div>
             <p className="text-xs text-slate-500 mt-1 max-w-3xl leading-relaxed">
-              Siapkan dan tetapkan <strong>Kalender Pendidikan</strong> serta <strong>JP Mingguan Aktual</strong> untuk Semester 1 (Ganjil) dan Semester 2 (Genap) secara terpadu dalam satu ruang kerja tahunan sebelum memilih semester aktif.
+              Siapkan <strong>Struktur Pertemuan</strong>, <strong>Kalender Pendidikan</strong>, serta <strong>JP Mingguan Aktual</strong> untuk Semester 1 & 2 secara terpadu dalam satu ruang kerja tahunan sebelum memilih semester aktif.
             </p>
           </div>
 
@@ -208,12 +245,23 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
             ) : (
               <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-xs font-bold">
                 <AlertCircle className="w-4 h-4 text-amber-600" />
-                <span>Lengkapi S1 & S2</span>
+                <span>Belum Lengkap</span>
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {/* 1. Unit Execution Plan Manager (Section 1 in Step 08) */}
+      {mapping && atp && tp && onSaveUnitExecutionPlan && (
+        <UnitExecutionPlanManager
+          mapping={mapping}
+          unitExecutionPlan={unitExecutionPlan}
+          atp={atp}
+          tp={tp}
+          onSave={onSaveUnitExecutionPlan}
+        />
+      )}
 
       {/* Annual Summary & Both Semesters Overview Bar */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

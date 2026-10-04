@@ -1629,6 +1629,8 @@ export interface ProfileWorkspaceData {
   activeTP?: TPData;
   activeATP?: ATPData;
   activeATPUnitMapping?: ATPUnitMappingData;
+  unitExecutionPlan?: UnitExecutionPlanData;
+  activeUnitExecutionPlan?: UnitExecutionPlanData;
   // New modules scoped strictly to this workspace
   students: Student[];
   calendar?: AcademicCalendar;
