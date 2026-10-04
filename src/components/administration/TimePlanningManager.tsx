@@ -2530,9 +2530,11 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
                 semesterPlanId={effectiveSemesterPlanId}
                 schedule={subjectWeeklySchedule}
                 schoolDaysPerWeek={calendar?.schoolDaysPerWeek ?? null}
-                onSaveSubjectWeeklySchedule={(sched, spId) => {
-                  onSaveSubjectWeeklySchedule?.(sched, spId);
-                }}
+                onSaveSubjectWeeklySchedule={(sched, spId) =>
+                  onSaveSubjectWeeklySchedule
+                    ? onSaveSubjectWeeklySchedule(sched, spId)
+                    : false
+                }
               />
             </div>
           )}
