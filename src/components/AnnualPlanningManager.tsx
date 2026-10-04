@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   CalendarRange,
   ArrowRight,
@@ -91,6 +91,8 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
 
   // Selected semester tab in the annual planning workspace (defaults to Semester 1)
   const [activeTabSemester, setActiveTabSemester] = useState<1 | 2>(1);
+
+  const [activeTaskId, setActiveTaskId] = useState<string>('time-s1');
 
   // Official benchmark rule
   const officialRule = useMemo(() => {
@@ -268,25 +270,65 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     s2MeetingCountMatches
   );
 
-  const baseTaskStatuses = useMemo(() => {
-    const statuses: AnnualPlanningTaskStatus[] = [
-      s1TimeReady ? 'COMPLETE' : 'PENDING',
-      s2TimeReady ? 'COMPLETE' : 'PENDING',
-      placementReady ? 'COMPLETE' : 'PENDING',
-      meetingExactReady
-        ? 'COMPLETE'
-        : meetingCoverageComplete
-        ? 'NEEDS_REVIEW'
-        : 'PENDING',
-      hasS1SavedAllocation && hasS2SavedAllocation ? 'COMPLETE' : 'PENDING',
+  const annualTasks: AnnualPlanningTaskRailItem[] = useMemo(() => {
+    const t1Complete = s1TimeReady;
+    const t2Complete = s2TimeReady;
+    const t3Complete = placementReady;
+    const t4Complete = meetingExactReady;
+    const t5Complete = hasS1SavedAllocation && hasS2SavedAllocation;
+
+    const t2Locked = !t1Complete;
+    const t3Locked = !(t1Complete && t2Complete);
+    const t4Locked = !t3Complete;
+    const t5Locked = !t4Complete;
+
+    return [
+      {
+        id: 'time-s1',
+        title: 'Waktu Semester 1',
+        status: t1Complete ? 'COMPLETE' : 'PENDING',
+        isLocked: false,
+        detail: s1SubjectSlots.isReady
+          ? `${s1SubjectSlots.totalMeetingSlots} Pertemuan • ${s1SubjectSlots.totalJP} JP`
+          : 'Belum dihitung',
+      },
+      {
+        id: 'time-s2',
+        title: 'Waktu Semester 2',
+        status: t2Complete ? 'COMPLETE' : 'PENDING',
+        isLocked: t2Locked,
+        lockReason: 'Lengkapi Waktu Semester 1 terlebih dahulu',
+        detail: s2SubjectSlots.isReady
+          ? `${s2SubjectSlots.totalMeetingSlots} Pertemuan • ${s2SubjectSlots.totalJP} JP`
+          : 'Belum dihitung',
+      },
+      {
+        id: 'placement',
+        title: 'Pembagian Bab',
+        status: t3Complete ? 'COMPLETE' : 'PENDING',
+        isLocked: t3Locked,
+        lockReason: 'Lengkapi Waktu Semester 1 & 2 terlebih dahulu',
+      },
+      {
+        id: 'meetings',
+        title: 'Struktur Pertemuan',
+        status: t4Complete
+          ? 'COMPLETE'
+          : meetingCoverageComplete
+          ? 'NEEDS_REVIEW'
+          : 'PENDING',
+        isLocked: t4Locked,
+        lockReason: 'Tetapkan pembagian Unit/Bab Semester 1 & 2 terlebih dahulu',
+        detail: meetingCountDetail,
+      },
+      {
+        id: 'time-allocation',
+        title: 'Alokasi Waktu',
+        status: t5Complete ? 'COMPLETE' : 'PENDING',
+        isLocked: t5Locked,
+        lockReason: 'Lengkapi Struktur Pertemuan sesuai kapasitas kalender terlebih dahulu',
+      },
     ];
-    const currentIndex = statuses.findIndex((status) => status !== 'COMPLETE');
-    if (currentIndex >= 0) {
-      if (statuses[currentIndex] === 'PENDING') {
-        statuses[currentIndex] = 'CURRENT';
-      }
-    }
-    return statuses;
   }, [
     s1TimeReady,
     s2TimeReady,
@@ -295,67 +337,125 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     meetingCoverageComplete,
     hasS1SavedAllocation,
     hasS2SavedAllocation,
+    s1SubjectSlots,
+    s2SubjectSlots,
+    meetingCountDetail,
   ]);
 
-  const annualTasks: AnnualPlanningTaskRailItem[] = useMemo(() => [
-    {
-      id: 'time-s1',
-      title: 'Waktu Semester 1',
-      status: baseTaskStatuses[0],
-      detail: s1SubjectSlots.isReady
-        ? `${s1SubjectSlots.totalMeetingSlots} Pertemuan • ${s1SubjectSlots.totalJP} JP`
-        : 'Belum dihitung',
-    },
-    {
-      id: 'time-s2',
-      title: 'Waktu Semester 2',
-      status: baseTaskStatuses[1],
-      detail: s2SubjectSlots.isReady
-        ? `${s2SubjectSlots.totalMeetingSlots} Pertemuan • ${s2SubjectSlots.totalJP} JP`
-        : 'Belum dihitung',
-    },
-    {
-      id: 'placement',
-      title: 'Pembagian Bab',
-      status: baseTaskStatuses[2],
-    },
-    {
-      id: 'meetings',
-      title: 'Struktur Pertemuan',
-      status: baseTaskStatuses[3],
-      detail: meetingCountDetail,
-    },
-    {
-      id: 'time-allocation',
-      title: 'Alokasi Waktu',
-      status: baseTaskStatuses[4],
-    },
-  ], [baseTaskStatuses, s1SubjectSlots, s2SubjectSlots, meetingCountDetail]);
+  const isAnnualReady = useMemo(() => {
+    return annualTasks.every((task) => task.status === 'COMPLETE');
+  }, [annualTasks]);
 
-  const isAnnualReady = annualTasks.every((task) => task.status === 'COMPLETE');
+  // Sync activeTaskId if it becomes locked due to data changes
+  useEffect(() => {
+    const currentActiveItem = annualTasks.find((t) => t.id === activeTaskId);
+    if (!currentActiveItem || currentActiveItem.isLocked) {
+      // Find first incomplete and unlocked task, otherwise default to first unlocked task
+      const firstIncomplete = annualTasks.find((t) => !t.isLocked && t.status !== 'COMPLETE');
+      if (firstIncomplete) {
+        setActiveTaskId(firstIncomplete.id);
+      } else {
+        const firstUnlocked = annualTasks.find((t) => !t.isLocked);
+        if (firstUnlocked) {
+          setActiveTaskId(firstUnlocked.id);
+        } else {
+          setActiveTaskId('time-s1');
+        }
+      }
+    }
+  }, [annualTasks, activeTaskId]);
 
   const handleSelectTask = (taskId: string) => {
-    let targetId = 'time-planning-container';
+    setActiveTaskId(taskId);
     if (taskId === 'time-s1') {
       setActiveTabSemester(1);
     } else if (taskId === 'time-s2') {
       setActiveTabSemester(2);
-    } else if (taskId === 'placement') {
-      targetId = 'annual-section-semester-placement';
-    } else if (taskId === 'meetings') {
-      targetId = 'annual-section-meetings';
     } else if (taskId === 'time-allocation') {
-      setActiveTabSemester(hasS1SavedAllocation ? 2 : 1);
-      targetId = 'annual-section-time-allocation';
+      if (!hasS1SavedAllocation) {
+        setActiveTabSemester(1);
+      } else if (!hasS2SavedAllocation) {
+        setActiveTabSemester(2);
+      } else {
+        setActiveTabSemester(1);
+      }
     }
 
     window.setTimeout(() => {
-      document.getElementById(targetId)?.scrollIntoView({
+      document.getElementById('annual-active-task-panel')?.scrollIntoView({
         behavior: 'smooth',
         block: 'start',
       });
-    }, 0);
+    }, 50);
   };
+
+  const activeHeaderDetails = useMemo(() => {
+    switch (activeTaskId) {
+      case 'time-s1':
+        return {
+          num: 1,
+          title: 'Waktu Semester 1',
+          desc: 'LENGKAPI Kalender Pendidikan, JP Mingguan, dan Jadwal Mapel Semester 1.',
+        };
+      case 'time-s2':
+        return {
+          num: 2,
+          title: 'Waktu Semester 2',
+          desc: 'LENGKAPI Kalender Pendidikan, JP Mingguan, dan Jadwal Mapel Semester 2.',
+        };
+      case 'placement':
+        return {
+          num: 3,
+          title: 'Pembagian Bab',
+          desc: 'Tetapkan Unit/Bab yang masuk Semester 1 dan Semester 2.',
+        };
+      case 'meetings':
+        return {
+          num: 4,
+          title: 'Struktur Pertemuan',
+          desc: 'Susun Pertemuan sesuai pembagian Bab dan kapasitas kalender.',
+        };
+      case 'time-allocation':
+        return {
+          num: 5,
+          title: 'Alokasi Waktu',
+          desc: 'Tetapkan alokasi waktu pembelajaran.',
+        };
+      default:
+        return { num: 1, title: '', desc: '' };
+    }
+  }, [activeTaskId]);
+
+  const nextStepCTA = useMemo(() => {
+    switch (activeTaskId) {
+      case 'time-s1':
+        return {
+          isReady: s1TimeReady,
+          label: 'Lanjut ke Waktu Semester 2',
+          targetId: 'time-s2',
+        };
+      case 'time-s2':
+        return {
+          isReady: s2TimeReady,
+          label: 'Lanjut ke Pembagian Bab',
+          targetId: 'placement',
+        };
+      case 'placement':
+        return {
+          isReady: placementReady,
+          label: 'Lanjut ke Struktur Pertemuan',
+          targetId: 'meetings',
+        };
+      case 'meetings':
+        return {
+          isReady: meetingExactReady,
+          label: 'Lanjut ke Alokasi Waktu',
+          targetId: 'time-allocation',
+        };
+      default:
+        return null;
+    }
+  }, [activeTaskId, s1TimeReady, s2TimeReady, placementReady, meetingExactReady]);
 
   const step09Guidance = useMemo(() => {
     if (isAnnualReady) return null;
@@ -467,200 +567,325 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
       </div>
 
       <div className="flex flex-col lg:flex-row gap-5 items-start">
-        <AnnualPlanningTaskRail tasks={annualTasks} onSelectTask={handleSelectTask} />
+        <AnnualPlanningTaskRail tasks={annualTasks} onSelectTask={handleSelectTask} activeTaskId={activeTaskId} />
 
         <div className="min-w-0 flex-1 space-y-6">
-      {/* Annual Summary & Both Semesters Overview Bar */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Semester 1 Overview Card */}
-        <div
-          onClick={() => setActiveTabSemester(1)}
-          className={`p-4 rounded-2xl border transition cursor-pointer ${
-            activeTabSemester === 1
-              ? 'bg-blue-50/70 border-blue-400 ring-2 ring-blue-500/20 shadow-xs'
-              : 'bg-white border-slate-200/80 hover:bg-slate-50 shadow-2xs'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5 text-blue-700" />
-              <span>Waktu Semester 1</span>
-            </span>
-            {s1Capacity?.isReady ? (
-              <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                Siap
+          {/* Annual Summary & Both Semesters Overview Bar */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Semester 1 Overview Card */}
+            <div className="p-4 rounded-2xl border bg-white border-slate-200 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-blue-700" />
+                  <span>Waktu Semester 1</span>
+                </span>
+                {s1Capacity?.isReady ? (
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                    Siap
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold">
+                    Perlu Dilengkapi
+                  </span>
+                )}
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
+                  <div className="text-[10px] text-slate-500 font-medium">Hari / Pekan Efektif</div>
+                  <div className="font-bold text-slate-800 mt-0.5">
+                    {s1Capacity?.effectiveLearningDays ?? '-'} Hari • {s1Capacity?.effectiveWeeks ?? '-'} Pekan
+                  </div>
+                </div>
+                <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
+                  <div className="text-[10px] text-slate-500 font-medium">JP Aktual • Tersedia</div>
+                  <div className="font-bold text-blue-900 mt-0.5">
+                    {!isK13Curriculum ? (
+                      s1SubjectSlots.isReady ? (
+                        <span>{s1SubjectSlots.totalMeetingSlots} Pertemuan • {s1SubjectSlots.totalJP} JP Aktual</span>
+                      ) : (
+                        <span>Belum dihitung</span>
+                      )
+                    ) : (
+                      <span>{s1Capacity?.actualScheduledWeeklyJP ?? '-'} JP/mgg • {s1Capacity?.availableJP ?? '-'} Total JP</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Semester 2 Overview Card */}
+            <div className="p-4 rounded-2xl border bg-white border-slate-200 shadow-2xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-blue-700" />
+                  <span>Waktu Semester 2</span>
+                </span>
+                {s2Capacity?.isReady ? (
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                    Siap
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold">
+                    Perlu Dilengkapi
+                  </span>
+                )}
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
+                  <div className="text-[10px] text-slate-500 font-medium">Hari / Pekan Efektif</div>
+                  <div className="font-bold text-slate-800 mt-0.5">
+                    {s2Capacity?.effectiveLearningDays ?? '-'} Hari • {s2Capacity?.effectiveWeeks ?? '-'} Pekan
+                  </div>
+                </div>
+                <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
+                  <div className="text-[10px] text-slate-500 font-medium">JP Aktual • Tersedia</div>
+                  <div className="font-bold text-blue-900 mt-0.5">
+                    {!isK13Curriculum ? (
+                      s2SubjectSlots.isReady ? (
+                        <span>{s2SubjectSlots.totalMeetingSlots} Pertemuan • {s2SubjectSlots.totalJP} JP Aktual</span>
+                      ) : (
+                        <span>Belum dihitung</span>
+                      )
+                    ) : (
+                      <span>{s2Capacity?.actualScheduledWeeklyJP ?? '-'} JP/mgg • {s2Capacity?.availableJP ?? '-'} Total JP</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Total Annual Benchmark Card */}
+            <div className="p-4 rounded-2xl border border-slate-200/80 bg-slate-900 text-white shadow-2xs">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-1.5">
+                  <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>Kapasitas Pembelajaran 1 Tahun</span>
+                </span>
+                <span className="text-[10px] bg-indigo-800/80 text-indigo-200 px-2 py-0.5 rounded-md font-bold">
+                  {academicSetting.academicYear}
+                </span>
+              </div>
+
+              <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                <div className="bg-slate-800/90 p-2 rounded-xl border border-slate-700/60">
+                  <div className="text-[10px] text-slate-400 font-medium">Total JP Efektif (S1+S2)</div>
+                  <div className="font-bold text-white mt-0.5">
+                    {!isK13Curriculum && s1SubjectSlots.isReady && s2SubjectSlots.isReady ? (
+                      <span>{s1SubjectSlots.totalJP + s2SubjectSlots.totalJP} JP Aktual ({s1SubjectSlots.totalMeetingSlots + s2SubjectSlots.totalMeetingSlots} Pertemuan)</span>
+                    ) : (
+                      <span>{totalAnnualAvailableJP !== null ? `${totalAnnualAvailableJP} JP` : 'Belum Lengkap'}</span>
+                    )}
+                  </div>
+                </div>
+                <div className="bg-slate-800/90 p-2 rounded-xl border border-slate-700/60">
+                  <div className="text-[10px] text-slate-400 font-medium">Standar Regulasi</div>
+                  <div className="font-bold text-indigo-300 mt-0.5">
+                    {officialRule.annualJP ? `${officialRule.annualJP} JP / thn` : `${officialRule.weeklyJP || '-'} JP / mgg`}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ACTIVE WORKSPACE CONTAINER */}
+          <div id="annual-active-task-panel" className="p-5 rounded-2xl border border-blue-200 bg-blue-50/20 space-y-6 scroll-mt-6 shadow-2xs">
+            <div className="border-b border-blue-200/80 pb-4">
+              <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider block">
+                Langkah {activeHeaderDetails.num} dari 5
               </span>
-            ) : (
-              <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold">
-                Perlu Dilengkapi
-              </span>
+              <h3 className="text-lg font-extrabold text-blue-950 mt-1">
+                {activeHeaderDetails.title}
+              </h3>
+              <p className="text-xs text-blue-800/90 mt-1 leading-relaxed">
+                {activeHeaderDetails.desc}
+              </p>
+            </div>
+
+            {/* A. TimePlanningManager Container */}
+            <div className={activeTaskId === 'time-s1' || activeTaskId === 'time-s2' || activeTaskId === 'time-allocation' ? 'block animate-in fade-in duration-150' : 'hidden'}>
+              {activeSelectedPlan && (
+                <div id="time-planning-container" className="pt-1 scroll-mt-4">
+                  <TimePlanningManager
+                    school={school}
+                    profile={profile}
+                    academicSetting={{
+                      ...academicSetting,
+                      id: activeSelectedPlan.id,
+                      semester: activeSelectedPlan.semester === 1 ? '1 (Ganjil)' : '2 (Genap)',
+                    }}
+                    atp={atp}
+                    k13Analysis={k13Analysis}
+                    calendar={activeSelectedData?.academicCalendar?.calendar}
+                    calendarDays={activeSelectedData?.academicCalendar?.days || []}
+                    timeAllocations={activeSelectedData?.timeAllocation || []}
+                    semesterJPSetting={activeSelectedData?.semesterJPSetting}
+                    subjectWeeklySchedule={activeSelectedData?.subjectWeeklySchedule}
+                    viewMode={
+                      activeTaskId === 'time-allocation'
+                        ? 'ALLOCATION'
+                        : 'TIME_SETUP'
+                    }
+                    explicitSemesterPlanId={activeSelectedPlan.id}
+                    onSaveCalendar={onSaveCalendar}
+                    onSaveSemesterJPSetting={onSaveSemesterJPSetting}
+                    onSaveTimeAllocations={onSaveTimeAllocations}
+                    onSaveSubjectWeeklySchedule={onSaveSubjectWeeklySchedule}
+                    afterTimeSetup={activeTaskId === 'time-allocation' ? (
+                      /* Dalam Task 5 boleh tampil sub-selector kecil */
+                      <div className="flex items-center gap-2 mb-4 bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
+                        <span className="text-xs font-bold text-slate-500 uppercase tracking-wide px-1">
+                          Pilih Semester Alokasi:
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTabSemester(1);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                            activeTabSemester === 1
+                              ? 'bg-blue-900 text-white shadow-xs'
+                              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-300'
+                          }`}
+                        >
+                          Semester 1 {hasS1SavedAllocation && '✓'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveTabSemester(2);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer ${
+                            activeTabSemester === 2
+                              ? 'bg-blue-900 text-white shadow-xs'
+                              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-300'
+                          }`}
+                        >
+                          Semester 2 {hasS2SavedAllocation && '✓'}
+                        </button>
+                      </div>
+                    ) : undefined}
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* B. UnitSemesterPlanningManager Container */}
+            <div id="annual-task-placement" className={activeTaskId === 'placement' ? 'block animate-in fade-in duration-150' : 'hidden'}>
+              {mapping && effectiveUnitExecutionPlan && onSaveUnitExecutionPlan && (
+                <UnitSemesterPlanningManager
+                  mapping={mapping}
+                  unitExecutionPlan={effectiveUnitExecutionPlan}
+                  s1AvailableJP={s1Capacity?.availableJP ?? null}
+                  s2AvailableJP={s2Capacity?.availableJP ?? null}
+                  onSave={onSaveUnitExecutionPlan}
+                />
+              )}
+            </div>
+
+            {/* C. UnitExecutionPlanManager Container */}
+            <div id="annual-task-meetings" className={activeTaskId === 'meetings' ? 'block animate-in fade-in duration-150 font-sans' : 'hidden'}>
+              {mapping && atp && tp && onSaveUnitExecutionPlan && (
+                <UnitExecutionPlanManager
+                  mapping={mapping}
+                  unitExecutionPlan={unitExecutionPlan}
+                  atp={atp}
+                  tp={tp}
+                  onSave={onSaveUnitExecutionPlan}
+                  meetingCapacity={{
+                    semester1: {
+                      isReady: Boolean(s1SubjectSlots.isReady),
+                      targetMeetingCount:
+                        s1SubjectSlots.isReady
+                          ? s1SubjectSlots.totalMeetingSlots
+                          : 0,
+                      totalJP:
+                        s1SubjectSlots.isReady
+                          ? s1SubjectSlots.totalJP
+                          : 0,
+                    },
+                    semester2: {
+                      isReady: Boolean(s2SubjectSlots.isReady),
+                      targetMeetingCount:
+                        s2SubjectSlots.isReady
+                          ? s2SubjectSlots.totalMeetingSlots
+                          : 0,
+                      totalJP:
+                        s2SubjectSlots.isReady
+                          ? s2SubjectSlots.totalJP
+                          : 0,
+                    },
+                  }}
+                />
+              )}
+            </div>
+
+            {/* Guided CTA Bar for Tasks 1 to 4 */}
+            {nextStepCTA && (
+              <div className="pt-4 border-t border-blue-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                <span className="text-slate-600 font-medium">
+                  {nextStepCTA.isReady ? (
+                    <span className="text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 font-bold flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Langkah ini selesai! Silakan lanjut ke langkah berikutnya.
+                    </span>
+                  ) : (
+                    <span className="text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 font-bold flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                      Selesaikan dan simpan langkah ini terlebih dahulu.
+                    </span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  disabled={!nextStepCTA.isReady}
+                  onClick={() => handleSelectTask(nextStepCTA.targetId)}
+                  className={`px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 cursor-pointer ${
+                    nextStepCTA.isReady
+                      ? 'bg-blue-900 hover:bg-blue-950 text-white shadow-xs'
+                      : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                  }`}
+                >
+                  <span>{nextStepCTA.label}</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            )}
+
+            {/* Final Guided CTA Bar for Task 5 */}
+            {activeTaskId === 'time-allocation' && (
+              <div className="pt-4 border-t border-blue-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
+                <span className="text-slate-600 font-medium">
+                  {hasS1SavedAllocation && hasS2SavedAllocation ? (
+                    <span className="text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 font-bold flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                      Seluruh rangkaian Perencanaan Tahunan (Step 08) telah selesai disusun!
+                    </span>
+                  ) : (
+                    <span className="text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 font-bold flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                      Selesaikan dan simpan Alokasi Waktu Semester 1 &amp; 2 terlebih dahulu.
+                    </span>
+                  )}
+                </span>
+                <button
+                  type="button"
+                  disabled={!(hasS1SavedAllocation && hasS2SavedAllocation)}
+                  onClick={onNextStep}
+                  className={`px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 cursor-pointer ${
+                    hasS1SavedAllocation && hasS2SavedAllocation
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                      : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                  }`}
+                >
+                  <span>Lanjut ke Pilih Semester Aktif (09)</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
             )}
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
-              <div className="text-[10px] text-slate-500 font-medium">Hari / Pekan Efektif</div>
-              <div className="font-bold text-slate-800 mt-0.5">
-                {s1Capacity?.effectiveLearningDays ?? '-'} Hari • {s1Capacity?.effectiveWeeks ?? '-'} Pekan
-              </div>
-            </div>
-            <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
-              <div className="text-[10px] text-slate-500 font-medium">JP Aktual • Tersedia</div>
-              <div className="font-bold text-blue-900 mt-0.5">
-                {!isK13Curriculum ? (
-                  s1SubjectSlots.isReady ? (
-                  <span>{s1SubjectSlots.totalMeetingSlots} Pertemuan • {s1SubjectSlots.totalJP} JP Aktual</span>
-                  ) : (
-                    <span>Belum dihitung</span>
-                  )
-                ) : (
-                  <span>{s1Capacity?.actualScheduledWeeklyJP ?? '-'} JP/mgg • {s1Capacity?.availableJP ?? '-'} Total JP</span>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Semester 2 Overview Card */}
-        <div
-          onClick={() => setActiveTabSemester(2)}
-          className={`p-4 rounded-2xl border transition cursor-pointer ${
-            activeTabSemester === 2
-              ? 'bg-blue-50/70 border-blue-400 ring-2 ring-blue-500/20 shadow-xs'
-              : 'bg-white border-slate-200/80 hover:bg-slate-50 shadow-2xs'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
-              <Calendar className="w-3.5 h-3.5 text-blue-700" />
-              <span>Waktu Semester 2</span>
-            </span>
-            {s2Capacity?.isReady ? (
-              <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                Siap
-              </span>
-            ) : (
-              <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold">
-                Perlu Dilengkapi
-              </span>
-            )}
-          </div>
-
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
-              <div className="text-[10px] text-slate-500 font-medium">Hari / Pekan Efektif</div>
-              <div className="font-bold text-slate-800 mt-0.5">
-                {s2Capacity?.effectiveLearningDays ?? '-'} Hari • {s2Capacity?.effectiveWeeks ?? '-'} Pekan
-              </div>
-            </div>
-            <div className="bg-white/80 p-2 rounded-xl border border-slate-200/60">
-              <div className="text-[10px] text-slate-500 font-medium">JP Aktual • Tersedia</div>
-              <div className="font-bold text-blue-900 mt-0.5">
-                {!isK13Curriculum ? (
-                  s2SubjectSlots.isReady ? (
-                  <span>{s2SubjectSlots.totalMeetingSlots} Pertemuan • {s2SubjectSlots.totalJP} JP Aktual</span>
-                  ) : (
-                    <span>Belum dihitung</span>
-                  )
-                ) : (
-                  <span>{s2Capacity?.actualScheduledWeeklyJP ?? '-'} JP/mgg • {s2Capacity?.availableJP ?? '-'} Total JP</span>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Total Annual Benchmark Card */}
-        <div className="p-4 rounded-2xl border border-slate-200/80 bg-slate-900 text-white shadow-2xs">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Kapasitas Pembelajaran 1 Tahun</span>
-            </span>
-            <span className="text-[10px] bg-indigo-800/80 text-indigo-200 px-2 py-0.5 rounded-md font-bold">
-              {academicSetting.academicYear}
-            </span>
-          </div>
-
-          <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
-            <div className="bg-slate-800/90 p-2 rounded-xl border border-slate-700/60">
-              <div className="text-[10px] text-slate-400 font-medium">Total JP Efektif (S1+S2)</div>
-              <div className="font-bold text-white mt-0.5">
-                {!isK13Curriculum && s1SubjectSlots.isReady && s2SubjectSlots.isReady ? (
-                  <span>{s1SubjectSlots.totalJP + s2SubjectSlots.totalJP} JP Aktual ({s1SubjectSlots.totalMeetingSlots + s2SubjectSlots.totalMeetingSlots} Pertemuan)</span>
-                ) : (
-                  <span>{totalAnnualAvailableJP !== null ? `${totalAnnualAvailableJP} JP` : 'Belum Lengkap'}</span>
-                )}
-              </div>
-            </div>
-            <div className="bg-slate-800/90 p-2 rounded-xl border border-slate-700/60">
-              <div className="text-[10px] text-slate-400 font-medium">Standar Regulasi</div>
-              <div className="font-bold text-indigo-300 mt-0.5">
-                {officialRule.annualJP ? `${officialRule.annualJP} JP / thn` : `${officialRule.weeklyJP || '-'} JP / mgg`}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Tab Selector for Active Semester Workspace */}
-      <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
-        <button
-          type="button"
-          onClick={() => setActiveTabSemester(1)}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-            activeTabSemester === 1
-              ? 'bg-blue-900 text-white shadow-sm'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-300'
-          }`}
-        >
-          <Calendar className="w-4 h-4" />
-          <span>Waktu Semester 1</span>
-          {s1Capacity?.isReady && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTabSemester(2)}
-          className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-            activeTabSemester === 2
-              ? 'bg-blue-900 text-white shadow-sm'
-              : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-300'
-          }`}
-        >
-          <Calendar className="w-4 h-4" />
-          <span>Waktu Semester 2</span>
-          {s2Capacity?.isReady && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
-        </button>
-      </div>
-
-      {/* Embedded TimePlanningManager for the selected semester */}
-      {activeSelectedPlan && (
-        <div id="time-planning-container" className="pt-1 scroll-mt-4">
-          <TimePlanningManager
-            school={school}
-            profile={profile}
-            academicSetting={{
-              ...academicSetting,
-              id: activeSelectedPlan.id,
-              semester: activeSelectedPlan.semester === 1 ? '1 (Ganjil)' : '2 (Genap)',
-            }}
-            atp={atp}
-            k13Analysis={k13Analysis}
-            calendar={activeSelectedData?.academicCalendar?.calendar}
-            calendarDays={activeSelectedData?.academicCalendar?.days || []}
-            timeAllocations={activeSelectedData?.timeAllocation || []}
-            semesterJPSetting={activeSelectedData?.semesterJPSetting}
-            subjectWeeklySchedule={activeSelectedData?.subjectWeeklySchedule}
-            explicitSemesterPlanId={activeSelectedPlan.id}
-            onSaveCalendar={onSaveCalendar}
-            onSaveSemesterJPSetting={onSaveSemesterJPSetting}
-            onSaveTimeAllocations={onSaveTimeAllocations}
-            onSaveSubjectWeeklySchedule={onSaveSubjectWeeklySchedule}
-            afterTimeSetup={afterTimeSetup}
-          />
-        </div>
-      )}
         </div>
       </div>
 
@@ -675,32 +900,6 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
           <ArrowLeft className="w-4 h-4" />
           <span>Kembali ke Pemetaan Unit/Bab (07)</span>
         </button>
-
-        <div className="flex flex-col items-end gap-1.5 w-full sm:w-auto">
-          {step09Guidance && (
-            <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-1 rounded-lg font-medium text-right">
-              {step09Guidance}
-            </span>
-          )}
-          <button
-            id="btn-next-to-semester"
-            type="button"
-            disabled={!isAnnualReady}
-            onClick={() => {
-              if (isAnnualReady) {
-                onNextStep();
-              }
-            }}
-            className={`w-full sm:w-auto flex items-center justify-center gap-2 py-2.5 px-6 rounded-xl text-sm font-semibold transition ${
-              isAnnualReady
-                ? 'bg-blue-900 hover:bg-blue-950 text-white shadow-sm cursor-pointer'
-                : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
-            }`}
-          >
-            <span>Lanjut ke Pilih Semester Aktif (09)</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        </div>
       </div>
     </div>
   );

@@ -101,6 +101,7 @@ export interface TimePlanningManagerProps {
   semesterJPSetting?: SemesterJPSetting;
   subjectWeeklySchedule?: SubjectWeeklySchedule;
   afterTimeSetup?: React.ReactNode;
+  viewMode?: 'ALL' | 'TIME_SETUP' | 'ALLOCATION';
   explicitSemesterPlanId?: string;
   onSaveCalendar: (calendar: AcademicCalendar, days: CalendarDay[], explicitSemesterPlanId?: string) => boolean;
   onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => boolean;
@@ -120,6 +121,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   semesterJPSetting,
   subjectWeeklySchedule,
   afterTimeSetup,
+  viewMode = 'ALL',
   explicitSemesterPlanId,
   onSaveCalendar,
   onSaveSemesterJPSetting,
@@ -1556,7 +1558,9 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
         </div>
       )}
 
-      {/* Top Banner & Context Info */}
+      {viewMode !== 'ALLOCATION' && (
+        <>
+          {/* Top Banner & Context Info */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-5">
           <div>
@@ -2512,11 +2516,13 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
           onSave={(sched) => onSaveSubjectWeeklySchedule ? onSaveSubjectWeeklySchedule(sched, effectiveSemesterPlanId) : false}
         />
       )}
+        </>
+      )}
 
       {afterTimeSetup}
 
-      {/* Bottom: Weekly Time Allocations mapped to ATP / K13 */}
-      <div id="annual-section-time-allocation" className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">
+      {viewMode !== 'TIME_SETUP' && (
+        <div id="annual-section-time-allocation" className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4 mb-4">
           <div className="flex items-center gap-2">
             <Layers className="w-5 h-5 text-indigo-600" />
@@ -2927,6 +2933,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
           )
         )}
       </div>
+      )}
     </div>
   );
 };
