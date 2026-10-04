@@ -192,6 +192,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   const [sourceUrl, setSourceUrl] = useState<string>(calendar?.sourceUrl || '');
   const [isOverridden, setIsOverridden] = useState<boolean>(calendar?.isOverridden || false);
   const [overrideReason, setOverrideReason] = useState<string>(calendar?.overrideReason || '');
+  const [draftVerifiedAt, setDraftVerifiedAt] = useState<string | undefined>(calendar?.verifiedAt);
 
   // JP per week - SSOT: semesterJPSetting.actualScheduledWeeklyJP (fallback to Annual JP Reference)
   const annualJPFromSetting =
@@ -265,6 +266,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
       setSourceUrl(calendar.sourceUrl || '');
       setIsOverridden(calendar.isOverridden || false);
       setOverrideReason(calendar.overrideReason || '');
+      setDraftVerifiedAt(calendar.verifiedAt);
     } else {
       setStartDate('');
       setEndDate('');
@@ -278,6 +280,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
       setSourceUrl('');
       setIsOverridden(false);
       setOverrideReason('');
+      setDraftVerifiedAt(undefined);
     }
 
     setDays(calendarDays || []);
@@ -339,6 +342,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
       setSourceUrl(calendar.sourceUrl || '');
       setIsOverridden(calendar.isOverridden || false);
       setOverrideReason(calendar.overrideReason || '');
+      setDraftVerifiedAt(calendar.verifiedAt);
       return;
     }
 
@@ -365,6 +369,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
       setSourceUrl(calendar.sourceUrl || '');
       setIsOverridden(calendar.isOverridden || false);
       setOverrideReason(calendar.overrideReason || '');
+      setDraftVerifiedAt(calendar.verifiedAt);
     }
     setDays(calendarDays || []);
   }, [calendar, calendarDays, calendarDraftDirty, effectiveSemesterPlanId]);
@@ -822,6 +827,9 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
     const isComplete = schoolDaysPerWeek === 5 || schoolDaysPerWeek === 6;
     setWorkflowStatus('REVIEWED');
     setResolutionStatus(isComplete ? 'RESOLVED' : 'PARTIALLY_RESOLVED');
+    if ((candidate as any).verifiedAt || candidate.retrievedAt) {
+      setDraftVerifiedAt((candidate as any).verifiedAt || candidate.retrievedAt);
+    }
     setCalendarDraftDirty(true);
 
     setResolutionMessage(`Acuan kalender diambil dari ${candidate.authority} (${candidate.documentTitle}) - Semester ${activeSem}`);
@@ -861,7 +869,13 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
     );
 
     setIsOverridden(true);
-    setWorkflowStatus('MANUAL_OVERRIDE');
+    setWorkflowStatus(res.calendar.workflowStatus || 'MANUAL_OVERRIDE');
+    setResolutionStatus(res.calendar.resolutionStatus || 'MANUALLY_OVERRIDDEN');
+    if (res.calendar.sourceType) setSourceType(res.calendar.sourceType);
+    if (res.calendar.sourceName) setSourceName(res.calendar.sourceName);
+    if (res.calendar.sourceAuthority) setSourceAuthority(res.calendar.sourceAuthority);
+    if (res.calendar.sourceDocumentNumber) setSourceDocumentNumber(res.calendar.sourceDocumentNumber);
+    if (res.calendar.sourceUrl) setSourceUrl(res.calendar.sourceUrl);
     setCalendarDraftDirty(true);
 
     setSaveNotification('Penyesuaian diterapkan sebagai draf. Klik "Konfirmasi Kalender" untuk menyimpan.');
@@ -930,7 +944,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
       sourceRegion: selectedProvince,
       workflowStatus: 'CONFIRMED',
       resolutionStatus,
-      verifiedAt: calendar?.verifiedAt,
+      verifiedAt: draftVerifiedAt,
       isOverridden,
       overrideReason: isOverridden ? overrideReason : undefined,
       jpPerWeek,
@@ -984,6 +998,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
     setNewDayNotes('');
     setIsOverridden(true);
     setWorkflowStatus('MANUAL_OVERRIDE');
+    setResolutionStatus('MANUALLY_OVERRIDDEN');
   };
 
   const handleRemoveDay = (id: string) => {
@@ -992,6 +1007,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
     setCalendarDraftDirty(true);
     setIsOverridden(true);
     setWorkflowStatus('MANUAL_OVERRIDE');
+    setResolutionStatus('MANUALLY_OVERRIDDEN');
   };
 
   const handleResetToOfficialJP = () => {

@@ -635,7 +635,7 @@ export function App() {
         subject: setting.subject,
       });
 
-      const rawWeeklyVal = setting.totalHoursPerWeek ?? setting.subjectWeeklyJP;
+      const rawWeeklyVal = setting.totalHoursPerWeek;
       const confirmedWeeklyJP =
         typeof rawWeeklyVal === 'number' && Number.isFinite(rawWeeklyVal) && rawWeeklyVal > 0
           ? rawWeeklyVal

@@ -153,13 +153,14 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
       grade: validGrade,
       phase: derivedPhase,
       subject: validSubject,
-      totalHoursPerWeek: prev.isHoursOverridden ? prev.totalHoursPerWeek : jpLookup.weeklyJP,
+      totalHoursPerWeek: null,
+      isHoursOverridden: false,
+      hoursSourceType: 'UNVERIFIED',
       regulationReference: jpLookup.regulationReference,
-      isHoursOverridden: !jpLookup.isOfficial && prev.totalHoursPerWeek !== null,
     }));
   };
 
-  // Handle Grade Change (strictly auto-derives Phase & official JP)
+  // Handle Grade Change (strictly auto-derives Phase & regulationReference)
   const handleGradeChange = (grade: string) => {
     const derivedPhase = getPhaseFromGrade(formData.level, grade);
     const jpLookup = lookupOfficialWeeklyJP(formData.curriculum, formData.level, grade, formData.subject);
@@ -167,7 +168,9 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
       ...prev,
       grade,
       phase: derivedPhase,
-      totalHoursPerWeek: prev.isHoursOverridden ? prev.totalHoursPerWeek : jpLookup.weeklyJP,
+      totalHoursPerWeek: null,
+      isHoursOverridden: false,
+      hoursSourceType: 'UNVERIFIED',
       regulationReference: jpLookup.regulationReference,
     }));
   };
@@ -178,7 +181,9 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
     setFormData((prev) => ({
       ...prev,
       subject,
-      totalHoursPerWeek: prev.isHoursOverridden ? prev.totalHoursPerWeek : jpLookup.weeklyJP,
+      totalHoursPerWeek: null,
+      isHoursOverridden: false,
+      hoursSourceType: 'UNVERIFIED',
       regulationReference: jpLookup.regulationReference,
     }));
   };
@@ -188,6 +193,7 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
       ...prev,
       totalHoursPerWeek: officialJpInfo.weeklyJP,
       isHoursOverridden: false,
+      hoursSourceType: 'OFFICIAL',
       regulationReference: officialJpInfo.regulation,
     }));
   };
@@ -668,7 +674,8 @@ const AcademicSettingsForm: React.FC<AcademicSettingsFormProps> = ({
                     setFormData({
                       ...formData,
                       totalHoursPerWeek: validVal,
-                      isHoursOverridden: validVal !== officialJpInfo.weeklyJP,
+                      isHoursOverridden: validVal !== null,
+                      hoursSourceType: validVal !== null ? 'USER_OVERRIDE' : 'UNVERIFIED',
                     });
                   }}
                   className="w-full text-sm px-3.5 py-2.5 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-600"
