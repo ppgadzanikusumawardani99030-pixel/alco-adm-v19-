@@ -210,7 +210,11 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
 
   // Local structural validator (deterministic check)
   const localValidation = useMemo(() => {
-    const validAtpIds = new Set((atp.items || []).map((i) => i.id));
+    const validAtpIds = new Set<string>(
+      (atp.items || [])
+        .map((i) => i.id)
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    );
     const issues: string[] = [];
 
     let emptyTitleCount = 0;
@@ -1080,7 +1084,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
           </div>
 
           {/* Metrics Overview Pills */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
             <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3">
               <div className="text-[11px] font-bold text-emerald-800 uppercase">ATP Selaras</div>
               <div className="text-lg font-extrabold text-emerald-900 mt-0.5">
@@ -1096,16 +1100,23 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
             </div>
 
             <div className="bg-rose-50/80 border border-rose-200 rounded-xl p-3">
-              <div className="text-[11px] font-bold text-rose-800 uppercase">Perlu Ditinjau</div>
+              <div className="text-[11px] font-bold text-rose-800 uppercase">ATP Perlu Ditinjau</div>
               <div className="text-lg font-extrabold text-rose-900 mt-0.5">
                 {analysisResult.summary.reviewAtp} <span className="text-xs font-normal text-rose-700">Langkah</span>
               </div>
             </div>
 
             <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3">
-              <div className="text-[11px] font-bold text-blue-800 uppercase">Saran Lingkup Materi</div>
+              <div className="text-[11px] font-bold text-blue-800 uppercase">Saran Materi</div>
               <div className="text-lg font-extrabold text-blue-900 mt-0.5">
                 {analysisResult.summary.missingMaterialSuggestions} <span className="text-xs font-normal text-blue-700">Saran</span>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-300 rounded-xl p-3">
+              <div className="text-[11px] font-bold text-slate-700 uppercase">Materi Perlu Ditinjau</div>
+              <div className="text-lg font-extrabold text-slate-900 mt-0.5">
+                {analysisResult.summary.manualMaterialReview} <span className="text-xs font-normal text-slate-600">Materi</span>
               </div>
             </div>
           </div>
@@ -1225,7 +1236,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
                             </p>
                           </div>
                           <span className="text-[11px] font-bold text-rose-700 bg-rose-100 px-2.5 py-1 rounded-lg border border-rose-300 shrink-0">
-                            Perlu ditinjau manual
+                            Perlu ditinjau guru
                           </span>
                         </div>
                       );
@@ -1300,7 +1311,53 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
               </div>
             )}
 
-            {/* 4. Aligned ATP List (Collapsed overview) */}
+            {/* 4. Manual Material Review Findings */}
+            {analysisResult.materialFindings.filter((m) => m.status === 'MANUAL_REVIEW').length > 0 && (
+              <div className="space-y-2.5">
+                <h5 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-slate-600" />
+                  <span>Lingkup Materi Manual yang Perlu Ditinjau</span>
+                </h5>
+
+                <div className="space-y-2">
+                  {analysisResult.materialFindings
+                    .filter((m) => m.status === 'MANUAL_REVIEW')
+                    .map((finding) => {
+                      const unit = units.find((u) => u.id === finding.unitId);
+                      const mat = (unit?.materials || []).find((m) => m.id === finding.materialId);
+
+                      return (
+                        <div
+                          key={finding.id}
+                          className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3"
+                        >
+                          <div className="space-y-1 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {unit && (
+                                <span className="px-2 py-0.5 rounded-md bg-slate-800 text-white font-bold text-xs">
+                                  Bab {unit.order}: {unit.title}
+                                </span>
+                              )}
+                              <span className="font-bold text-xs text-slate-900">
+                                Materi: {mat?.title || finding.suggestedTitle || '(Tanpa Judul)'}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-600 leading-relaxed">
+                              {finding.reason}
+                            </p>
+                          </div>
+
+                          <span className="text-[11px] font-bold text-slate-700 bg-slate-200/80 px-2.5 py-1 rounded-lg border border-slate-300 shrink-0">
+                            Perlu ditinjau guru
+                          </span>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {/* 5. Aligned ATP List (Collapsed overview) */}
             {analysisResult.atpFindings.filter((f) => f.status === 'ALIGNED').length > 0 && (
               <details className="bg-slate-50/70 p-3 rounded-xl border border-slate-200 text-xs text-slate-700 space-y-2">
                 <summary className="font-bold text-emerald-800 cursor-pointer hover:underline">
@@ -1323,6 +1380,34 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
                               Bab {unit.order}: {unit.title}
                             </span>
                           )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </details>
+            )}
+
+            {/* 6. Supported Materials List (Collapsed overview) */}
+            {analysisResult.materialFindings.filter((m) => m.status === 'SUPPORTED').length > 0 && (
+              <details className="bg-slate-50/70 p-3 rounded-xl border border-slate-200 text-xs text-slate-700 space-y-2">
+                <summary className="font-bold text-emerald-800 cursor-pointer hover:underline">
+                  Lihat {analysisResult.materialFindings.filter((m) => m.status === 'SUPPORTED').length} Lingkup Materi yang Didukung TP/ATP
+                </summary>
+                <div className="space-y-1.5 pt-2">
+                  {analysisResult.materialFindings
+                    .filter((m) => m.status === 'SUPPORTED')
+                    .map((finding) => {
+                      const unit = units.find((u) => u.id === finding.unitId);
+                      const mat = (unit?.materials || []).find((m) => m.id === finding.materialId);
+                      return (
+                        <div key={finding.id} className="flex items-center justify-between text-xs py-1 border-b border-slate-200/60 last:border-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900">Bab {unit?.order || '?'}:</span>
+                            <span>{mat?.title || 'Materi'}</span>
+                          </div>
+                          <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                            Didukung TP/ATP
+                          </span>
                         </div>
                       );
                     })}

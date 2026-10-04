@@ -307,6 +307,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
     } else {
       toSave = {
         id: currentItem.id,
+        stepNumber: items.length + 1,
         linkedTpIds: effectiveLinkedIds,
         focus: currentItem.focus?.trim() || undefined,
       };
