@@ -27,6 +27,7 @@ import {
 } from '../types';
 import {
   analyzeATPUnitMappingWithAI,
+  generateCanonicalATPUnitMappingWithAI,
   MappingAnalysisResult,
 } from '../services/aiService';
 
@@ -38,6 +39,17 @@ export interface ATPUnitMappingManagerProps {
   onSaveMapping: (updatedMapping: ATPUnitMappingData) => boolean;
   onNextStep: () => void;
   onBackToATP: () => void;
+}
+
+/**
+ * Checks if a unit title is a generic default placeholder rather than substantive manual teacher content.
+ */
+export function isPlaceholderUnitTitle(title?: string): boolean {
+  if (!title || !title.trim()) return true;
+  const trimmed = title.trim();
+  if (/^(?:bab|unit)\s*\d+$/i.test(trimmed)) return true;
+  if (/^(?:bab|unit)\s*\d*\s*[:\-]?\s*(?:\(judul\s+bab\s+baru\)|\(judul\s+unit\s+baru\)|\(bab\s+baru\))$/i.test(trimmed)) return true;
+  return false;
 }
 
 /**
@@ -180,6 +192,9 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     createInitialUnits(mapping, atp.items || [])
   );
   const [hasChanges, setHasChanges] = useState(false);
+  const [hasExplicitTargetUnitCount, setHasExplicitTargetUnitCount] = useState(false);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
   const [saveErrorNotice, setSaveErrorNotice] = useState<string | null>(null);
   const [localValidationNotice, setLocalValidationNotice] = useState<string | null>(null);
@@ -198,6 +213,35 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     mapping && Array.isArray(mapping.units) && mapping.units.length > 0
   );
 
+  // Substantive manual content check (EMPTY-ONLY AI generation gate)
+  const hasSubstantiveManualMappingContent = useMemo(() => {
+    // A. canonical mapping sudah ada
+    if (hasCanonicalMapping) return true;
+
+    // B. ada unit.linkedAtpItemIds.length > 0
+    if (units.some((u) => Array.isArray(u.linkedAtpItemIds) && u.linkedAtpItemIds.length > 0)) {
+      return true;
+    }
+
+    // C. ada material.title.trim() non-empty
+    if (
+      units.some(
+        (u) =>
+          Array.isArray(u.materials) &&
+          u.materials.some((m) => m.title && m.title.trim().length > 0)
+      )
+    ) {
+      return true;
+    }
+
+    // D. guru mengubah judul default Bab menjadi title substantif
+    if (units.some((u) => !isPlaceholderUnitTitle(u.title))) {
+      return true;
+    }
+
+    return false;
+  }, [hasCanonicalMapping, units]);
+
   const hasMeaningfulUnsavedDraft =
     !hasCanonicalMapping &&
     units.some(
@@ -207,6 +251,47 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     );
 
   const canSave = hasChanges || hasMeaningfulUnsavedDraft;
+
+  // AI Initial Generation State
+  const [isGeneratingMapping, setIsGeneratingMapping] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+
+  const handleGenerateMapping = async () => {
+    if (isGeneratingMapping) return;
+    setIsGeneratingMapping(true);
+    setGenerationError(null);
+    setAnalysisError(null);
+    setAppliedNotice(null);
+
+    try {
+      const generated = await generateCanonicalATPUnitMappingWithAI({
+        academicSettingId: academicSetting?.id || atp.academicSettingId,
+        subject: academicSetting?.subject,
+        grade: academicSetting?.grade,
+        phase: academicSetting?.phase,
+        tpData: tp,
+        atpData: atp,
+        targetUnitCount: units.length > 0 ? units.length : undefined,
+      });
+
+      if (generated && Array.isArray(generated.units) && generated.units.length > 0) {
+        const nextUnits = createInitialUnits(generated, atp.items || []);
+        setUnits(nextUnits);
+        setHasChanges(true);
+        setSaveSuccessNotice(false);
+        setSaveErrorNotice(null);
+        setAnalysisResult(null);
+        setSelectedAnalysisActionIds(new Set());
+        setAppliedNotice(
+          'Draf Pemetaan Bab dan Lingkup Materi berhasil disusun otomatis oleh AI dari TP & ATP. Silakan tinjau dan klik "Simpan Pemetaan" untuk menyimpan.'
+        );
+      }
+    } catch (err: any) {
+      setGenerationError(err?.message || 'Gagal menyusun pemetaan dengan AI.');
+    } finally {
+      setIsGeneratingMapping(false);
+    }
+  };
 
   // Local structural validator (deterministic check)
   const localValidation = useMemo(() => {
@@ -382,6 +467,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   };
 
   const handleTargetCountChange = (newCount: number) => {
+    setHasExplicitTargetUnitCount(true);
     const clamped = Math.max(1, Math.min(15, newCount));
     if (clamped > units.length) {
       const toAdd = clamped - units.length;
@@ -924,6 +1010,23 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
           </div>
         )}
 
+        {/* AI Generation Error Notice */}
+        {generationError && (
+          <div className="mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>Penyusunan Pemetaan AI gagal: {generationError}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setGenerationError(null)}
+              className="text-xs font-bold text-rose-600 hover:underline cursor-pointer"
+            >
+              Tutup
+            </button>
+          </div>
+        )}
+
         {/* AI Analysis Error Notice */}
         {analysisError && (
           <div className="mt-3 p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center justify-between gap-2 animate-fadeIn">
@@ -1012,14 +1115,32 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
             </button>
           </div>
 
-          {/* AI Analysis Trigger Button */}
-          <div className="flex items-center gap-2.5">
+          {/* AI Action Buttons */}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            {!hasSubstantiveManualMappingContent && (
+              <button
+                id="btn-generate-canonical-mapping"
+                type="button"
+                onClick={handleGenerateMapping}
+                disabled={isGeneratingMapping || (atp.items || []).length === 0}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Susun struktur Bab dan Lingkup Materi awal secara otomatis dari butir TP & alur ATP"
+              >
+                <Sparkles className={`w-4 h-4 ${isGeneratingMapping ? 'animate-spin' : ''}`} />
+                <span>{isGeneratingMapping ? 'Menyusun Pemetaan...' : 'Susun Pemetaan dengan AI'}</span>
+              </button>
+            )}
+
             <button
               id="btn-analyze-mapping"
               type="button"
               onClick={handleAnalyzeMapping}
               disabled={isAnalyzing || units.length === 0}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-700 to-blue-700 hover:from-indigo-800 hover:to-blue-800 text-white text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                hasSubstantiveManualMappingContent
+                  ? 'bg-gradient-to-r from-indigo-700 to-blue-700 hover:from-indigo-800 hover:to-blue-800 text-white'
+                  : 'bg-white border border-indigo-200 text-indigo-900 hover:bg-indigo-50'
+              }`}
             >
               <Sparkles className={`w-4 h-4 ${isAnalyzing ? 'animate-spin' : ''}`} />
               <span>{isAnalyzing ? 'Menganalisis...' : 'Analisis Pemetaan'}</span>
@@ -1031,7 +1152,15 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         <div className="bg-slate-50 p-3 rounded-xl border border-slate-200/80 flex items-start gap-2.5 text-xs text-slate-600">
           <Info className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
           <p>
-            <strong>Authority Struktur Guru:</strong> Struktur Bab & Lingkup Materi manual adalah acuan utama. Fitur <em>Analisis Pemetaan</em> memberikan telaah keselarasan TP ↔ ATP dan saran opsional tanpa mengubah struktur Bab secara otomatis.
+            {hasSubstantiveManualMappingContent ? (
+              <>
+                <strong>Authority Struktur Guru:</strong> Struktur Bab & Lingkup Materi manual adalah acuan utama. Fitur <em>Analisis Pemetaan</em> memberikan telaah keselarasan TP ↔ ATP dan saran opsional tanpa mengubah struktur Bab secara otomatis.
+              </>
+            ) : (
+              <>
+                <strong>Penyusunan Pemetaan Awal:</strong> Draf Pemetaan belum memiliki isi substantif. Anda dapat menyusun Bab & Lingkup Materi secara manual atau menggunakan <strong>Susun Pemetaan dengan AI</strong> untuk mengelompokkan butir TP & alur ATP secara otomatis.
+              </>
+            )}
           </p>
         </div>
       </div>

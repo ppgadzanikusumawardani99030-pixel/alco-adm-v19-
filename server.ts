@@ -20,6 +20,7 @@ import {
   fallbackGenerateATPMapping,
   fallbackGenerateCanonicalATPUnitMapping,
   enforceCanonicalMappingInvariants,
+  resolveCanonicalAtpTpIds,
 } from './server/curriculumFallback';
 import {
   buildMappingAnalysisPrompt,
@@ -1440,6 +1441,11 @@ app.post('/api/ai/generate-canonical-atp-unit-mapping', async (req, res) => {
   } = req.body || {};
 
   const validTpItems = Array.isArray(tpData?.items) ? tpData.items : [];
+  const validTpIdSet = new Set<string>(
+    validTpItems
+      .map((tp: any) => tp.id)
+      .filter((id: any): id is string => typeof id === 'string' && id.trim().length > 0)
+  );
   const validAtpItems = Array.isArray(atpData?.items)
     ? [...atpData.items].sort((a, b) => (a.stepNumber || 0) - (b.stepNumber || 0))
     : [];
@@ -1462,26 +1468,19 @@ app.post('/api/ai/generate-canonical-atp-unit-mapping', async (req, res) => {
       const ai = createAIClient(apiKey);
 
       const prompt = `Anda adalah pakar pengembang kurikulum dan perangkat pembelajaran Kurikulum Merdeka.
-Tugas Anda adalah melakukan pengelompokan tematis (Semantic Clustering) butir-butir Tujuan Pembelajaran (TP) dan Alur Tujuan Pembelajaran (ATP) ke dalam Unit / Bab Pembelajaran yang bermakna, serta mendekomposisi setiap Bab menjadi beberapa Lingkup Materi Inti.
+TUGAS ANDA: Melakukan pengelompokan tematis (Semantic Clustering) butir-butir Tujuan Pembelajaran (TP) dan Alur Tujuan Pembelajaran (ATP) ke dalam Unit / Bab Pembelajaran yang bermakna dari nol, serta mendekomposisi setiap Bab menjadi beberapa Lingkup Materi Inti.
 
-PRINSIP & OTORITAS PEDAGOGIS (WAJIB DIPATUHI):
-1. TP adalah otoritas konten dan tujuan pembelajaran.
-2. ATP adalah otoritas kronologi / urutan pembelajaran (stepNumber).
-3. Bab / Unit mengelompokkan TP dan langkah ATP yang relevan secara semantik (Semantic Clustering), bukan pembagian butir secara mekanis (misal 12 TP dibagi 6 = 2).
-4. TP dari elemen/domain yang berbeda namun mendukung topik yang sama dapat disatukan dalam satu Bab (misal: TP pemahaman dan TP keterampilan praktis pada topik yang sama).
-5. TP integratif / lintas-elemen (misal: karakter/evaluasi diri/analisis umum) dapat dikaitkan ke Bab relevan bersama TP konten utama.
-6. ${
+PRINSIP & ATURAN GENERATOR CANONICAL (WAJIB DIPATUHI):
+1. KONTRAK MULTI-TP ATP: Satu langkah ATP (ATP Step) dapat menaungi SATU ATAU LEBIH (1..n) TP atomik pada 'linkedTpIds'. Anda HARUS mempertimbangkan SELURUH TP tertaut pada setiap langkah ATP secara bersamaan (bukan hanya TP pertama).
+2. KRONOLOGI & CONTINUITY: ATP adalah unit urutan dan otoritas kronologi (stepNumber). Urutan Bab harus menjaga kesinambungan kronologi langkah ATP secara logis (misal: Bab 1 memuat ATP 1,2,3; Bab 2 memuat ATP 4,5; dst).
+3. EXACTLY ONE PRIMARY BAB: Satu langkah ATP hanya boleh memiliki TEPAT SATU primary Bab. JANGAN memasukkan atau menduplikasi langkah ATP yang sama ke beberapa Bab.
+4. LINGKUP MATERI BERDASARKAN TP/ATP: Setiap Bab didekomposisi menjadi Lingkup Materi yang didukung secara autentik oleh TP/ATP terkait. Lingkup materi dapat mengakomodasi satu atau beberapa TP/ATP. JANGAN membuat materi generik kosong ("Materi 1", "Materi Pembelajaran") jika ada topik substantif.
+5. INTEGRITAS RUJUKAN: Setiap relasi linkedTpIds dan linkedAtpItemIds WAJIB menggunakan persis string ID input ([TP_ID: ...] dan [ATP_ID: ...]). JANGAN membuat TP atau ATP fiktif.
+6. JANGAN menentukan alokasi JP, semester, pertemuan, rencana asesmen, atau Modul Ajar/LearningPlan pada tahap ini.
+7. ${
   count
-    ? `Target jumlah Bab adalah ${count} Bab sebagai panduan organisasi. Jika TP/ATP yang tersedia secara alami lebih sesuai dengan jumlah Bab tertentu, gunakan pengelompokan yang paling logis.`
-    : `Jumlah Bab ditentukan secara alami berdasarkan kesamaan semantik (Semantic Clustering) dari materi TP/ATP. Jangan memaksakan atau menggabungkan materi yang berbeda secara mekanis hanya untuk menuju jumlah unit tertentu.`
-} JANGAN PERNAH membuat TP atau ATP fiktif.
-7. Setiap Bab didekomposisi menjadi Lingkup Materi yang didukung secara autentik oleh TP dan konteks Analisis CP terkait (Lingkup Materi BUKAN sekadar 1:1 dengan langkah ATP). Satu Bab dapat memuat satu atau beberapa Lingkup Materi sesuai kedalaman materi yang didukung secara pedagogis. JANGAN MENGARANG materi generik atau fiktif hanya untuk memenuhi kuota jumlah materi.
-8. Setiap Lingkup Materi harus mencantumkan relasi linkedTpIds dan linkedAtpItemIds dari TP/ATP yang mendukungnya.
-9. Gunakan "TP_CODE" dan "scopeCode" (seperti PGD, AS, dll) sebagai isyarat semantis yang sangat kuat (strong semantic signal) untuk pengelompokan lintas elemen. Sebagai contoh, TP dengan scopeCode yang sama mengindikasikan mereka harus berada dalam keluarga Unit/Bab yang sama. JANGAN melakukan hardcode khusus PJOK.
-${
-  existingMapping && Array.isArray(existingMapping.units) && existingMapping.units.length > 0
-    ? `10. OTORITAS GURU (MUTLAK): Guru telah mengisi struktur pemetaan sebelumnya. Nama Bab dan nama Lingkup Materi yang sudah diisi guru TIDAK BOLEH DIUBAH/DITIMPA SAMA SEKALI. Anda hanya bertugas melengkapi nama yang kosong atau menyempurnakan relasi TP/ATP.`
-    : ''
+    ? `Target jumlah Bab adalah ${count} Bab sebagai panduan organisasi.`
+    : `Jumlah Bab ditentukan secara alami berdasarkan kesamaan semantik (Semantic Clustering) dari materi TP/ATP tanpa memaksakan jumlah tertentu.`
 }
 
 DATA KURIKULUM:
@@ -1489,25 +1488,33 @@ DATA KURIKULUM:
 - Kelas / Fase: ${grade} (${phase})
 ${count ? `- Target Jumlah Bab: ${count} Bab` : '- Target Jumlah Bab: Sesuai keselarasan semantis alami'}
 
-DAFTAR TUJUAN PEMBELAJARAN (TP):
+DAFTAR TUJUAN PEMBELAJARAN (TP CANONICAL):
 ${validTpItems
   .map(
     (tp, i) =>
-      `${i + 1}. [TP_ID: ${tp.id}] Kode TP: ${tp.code || `TP-${i + 1}`} | ScopeCode: ${tp.scopeCode || 'MAT'} | Elemen: ${tp.elementName || '-'} | Rumusan: "${
+      `${i + 1}. [TP_ID: ${tp.id}] Kode: ${tp.code || `TP-${i + 1}`} | ScopeCode: ${tp.scopeCode || 'MAT'} | Elemen: ${tp.elementName || '-'} | Rumusan: "${
         tp.statement
-      }" | Lingkup Materi TP: "${tp.contentScope || '-'}" | Kompetensi: "${tp.competence || '-'}"`
+      }" | Lingkup Materi: "${tp.contentScope || '-'}" | Kompetensi: "${tp.competence || '-'}"`
   )
   .join('\n')}
 
-DAFTAR ALUR TUJUAN PEMBELAJARAN (ATP) SECARA KRONOLOGIS:
+DAFTAR ALUR TUJUAN PEMBELAJARAN (ATP CANONICAL) SECARA KRONOLOGIS:
 ${validAtpItems
-  .map(
-    (atp, i) =>
-      `${i + 1}. [ATP_ID: ${atp.id}] Langkah #${atp.stepNumber || i + 1} (Ref TP_ID: ${atp.tpId || '-'}): "${
-        atp.tpStatement || tpMap.get(atp.tpId || '')?.statement || '-'
-      }"`
-  )
-  .join('\n')}
+  .map((atp, i) => {
+    const resolvedTpIds = resolveCanonicalAtpTpIds(atp, validTpIdSet);
+    const tpDetails = resolvedTpIds
+      .map((id) => {
+        const t = tpMap.get(id);
+        return `   - [TP_ID: ${id}] (${t?.code || 'TP'}): "${t?.statement || '-'}" (Materi: "${t?.contentScope || '-'}", ScopeCode: "${t?.scopeCode || '-'}")`;
+      })
+      .join('\n');
+    return `Langkah #${atp.stepNumber || i + 1}
+[ATP_ID: ${atp.id}]
+Fokus: ${atp.focus || '-'}
+TP Tertaut:
+${tpDetails || '   - (Tidak ada TP)'}`;
+  })
+  .join('\n\n')}
 ${
   Array.isArray(cpAnalysisData?.items) && cpAnalysisData.items.length > 0
     ? `\nKONTEKS ANALISIS CP (REFERENSI PENDUKUNG):\n${cpAnalysisData.items
@@ -1518,24 +1525,10 @@ ${
         .join('\n')}`
     : ''
 }
-${
-  existingMapping && Array.isArray(existingMapping.units) && existingMapping.units.length > 0
-    ? `\nSTRUKTUR EKSISTING DARI GURU (PERTAHANKAN STRUKTUR & JUDUL NON-KOSONG):\n${JSON.stringify(
-        existingMapping.units.map((u) => ({
-          id: u.id,
-          title: u.title,
-          order: u.order,
-          materials: (u.materials || []).map((m) => ({ id: m.id, title: m.title, order: m.order })),
-        })),
-        null,
-        2
-      )}`
-    : ''
-}
 
 Kembalikan respon JSON dengan skema:
 - units: array Unit / Bab Pembelajaran.
-  - id: ID unik unit (misal "unit-1" atau ID eksisting jika ada)
+  - id: ID unik unit (misal "unit-1")
   - title: Judul Bab (misal "Bab 1: Menjelajah Teks Deskripsi")
   - order: Nomor urut Bab (1, 2, 3...)
   - linkedTpIds: Array ID TP yang dipayungi oleh Bab ini
@@ -1605,83 +1598,56 @@ Kembalikan respon JSON dengan skema:
         // SERVER-SIDE DETERMINISTIC MERGE SAFETY & SANITIZATION
         const rawUnits = parsed.units;
 
-        // Map existing units/materials for strict preservation
-        const existingUnitsList = existingMapping && Array.isArray(existingMapping.units) ? existingMapping.units : [];
-
-        const consumedUnitIds = new Set<string>();
-
         const sanitizedUnits = rawUnits.map((u: any, uIdx: number) => {
           const unitOrder = u.order || uIdx + 1;
-          const availableUnits = existingUnitsList.filter(eu => !consumedUnitIds.has(eu.id));
-          const matchedExisting = findBestExistingUnitMatch(u, availableUnits);
-          if (matchedExisting) {
-            consumedUnitIds.add(matchedExisting.id);
-          }
+          const finalTitle = (u.title || `Bab ${unitOrder}`).trim();
+          const finalUnitId = u.id || `unit-${Date.now()}-${unitOrder}`;
 
-          // Strictly preserve teacher title if non-empty
-          const finalTitle =
-            matchedExisting && matchedExisting.title && matchedExisting.title.trim().length > 0
-              ? matchedExisting.title.trim()
-              : (u.title || `Bab ${unitOrder}`).trim();
-
-          const finalUnitId = matchedExisting?.id || u.id || `unit-${Date.now()}-${unitOrder}`;
-
-          // Sanitize linked IDs (only allow IDs that exist in canonical TP and ATP)
-          const validLinkedTpIds: string[] = Array.isArray(u.linkedTpIds)
-            ? Array.from(new Set(u.linkedTpIds.filter((id: string) => tpMap.has(id))))
-            : [];
+          // Sanitize linked IDs
           const validLinkedAtpItemIds: string[] = Array.isArray(u.linkedAtpItemIds)
             ? Array.from(new Set(u.linkedAtpItemIds.filter((id: string) => atpMap.has(id))))
             : [];
+          const validLinkedTpIds: string[] = Array.isArray(u.linkedTpIds)
+            ? Array.from(new Set(u.linkedTpIds.filter((id: string) => tpMap.has(id))))
+            : [];
 
-          // LINK CONTRACT: Ensure linkedTpIds contains corresponding tpId of every linkedAtpItemId
-          validLinkedAtpItemIds.forEach(atpId => {
+          // LINK CONTRACT: Ensure linkedTpIds contains all canonical resolved TPs from every linkedAtpItemId
+          validLinkedAtpItemIds.forEach((atpId) => {
             const atpItem = atpMap.get(atpId);
-            if (atpItem && atpItem.tpId && !validLinkedTpIds.includes(atpItem.tpId)) {
-              validLinkedTpIds.push(atpItem.tpId);
+            if (atpItem) {
+              const resolvedTpIds = resolveCanonicalAtpTpIds(atpItem, validTpIdSet);
+              resolvedTpIds.forEach((tpId) => {
+                if (!validLinkedTpIds.includes(tpId)) {
+                  validLinkedTpIds.push(tpId);
+                }
+              });
             }
           });
 
           // Sanitize materials
-          const existingMaterials = matchedExisting?.materials || [];
           const rawMaterials = Array.isArray(u.materials) ? u.materials : [];
-
-          const consumedMaterialIds = new Set<string>();
-
           const sanitizedMaterials = rawMaterials.map((m: any, mIdx: number) => {
             const matOrder = m.order || mIdx + 1;
-            const availableMaterials = existingMaterials.filter(em => !consumedMaterialIds.has(em.id));
-            const matchedMat = findBestExistingMaterialMatch(m, availableMaterials);
-            if (matchedMat) {
-              consumedMaterialIds.add(matchedMat.id);
-            }
+            const finalMatTitle = (m.title || `Lingkup Materi ${matOrder}`).trim();
+            const finalMatId = m.id || `mat-${Date.now()}-${unitOrder}-${matOrder}`;
 
-            const finalMatTitle =
-              matchedMat && matchedMat.title && matchedMat.title.trim().length > 0
-                ? matchedMat.title.trim()
-                : (m.title || `Lingkup Materi ${matOrder}`).trim();
-
-            const finalMatId = matchedMat?.id || m.id || `mat-${Date.now()}-${unitOrder}-${matOrder}`;
-
+            const matAtpIds: string[] = Array.isArray(m.linkedAtpItemIds)
+              ? Array.from(new Set(m.linkedAtpItemIds.filter((id: string) => atpMap.has(id) && validLinkedAtpItemIds.includes(id))))
+              : [];
             const matTpIds: string[] = Array.isArray(m.linkedTpIds)
               ? Array.from(new Set(m.linkedTpIds.filter((id: string) => tpMap.has(id))))
               : [];
-            const matAtpIds: string[] = Array.isArray(m.linkedAtpItemIds)
-              ? Array.from(new Set(m.linkedAtpItemIds.filter((id: string) => atpMap.has(id))))
-              : [];
 
-            // LINK CONTRACT: Ensure linkedTpIds contains corresponding tpId of every linkedAtpItemId
-            matAtpIds.forEach(atpId => {
+            // LINK CONTRACT: Ensure material linkedTpIds contains corresponding resolved TPs
+            matAtpIds.forEach((atpId) => {
               const atpItem = atpMap.get(atpId);
-              if (atpItem && atpItem.tpId && !matTpIds.includes(atpItem.tpId)) {
-                matTpIds.push(atpItem.tpId);
-              }
-              // Propagation to unit level
-              if (!validLinkedAtpItemIds.includes(atpId)) {
-                validLinkedAtpItemIds.push(atpId);
-              }
-              if (atpItem && atpItem.tpId && !validLinkedTpIds.includes(atpItem.tpId)) {
-                validLinkedTpIds.push(atpItem.tpId);
+              if (atpItem) {
+                const resolvedTpIds = resolveCanonicalAtpTpIds(atpItem, validTpIdSet);
+                resolvedTpIds.forEach((tpId) => {
+                  if (!matTpIds.includes(tpId) && validLinkedTpIds.includes(tpId)) {
+                    matTpIds.push(tpId);
+                  }
+                });
               }
             });
 
@@ -1692,19 +1658,6 @@ Kembalikan respon JSON dengan skema:
               linkedTpIds: matTpIds.length > 0 ? matTpIds : [...validLinkedTpIds],
               linkedAtpItemIds: matAtpIds.length > 0 ? matAtpIds : [...validLinkedAtpItemIds],
             };
-          });
-
-          // If existing had materials that AI omitted, re-add them to preserve teacher work
-          existingMaterials.forEach((em: any) => {
-            if (!sanitizedMaterials.some((sm: any) => sm.id === em.id || sm.title === em.title)) {
-              sanitizedMaterials.push({
-                id: em.id || `mat-${Date.now()}-${unitOrder}-${sanitizedMaterials.length + 1}`,
-                title: em.title,
-                order: sanitizedMaterials.length + 1,
-                linkedTpIds: (em.linkedTpIds || []).filter((id: string) => tpMap.has(id)),
-                linkedAtpItemIds: (em.linkedAtpItemIds || []).filter((id: string) => atpMap.has(id)),
-              });
-            }
           });
 
           sanitizedMaterials.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
@@ -1718,22 +1671,6 @@ Kembalikan respon JSON dengan skema:
             materials: sanitizedMaterials,
           };
         });
-
-        // If existingMapping had extra teacher units that AI omitted, preserve them
-        if (existingMapping && Array.isArray(existingMapping.units)) {
-          existingMapping.units.forEach((eu: any) => {
-            if (!sanitizedUnits.some((su: any) => su.id === eu.id || su.title === eu.title)) {
-              sanitizedUnits.push({
-                id: eu.id || `unit-${Date.now()}-${sanitizedUnits.length + 1}`,
-                title: eu.title,
-                order: sanitizedUnits.length + 1,
-                linkedTpIds: (eu.linkedTpIds || []).filter((id: string) => tpMap.has(id)),
-                linkedAtpItemIds: (eu.linkedAtpItemIds || []).filter((id: string) => atpMap.has(id)),
-                materials: Array.isArray(eu.materials) ? eu.materials : [],
-              });
-            }
-          });
-        }
 
         sanitizedUnits.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
 
