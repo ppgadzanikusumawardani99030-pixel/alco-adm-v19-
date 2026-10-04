@@ -617,7 +617,8 @@ export function validateStorageStateV5(value: unknown): AppStorageStateV5 {
         'semesterJPSettings',
         'semesterData.academicCalendar',
         'semesterData.attendance',
-        'semesterData.grade'
+        'semesterData.grade',
+        'semesterData.subjectWeeklySchedules'
       ];
 
       if (arrayValuedCollections.includes(collName)) {
@@ -694,6 +695,10 @@ export function validateStorageStateV5(value: unknown): AppStorageStateV5 {
   validateSemesterScopedCollection(
     semesterData.enrichment as Array<Record<string, unknown>>,
     'semesterData.enrichment'
+  );
+  validateSemesterScopedCollection(
+    semesterData.subjectWeeklySchedules as Array<Record<string, unknown>>,
+    'semesterData.subjectWeeklySchedules'
   );
 
   // 7. Active Context Pointer Validation
@@ -2368,8 +2373,11 @@ function performDeleteYearHierarchyInState(
   if (Array.isArray(state.annualData.atpUnitMappings)) {
     state.annualData.atpUnitMappings = state.annualData.atpUnitMappings.filter((e) => e.yearPlanId !== targetYearPlanId);
   }
+  if (Array.isArray(state.annualData.unitExecutionPlans)) {
+    state.annualData.unitExecutionPlans = state.annualData.unitExecutionPlans.filter((e) => e.yearPlanId !== targetYearPlanId);
+  }
   state.annualData.curriculumContext = state.annualData.curriculumContext.filter((e) => e.yearPlanId !== targetYearPlanId);
-
+ 
   // 3. Semester cascade removal (authority: entry.semesterPlanId)
   state.semesterJPSettings = state.semesterJPSettings.filter((e) => !targetSemesterPlanIds.has(e.semesterPlanId));
   state.semesterData.academicCalendar = state.semesterData.academicCalendar.filter((e) => !targetSemesterPlanIds.has(e.semesterPlanId));
@@ -2383,6 +2391,9 @@ function performDeleteYearHierarchyInState(
   state.semesterData.grade = state.semesterData.grade.filter((e) => !targetSemesterPlanIds.has(e.semesterPlanId));
   state.semesterData.remedial = state.semesterData.remedial.filter((e) => !targetSemesterPlanIds.has(e.semesterPlanId));
   state.semesterData.enrichment = state.semesterData.enrichment.filter((e) => !targetSemesterPlanIds.has(e.semesterPlanId));
+  if (Array.isArray(state.semesterData.subjectWeeklySchedules)) {
+    state.semesterData.subjectWeeklySchedules = state.semesterData.subjectWeeklySchedules.filter((e) => !targetSemesterPlanIds.has(e.semesterPlanId));
+  }
 
   // 4. Documents cascade removal (authority: document.workspaceId)
   if (Array.isArray(state.documents)) {
