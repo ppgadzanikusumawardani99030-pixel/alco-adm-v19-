@@ -751,9 +751,9 @@ export function isLearningMeetingScheduleReady(params: {
   semester: 1 | 2;
   mapping: ATPUnitMappingData | null | undefined;
   unitExecutionPlan: UnitExecutionPlanData | null | undefined;
-  subjectWeeklySchedule: SubjectWeeklyScheduleData | null | undefined;
+  subjectWeeklySchedule: SubjectWeeklySchedule | null | undefined;
   expectedWeeklyJP: number | null | undefined;
-  calendar: AcademicCalendarData | null | undefined;
+  calendar: AcademicCalendar | null | undefined;
   calendarDays?: CalendarDay[];
 }): ExactScheduleReadinessResult {
   const {

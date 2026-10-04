@@ -782,6 +782,7 @@ export function validateWorkflowDependencies(
     // 5c. Perencanaan Tahunan (Kalender & JP S1 & S2) step state (Requires structurally complete Pemetaan & saved time allocations)
     let isAnnualPlanningComplete = false;
     let annualPlanningReason: string | undefined = undefined;
+    let isScheduleStale = false;
 
     try {
       const v5State = loadStorageV5();
@@ -898,7 +899,6 @@ export function validateWorkflowDependencies(
       // Check exact schedule readiness S1 + S2 (completion authority for Step 08 Kurikulum Merdeka)
       let isAllocationComplete = false;
       let allocationReason: string | undefined = undefined;
-      let isScheduleStale = false;
 
       if (s1 && s2) {
         const s1WeeklyJP = s1Cap?.actualScheduledWeeklyJP ?? s1Data?.semesterJPSetting?.actualScheduledWeeklyJP;
@@ -995,7 +995,7 @@ export function validateWorkflowDependencies(
       status: isSemesterBlocked ? 'BLOCKED' : 'READY',
       isBlocked: isSemesterBlocked,
       isComplete: false,
-      isStale: isMappingStale,
+      isStale: isAnnualPlanningStale,
       reason: isSemesterBlocked
         ? (isMappingStale
             ? 'Pemetaan Unit/Bab berubah. Tinjau kembali Perencanaan Tahunan (08).'
