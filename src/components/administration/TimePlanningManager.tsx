@@ -100,6 +100,7 @@ export interface TimePlanningManagerProps {
   timeAllocations: TimeAllocation[];
   semesterJPSetting?: SemesterJPSetting;
   subjectWeeklySchedule?: SubjectWeeklySchedule;
+  afterTimeSetup?: React.ReactNode;
   explicitSemesterPlanId?: string;
   onSaveCalendar: (calendar: AcademicCalendar, days: CalendarDay[], explicitSemesterPlanId?: string) => boolean;
   onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => boolean;
@@ -118,6 +119,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   timeAllocations = [],
   semesterJPSetting,
   subjectWeeklySchedule,
+  afterTimeSetup,
   explicitSemesterPlanId,
   onSaveCalendar,
   onSaveSemesterJPSetting,
@@ -2511,8 +2513,10 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
         />
       )}
 
+      {afterTimeSetup}
+
       {/* Bottom: Weekly Time Allocations mapped to ATP / K13 */}
-      <div className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">
+      <div id="annual-section-time-allocation" className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4 mb-4">
           <div className="flex items-center gap-2">
             <Layers className="w-5 h-5 text-indigo-600" />
@@ -2585,139 +2589,6 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
             </div>
           </div>
         </div>
-
-        {/* Kurikulum Merdeka: Auto-Allocation Readiness Checklist Card */}
-        {!isK13Curriculum && (
-          <div className="mb-5 bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200/80 pb-2">
-              <div className="flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-indigo-600" />
-                <span className="font-bold text-slate-800">
-                  Status Kesiapan Partisi ATP Tahunan (S1 &amp; S2):
-                </span>
-              </div>
-              <span
-                className={`px-2.5 py-0.5 rounded text-[11px] font-bold border ${
-                  autoAllocationReadiness.isReady
-                    ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                    : 'bg-amber-100 text-amber-800 border-amber-300'
-                }`}
-              >
-                {autoAllocationReadiness.isReady ? 'Siap Dipartisi' : 'Prasyarat Belum Lengkap'}
-              </span>
-            </div>
-
-            {/* Status Checklist: S1 Calendar, S1 JP, S2 Calendar, S2 JP, ATP items */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[11px]">
-              <div className="flex items-center gap-1.5 p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
-                {autoAllocationReadiness.s1CalReady ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                ) : (
-                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-                )}
-                <div className="truncate">
-                  <span className="text-slate-500 block text-[10px]">Kalender S1</span>
-                  <span className="font-semibold text-slate-800">
-                    {autoAllocationReadiness.s1CalReady ? 'Tersimpan' : (activeSemester === '1' && hasGeneratedEffectiveCalendar ? 'Draf' : 'Belum dibuat')}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
-                {autoAllocationReadiness.s1JPReady ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                ) : (
-                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-                )}
-                <div className="truncate">
-                  <span className="text-slate-500 block text-[10px]">JP S1</span>
-                  <span className="font-semibold text-slate-800">{autoAllocationReadiness.s1JPReady ? 'Siap' : 'Belum'}</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
-                {autoAllocationReadiness.s2CalReady ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                ) : (
-                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-                )}
-                <div className="truncate">
-                  <span className="text-slate-500 block text-[10px]">Kalender S2</span>
-                  <span className="font-semibold text-slate-800">
-                    {autoAllocationReadiness.s2CalReady ? 'Tersimpan' : (activeSemester === '2' && hasGeneratedEffectiveCalendar ? 'Draf' : 'Belum dibuat')}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
-                {autoAllocationReadiness.s2JPReady ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                ) : (
-                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-                )}
-                <div className="truncate">
-                  <span className="text-slate-500 block text-[10px]">JP S2</span>
-                  <span className="font-semibold text-slate-800">{autoAllocationReadiness.s2JPReady ? 'Siap' : 'Belum'}</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 p-2 rounded-lg bg-white border border-slate-200 shadow-2xs">
-                {autoAllocationReadiness.hasAtpItems ? (
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                ) : (
-                  <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0" />
-                )}
-                <div className="truncate">
-                  <span className="text-slate-500 block text-[10px]">Total TP/ATP</span>
-                  <span className="font-semibold text-slate-800">{autoAllocationReadiness.hasAtpItems ? `${autoAllocationReadiness.atpCount} TP` : 'Kosong'}</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Canonical Capacity Display for Semester 1 & Semester 2 */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2.5 border-t border-slate-200/80 text-[11px]">
-              <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1">
-                <div className="flex items-center justify-between font-bold text-slate-800">
-                  <span>Semester 1</span>
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] ${autoAllocationReadiness.s1CalReady && autoAllocationReadiness.s1JPReady ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
-                    {autoAllocationReadiness.s1CalReady && autoAllocationReadiness.s1JPReady ? 'Tersimpan' : 'Belum Lengkap'}
-                  </span>
-                </div>
-                <div className="text-slate-600 space-y-0.5">
-                  <p>Kalender: <strong className={autoAllocationReadiness.s1CalReady ? 'text-emerald-700' : (activeSemester === '1' && hasGeneratedEffectiveCalendar ? 'text-amber-700' : 'text-slate-500')}>{activeSemester === '1' ? activeSemesterCalendarStatus : (autoAllocationReadiness.s1CalReady ? 'Tersimpan' : 'Belum dibuat')}</strong></p>
-                  <p>JP Tersimpan: <strong className={autoAllocationReadiness.s1JPReady ? 'text-emerald-700' : 'text-slate-500'}>{autoAllocationReadiness.s1JPReady && autoAllocationReadiness.s1Capacity?.actualScheduledWeeklyJP ? `${autoAllocationReadiness.s1Capacity.actualScheduledWeeklyJP} JP/pekan` : 'Belum disimpan'}</strong></p>
-                  <p>Kapasitas: <strong className={autoAllocationReadiness.s1Capacity?.availableJP ? 'text-indigo-700' : 'text-slate-400'}>{autoAllocationReadiness.s1Capacity?.availableJP ? `${autoAllocationReadiness.s1Capacity.availableJP} JP` : 'Belum tersedia'}</strong></p>
-                </div>
-              </div>
-
-              <div className="p-2.5 rounded-lg bg-white border border-slate-200 space-y-1">
-                <div className="flex items-center justify-between font-bold text-slate-800">
-                  <span>Semester 2</span>
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] ${autoAllocationReadiness.s2CalReady && autoAllocationReadiness.s2JPReady ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}`}>
-                    {autoAllocationReadiness.s2CalReady && autoAllocationReadiness.s2JPReady ? 'Tersimpan' : 'Belum Lengkap'}
-                  </span>
-                </div>
-                <div className="text-slate-600 space-y-0.5">
-                  <p>Kalender: <strong className={autoAllocationReadiness.s2CalReady ? 'text-emerald-700' : (activeSemester === '2' && hasGeneratedEffectiveCalendar ? 'text-amber-700' : 'text-slate-500')}>{activeSemester === '2' ? activeSemesterCalendarStatus : (autoAllocationReadiness.s2CalReady ? 'Tersimpan' : 'Belum dibuat')}</strong></p>
-                  <p>JP Tersimpan: <strong className={autoAllocationReadiness.s2JPReady ? 'text-emerald-700' : 'text-slate-500'}>{autoAllocationReadiness.s2JPReady && autoAllocationReadiness.s2Capacity?.actualScheduledWeeklyJP ? `${autoAllocationReadiness.s2Capacity.actualScheduledWeeklyJP} JP/pekan` : 'Belum disimpan'}</strong></p>
-                  <p>Kapasitas: <strong className={autoAllocationReadiness.s2Capacity?.availableJP ? 'text-indigo-700' : 'text-slate-400'}>{autoAllocationReadiness.s2Capacity?.availableJP ? `${autoAllocationReadiness.s2Capacity.availableJP} JP` : 'Belum tersedia'}</strong></p>
-                </div>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-slate-600 font-medium">
-              Pembagian ATP tahunan menggunakan kapasitas tersimpan Semester 1 dan Semester 2.
-            </p>
-
-            {/* Direct guidance */}
-            {autoAllocationReadiness.guidance && (
-              <p className="text-[11px] text-slate-600 flex items-center gap-1.5 pt-0.5">
-                <Info className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                <span><strong>Petunjuk:</strong> {autoAllocationReadiness.guidance}</span>
-              </p>
-            )}
-          </div>
-        )}
 
         {isK13Curriculum ? (
           /* K13 Table Mapping */

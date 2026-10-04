@@ -265,7 +265,7 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
           id: 'annual-planning',
           num: '08',
           title: 'RENCANA TAHUNAN',
-          sub: 'Kalender & JP S1/S2',
+          sub: 'Waktu, Bab & Pertemuan',
           icon: <CalendarRange className="w-4 h-4" />,
           status: stepStates['annual-planning'].status,
           isComplete: stepStates['annual-planning'].isComplete,
