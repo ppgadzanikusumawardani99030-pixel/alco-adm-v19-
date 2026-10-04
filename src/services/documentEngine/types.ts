@@ -28,6 +28,9 @@ import {
   DocumentSnapshot,
   SemesterJPSetting,
   AnnualJPReference,
+  ATPUnitMappingData,
+  UnitExecutionPlanData,
+  LearningMeetingScheduleData,
 } from '../../types';
 
 export type { DocumentType, DocumentMode, DocumentSnapshot, AppDocumentRecord, LearningPlan };
@@ -50,6 +53,13 @@ export interface DocumentGenerationContext {
   cp?: CPData;
   tp?: TPData;
   atp?: ATPData;
+  atpUnitMapping?: ATPUnitMappingData;
+  unitExecutionPlan?: UnitExecutionPlanData;
+  learningMeetingSchedules?: {
+    semesterPlanId: string;
+    semester: 1 | 2;
+    schedule: LearningMeetingScheduleData;
+  }[];
   students?: Student[];
   calendar?: AcademicCalendar;
   calendarDays?: CalendarDay[];

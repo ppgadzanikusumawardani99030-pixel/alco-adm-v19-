@@ -21,6 +21,9 @@ import {
   CPData,
   TPData,
   ATPData,
+  ATPUnitMappingData,
+  UnitExecutionPlanData,
+  LearningMeetingScheduleData,
   AppDocumentRecord,
   Student,
   AcademicCalendar,
@@ -71,6 +74,13 @@ interface AdministrationHubProps {
   cp?: CPData;
   tp?: TPData;
   atp?: ATPData;
+  atpUnitMapping?: ATPUnitMappingData;
+  unitExecutionPlan?: UnitExecutionPlanData;
+  learningMeetingSchedules?: {
+    semesterPlanId: string;
+    semester: 1 | 2;
+    schedule: LearningMeetingScheduleData;
+  }[];
   documents: AppDocumentRecord[];
   students: Student[];
   calendar: AcademicCalendar;
@@ -123,6 +133,9 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
   cp,
   tp,
   atp,
+  atpUnitMapping,
+  unitExecutionPlan,
+  learningMeetingSchedules = [],
   documents = [],
   students = [],
   calendar,
@@ -570,6 +583,9 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
             cp={cp}
             tp={tp}
             atp={atp}
+            atpUnitMapping={atpUnitMapping}
+            unitExecutionPlan={unitExecutionPlan}
+            learningMeetingSchedules={learningMeetingSchedules}
             documents={documents}
             students={students}
             calendar={calendar}

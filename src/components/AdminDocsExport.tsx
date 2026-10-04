@@ -31,6 +31,9 @@ import {
   CPData,
   TPData,
   ATPData,
+  ATPUnitMappingData,
+  UnitExecutionPlanData,
+  LearningMeetingScheduleData,
   AdministrationWorkspace,
   AppDocumentRecord,
   DocumentType,
@@ -89,6 +92,13 @@ interface AdminDocsExportProps {
   cp?: CPData;
   tp?: TPData;
   atp?: ATPData;
+  atpUnitMapping?: ATPUnitMappingData;
+  unitExecutionPlan?: UnitExecutionPlanData;
+  learningMeetingSchedules?: {
+    semesterPlanId: string;
+    semester: 1 | 2;
+    schedule: LearningMeetingScheduleData;
+  }[];
   documents?: AppDocumentRecord[];
   students?: Student[];
   calendar?: AcademicCalendar;
@@ -121,6 +131,9 @@ export const AdminDocsExport: React.FC<AdminDocsExportProps> = ({
   cp,
   tp,
   atp,
+  atpUnitMapping,
+  unitExecutionPlan,
+  learningMeetingSchedules = [],
   documents = [],
   students,
   calendar,
@@ -193,6 +206,9 @@ export const AdminDocsExport: React.FC<AdminDocsExportProps> = ({
     cp: cp || { id: '', academicSettingId: '', generalDescription: '', elements: [], updatedAt: '' },
     tp: tp || { id: '', academicSettingId: '', items: [], updatedAt: '' },
     atp: atp || { id: '', academicSettingId: '', rationale: '', items: [], totalJP: 0, updatedAt: '' },
+    atpUnitMapping,
+    unitExecutionPlan,
+    learningMeetingSchedules,
     students,
     calendar,
     calendarDays,

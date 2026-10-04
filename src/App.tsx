@@ -170,6 +170,26 @@ export function App() {
     });
   }, [semesterPlansForActiveYear, v5State.semesterData.timeAllocation]);
 
+  const learningMeetingSchedulesForActiveYear = useMemo(() => {
+    return semesterPlansForActiveYear
+      .map((sp) => {
+        const schedule = v5State.semesterData.learningMeetingSchedules?.find(
+          (entry) => entry.semesterPlanId === sp.id
+        )?.value;
+        if (!schedule) return null;
+        return {
+          semesterPlanId: sp.id,
+          semester: sp.semester,
+          schedule,
+        };
+      })
+      .filter((entry): entry is {
+        semesterPlanId: string;
+        semester: 1 | 2;
+        schedule: LearningMeetingScheduleData;
+      } => entry !== null);
+  }, [semesterPlansForActiveYear, v5State.semesterData.learningMeetingSchedules]);
+
   const activeSchoolForView = activeSchool || EMPTY_SCHOOL_VIEW;
   const newWorkspaceLevel = activeProfile?.defaultLevel || '';
   const availableGrades = newWorkspaceLevel && GRADE_PHASE_MAP[newWorkspaceLevel]
@@ -1722,6 +1742,9 @@ export function App() {
               cp={activeCP}
               tp={activeTP}
               atp={activeATP}
+              atpUnitMapping={activeATPUnitMapping}
+              unitExecutionPlan={activeUnitExecutionPlan}
+              learningMeetingSchedules={learningMeetingSchedulesForActiveYear}
               documents={v5State.documents || []}
               students={runtimeContext.semesterData?.roster || []}
               calendar={runtimeContext.semesterData?.academicCalendar?.calendar}
