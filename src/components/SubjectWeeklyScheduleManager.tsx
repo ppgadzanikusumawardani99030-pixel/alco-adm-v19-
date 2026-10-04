@@ -428,30 +428,55 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
         </h3>
 
         {!slotResult.isReady ? (
-          <div className="p-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-xs">
-            <p className="font-semibold">
-              {!calendar || calendar.workflowStatus !== 'CONFIRMED'
+          <div className="p-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-900 text-xs space-y-1">
+            <p className="font-bold flex items-center gap-1.5 text-rose-800">
+              <AlertTriangle className="w-4 h-4 text-rose-600" />
+              <span>Gagal Menghitung Slot Pertemuan Efektif</span>
+            </p>
+            <p className="font-semibold mt-0.5">
+              {schedule && slotResult.errors && slotResult.errors.length > 0
+                ? slotResult.errors[0]
+                : !calendar || calendar.workflowStatus !== 'CONFIRMED'
                 ? 'Simpan dan tetapkan Kalender Pendidikan untuk menghitung jumlah Pertemuan efektif.'
                 : 'Lengkapi pola jadwal dan pastikan Kalender Pendidikan valid untuk melihat jumlah Pertemuan efektif.'}
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-1">
-              <span className="text-[10px] text-slate-500 font-bold uppercase">Pertemuan Efektif</span>
-              <p className="text-base font-extrabold text-blue-600">{slotResult.totalMeetingSlots}</p>
-            </div>
-            <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-1">
-              <span className="text-[10px] text-slate-500 font-bold uppercase">JP Aktual</span>
-              <p className="text-base font-extrabold text-emerald-600">{slotResult.totalJP} JP</p>
-            </div>
-            <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-1">
-              <span className="text-[10px] text-slate-500 font-bold uppercase">Sesi / Minggu</span>
-              <p className="text-base font-extrabold text-indigo-600">{draft.sessions.length}</p>
-            </div>
-            <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-1">
-              <span className="text-[10px] text-slate-500 font-bold uppercase">Sesi Terdampak (Libur)</span>
-              <p className="text-base font-extrabold text-amber-600">{slotResult.totalExcludedOccurrences}</p>
+          <div className="space-y-4">
+            {isDirty ? (
+              <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 text-xs flex items-start gap-2.5 shadow-2xs">
+                <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Pratinjau draf — belum menjadi jadwal tersimpan</p>
+                  <p className="text-[11px] text-amber-800 mt-0.5">
+                    Klik <strong>Simpan Pola Jadwal</strong> untuk menyelesaikan tahap Waktu Semester.
+                  </p>
+                </div>
+              </div>
+            ) : schedule ? (
+              <div className="p-3.5 rounded-xl border border-emerald-200 bg-emerald-50 text-emerald-950 text-xs flex items-center gap-2 shadow-2xs">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span className="font-bold">Jadwal tersimpan</span>
+              </div>
+            ) : null}
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+              <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-1">
+                <span className="text-[10px] text-slate-500 font-bold uppercase">Pertemuan Efektif</span>
+                <p className="text-base font-extrabold text-blue-600">{slotResult.totalMeetingSlots}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-1">
+                <span className="text-[10px] text-slate-500 font-bold uppercase">JP Aktual</span>
+                <p className="text-base font-extrabold text-emerald-600">{slotResult.totalJP} JP</p>
+              </div>
+              <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-1">
+                <span className="text-[10px] text-slate-500 font-bold uppercase">Sesi / Minggu</span>
+                <p className="text-base font-extrabold text-indigo-600">{draft.sessions.length}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-white border border-slate-200 shadow-2xs space-y-1">
+                <span className="text-[10px] text-slate-500 font-bold uppercase">Sesi Terdampak (Libur)</span>
+                <p className="text-base font-extrabold text-amber-600">{slotResult.totalExcludedOccurrences}</p>
+              </div>
             </div>
           </div>
         )}

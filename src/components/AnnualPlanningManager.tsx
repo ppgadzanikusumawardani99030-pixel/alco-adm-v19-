@@ -256,8 +256,31 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     }, empty);
   }, [effectiveUnitExecutionPlan, placementValidation]);
 
-  const s1TimeReady = Boolean(s1Capacity?.isReady && s1SubjectSlots.isReady);
-  const s2TimeReady = Boolean(s2Capacity?.isReady && s2SubjectSlots.isReady);
+  const s1CalendarReady = Boolean(
+    s1Capacity?.isCalendarConfirmed &&
+    s1Capacity?.effectiveWeekSlots &&
+    s1Capacity.effectiveWeekSlots > 0
+  );
+  const s1JpReady = Boolean(
+    s1Capacity?.actualScheduledWeeklyJP &&
+    s1Capacity.actualScheduledWeeklyJP > 0
+  );
+  const s1ScheduleSaved = Boolean(s1Data?.subjectWeeklySchedule);
+  const s1SlotsReady = Boolean(s1SubjectSlots.isReady);
+  const s1TimeReady = s1CalendarReady && s1JpReady && s1ScheduleSaved && s1SlotsReady;
+
+  const s2CalendarReady = Boolean(
+    s2Capacity?.isCalendarConfirmed &&
+    s2Capacity?.effectiveWeekSlots &&
+    s2Capacity.effectiveWeekSlots > 0
+  );
+  const s2JpReady = Boolean(
+    s2Capacity?.actualScheduledWeeklyJP &&
+    s2Capacity.actualScheduledWeeklyJP > 0
+  );
+  const s2ScheduleSaved = Boolean(s2Data?.subjectWeeklySchedule);
+  const s2SlotsReady = Boolean(s2SubjectSlots.isReady);
+  const s2TimeReady = s2CalendarReady && s2JpReady && s2ScheduleSaved && s2SlotsReady;
   const s1MeetingCountMatches = meetingCounts.semester1 === s1SubjectSlots.totalMeetingSlots;
   const s2MeetingCountMatches = meetingCounts.semester2 === s2SubjectSlots.totalMeetingSlots;
   const meetingCountDetail = `S1 ${meetingCounts.semester1}/${s1SubjectSlots.totalMeetingSlots} • S2 ${meetingCounts.semester2}/${s2SubjectSlots.totalMeetingSlots} Pertemuan`;
@@ -464,7 +487,21 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     }
   }, [activeTaskId, s1TimeReady, s2TimeReady, placementReady, meetingExactReady]);
 
+  const s1Guidance = useMemo(() => {
+    if (!s1CalendarReady) return 'Simpan & Tetapkan Kalender Pendidikan.';
+    if (!s1JpReady) return 'Tentukan JP Mingguan Mapel.';
+    if (!s1ScheduleSaved) return 'Tentukan hari mengajar lalu klik Simpan Pola Jadwal.';
+    if (!s1SlotsReady) return 'Jadwal sudah tersimpan tetapi slot efektif belum valid. Periksa pesan validasi Kalender/Pola Jadwal.';
+    return 'Semester 1 siap. Lanjut ke Semester 2.';
+  }, [s1CalendarReady, s1JpReady, s1ScheduleSaved, s1SlotsReady]);
 
+  const s2Guidance = useMemo(() => {
+    if (!s2CalendarReady) return 'Simpan & Tetapkan Kalender Pendidikan.';
+    if (!s2JpReady) return 'Tentukan JP Mingguan Mapel.';
+    if (!s2ScheduleSaved) return 'Tentukan hari mengajar lalu klik Simpan Pola Jadwal.';
+    if (!s2SlotsReady) return 'Jadwal sudah tersimpan tetapi slot efektif belum valid. Periksa pesan validasi Kalender/Pola Jadwal.';
+    return 'Semester 2 siap. Lanjut ke Pembagian Bab.';
+  }, [s2CalendarReady, s2JpReady, s2ScheduleSaved, s2SlotsReady]);
 
   return (
     <div className="space-y-6">
@@ -515,13 +552,13 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                   <Calendar className="w-3.5 h-3.5 text-blue-700" />
                   <span>Waktu Semester 1</span>
                 </span>
-                {s1Capacity?.isReady ? (
+                {s1TimeReady ? (
                   <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold">
                     Siap
                   </span>
                 ) : (
                   <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold">
-                    Perlu Dilengkapi
+                    Belum Lengkap
                   </span>
                 )}
               </div>
@@ -557,13 +594,13 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                   <Calendar className="w-3.5 h-3.5 text-blue-700" />
                   <span>Waktu Semester 2</span>
                 </span>
-                {s2Capacity?.isReady ? (
+                {s2TimeReady ? (
                   <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-bold">
                     Siap
                   </span>
                 ) : (
                   <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[10px] font-bold">
-                    Perlu Dilengkapi
+                    Belum Lengkap
                   </span>
                 )}
               </div>
@@ -638,6 +675,147 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                 {activeHeaderDetails.desc}
               </p>
             </div>
+
+            {/* Kesiapan Checklist Card */}
+            {activeTaskId === 'time-s1' && (
+              <div className="p-4 rounded-xl border border-blue-200 bg-white shadow-2xs space-y-3 font-sans">
+                <h4 className="text-xs font-bold text-blue-950 flex items-center gap-1.5 uppercase tracking-wide">
+                  <CheckCircle2 className="w-4 h-4 text-blue-600" />
+                  <span>Kesiapan Semester 1</span>
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs font-semibold text-slate-700">
+                  <div className="flex items-center gap-2">
+                    {s1CalendarReady ? (
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Kalender Pendidikan (Siap)</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
+                        <span>Kalender Pendidikan</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {s1JpReady ? (
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>JP Mingguan ({s1Capacity?.actualScheduledWeeklyJP} JP / minggu)</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
+                        <span>JP Mingguan</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {s1ScheduleSaved ? (
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Pola Jadwal Mapel (Tersimpan)</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
+                        <span>Pola Jadwal Mapel</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {s1SlotsReady ? (
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Slot Pertemuan Efektif ({s1SubjectSlots.totalMeetingSlots} Pertemuan • {s1SubjectSlots.totalJP} JP)</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
+                        <span>Slot Pertemuan Efektif</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-2 pt-2 border-t border-slate-100 flex items-start gap-1.5 text-xs text-blue-900 font-bold">
+                  <span className="shrink-0 bg-blue-100 text-blue-800 text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded mt-0.5">
+                    Panduan
+                  </span>
+                  <span>{s1Guidance}</span>
+                </div>
+              </div>
+            )}
+
+            {activeTaskId === 'time-s2' && (
+              <div className="p-4 rounded-xl border border-blue-200 bg-white shadow-2xs space-y-3 font-sans">
+                <h4 className="text-xs font-bold text-blue-950 flex items-center gap-1.5 uppercase tracking-wide">
+                  <CheckCircle2 className="w-4 h-4 text-blue-600" />
+                  <span>Kesiapan Semester 2</span>
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs font-semibold text-slate-700">
+                  <div className="flex items-center gap-2">
+                    {s2CalendarReady ? (
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Kalender Pendidikan (Siap)</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
+                        <span>Kalender Pendidikan</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {s2JpReady ? (
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>JP Mingguan ({s2Capacity?.actualScheduledWeeklyJP} JP / minggu)</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
+                        <span>JP Mingguan</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {s2ScheduleSaved ? (
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Pola Jadwal Mapel (Tersimpan)</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
+                        <span>Pola Jadwal Mapel</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {s2SlotsReady ? (
+                      <span className="text-emerald-700 font-bold flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Slot Pertemuan Efektif ({s2SubjectSlots.totalMeetingSlots} Pertemuan • {s2SubjectSlots.totalJP} JP)</span>
+                      </span>
+                    ) : (
+                      <span className="text-slate-400 flex items-center gap-1.5">
+                        <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
+                        <span>Slot Pertemuan Efektif</span>
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="mt-2 pt-2 border-t border-slate-100 flex items-start gap-1.5 text-xs text-blue-900 font-bold">
+                  <span className="shrink-0 bg-blue-100 text-blue-800 text-[10px] font-extrabold uppercase px-1.5 py-0.5 rounded mt-0.5">
+                    Panduan
+                  </span>
+                  <span>{s2Guidance}</span>
+                </div>
+              </div>
+            )}
 
             {/* A. TimePlanningManager Container */}
             <div className={activeTaskId === 'time-s1' || activeTaskId === 'time-s2' || activeTaskId === 'time-allocation' ? 'block animate-in fade-in duration-150' : 'hidden'}>
@@ -760,7 +938,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
             {/* Guided CTA Bar for Tasks 1 to 4 */}
             {nextStepCTA && (
               <div className="pt-4 border-t border-blue-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
-                <span className="text-slate-600 font-medium">
+                <span className="text-slate-600 font-medium font-sans">
                   {nextStepCTA.isReady ? (
                     <span className="text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 font-bold flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
@@ -768,8 +946,14 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                     </span>
                   ) : (
                     <span className="text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 font-bold flex items-center gap-1.5">
-                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                      Selesaikan dan simpan langkah ini terlebih dahulu.
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                      <span>
+                        {activeTaskId === 'time-s1'
+                          ? s1Guidance
+                          : activeTaskId === 'time-s2'
+                          ? s2Guidance
+                          : 'Selesaikan dan simpan langkah ini terlebih dahulu.'}
+                      </span>
                     </span>
                   )}
                 </span>
