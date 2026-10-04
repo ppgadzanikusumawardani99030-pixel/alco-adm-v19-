@@ -209,13 +209,11 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   }, [effectiveSemesterPlanId]);
 
   const fallbackAnnualJP =
-    annualJPRef?.referenceWeeklyEquivalentJP ?? annualJPFromSetting ?? officialRule.weeklyJP ?? null;
+    annualJPRef?.referenceWeeklyEquivalentJP ?? annualJPFromSetting ?? null;
 
   const initialJP =
     semesterJPSetting?.actualScheduledWeeklyJP !== undefined && semesterJPSetting?.actualScheduledWeeklyJP !== null
       ? semesterJPSetting.actualScheduledWeeklyJP
-      : calendar?.jpPerWeek !== undefined && calendar?.jpPerWeek !== null
-      ? calendar.jpPerWeek
       : fallbackAnnualJP;
 
   const [jpPerWeek, setJpPerWeek] = useState<number | null>(initialJP);
@@ -288,8 +286,6 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
     const resolvedJP =
       semesterJPSetting?.actualScheduledWeeklyJP !== undefined && semesterJPSetting?.actualScheduledWeeklyJP !== null
         ? semesterJPSetting.actualScheduledWeeklyJP
-        : calendar?.jpPerWeek !== undefined && calendar?.jpPerWeek !== null
-        ? calendar.jpPerWeek
         : fallbackAnnualJP;
     setJpPerWeek(resolvedJP);
 
@@ -376,12 +372,10 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   useEffect(() => {
     if (semesterJPSetting?.actualScheduledWeeklyJP !== undefined && semesterJPSetting?.actualScheduledWeeklyJP !== null) {
       setJpPerWeek(semesterJPSetting.actualScheduledWeeklyJP);
-    } else if (calendar?.jpPerWeek !== undefined && calendar?.jpPerWeek !== null) {
-      setJpPerWeek(calendar.jpPerWeek);
     } else {
       setJpPerWeek(fallbackAnnualJP);
     }
-  }, [semesterJPSetting?.actualScheduledWeeklyJP, calendar?.jpPerWeek, fallbackAnnualJP]);
+  }, [semesterJPSetting?.actualScheduledWeeklyJP, fallbackAnnualJP]);
 
   // Derived calculations for JP & Calendar completeness
   const isCalendarConfigComplete = Boolean(
@@ -472,10 +466,15 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
 
   const handleSaveJP = () => {
     if (onSaveSemesterJPSetting) {
+      const isOverride = fallbackAnnualJP !== null && jpPerWeek !== null && jpPerWeek !== fallbackAnnualJP;
       const success = onSaveSemesterJPSetting(jpPerWeek, effectiveSemesterPlanId);
       if (success) {
         const semLabel = activeSemester === '1' ? '1' : '2';
-        setSaveNotification(`JP aktual tersimpan untuk Semester ${semLabel}.`);
+        if (isOverride) {
+          setSaveNotification(`Penyesuaian JP Semester ${semLabel} berhasil disimpan.`);
+        } else {
+          setSaveNotification(`Menggunakan default Data Pembelajaran untuk Semester ${semLabel}.`);
+        }
         setTimeout(() => setSaveNotification(null), 3500);
       } else {
         setSaveNotification('Gagal menyimpan JP semester. Perubahan tidak tersimpan.');
@@ -930,6 +929,8 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
       sourceUrl: sourceUrl.trim() || undefined,
       sourceRegion: selectedProvince,
       workflowStatus: 'CONFIRMED',
+      resolutionStatus,
+      verifiedAt: calendar?.verifiedAt,
       isOverridden,
       overrideReason: isOverridden ? overrideReason : undefined,
       jpPerWeek,

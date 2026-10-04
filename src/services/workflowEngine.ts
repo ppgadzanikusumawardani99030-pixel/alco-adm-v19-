@@ -792,14 +792,26 @@ export function validateWorkflowDependencies(
         const s1Allocations = v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s1.id)?.value || [];
         const s2Allocations = v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s2.id)?.value || [];
         const isCapReady = Boolean(s1Cap?.isReady && s2Cap?.isReady);
-        const hasTimeAllocationsSaved = s1Allocations.length > 0 && s2Allocations.length > 0;
+        const isS1AllocValid =
+          Array.isArray(s1Allocations) &&
+          s1Allocations.length > 0 &&
+          s1Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) > 0 &&
+          (s1Cap?.availableJP === null || s1Cap?.availableJP === undefined || s1Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) <= s1Cap.availableJP);
+
+        const isS2AllocValid =
+          Array.isArray(s2Allocations) &&
+          s2Allocations.length > 0 &&
+          s2Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) > 0 &&
+          (s2Cap?.availableJP === null || s2Cap?.availableJP === undefined || s2Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) <= s2Cap.availableJP);
+
+        const hasTimeAllocationsSaved = isS1AllocValid && isS2AllocValid;
 
         isAnnualPlanningComplete = isCapReady && hasTimeAllocationsSaved;
 
         if (!isCapReady) {
-          annualPlanningReason = 'Memerlukan penetapan Kalender Pendidikan dan JP Mingguan untuk Semester 1 dan Semester 2';
+          annualPlanningReason = 'Lengkapi Kalender Pendidikan dan JP Mingguan Semester 1 dan Semester 2.';
         } else if (!hasTimeAllocationsSaved) {
-          annualPlanningReason = 'Memerlukan penyimpanan Pemetaan Alokasi Waktu Pembelajaran untuk Semester 1 dan Semester 2';
+          annualPlanningReason = 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
         }
       }
     } catch {

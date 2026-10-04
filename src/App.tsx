@@ -635,10 +635,11 @@ export function App() {
         subject: setting.subject,
       });
 
+      const rawWeeklyVal = setting.totalHoursPerWeek ?? setting.subjectWeeklyJP;
       const confirmedWeeklyJP =
-        setting.totalHoursPerWeek ??
-        officialJpInfo.weeklyJP ??
-        null;
+        typeof rawWeeklyVal === 'number' && Number.isFinite(rawWeeklyVal) && rawWeeklyVal > 0
+          ? rawWeeklyVal
+          : null;
 
       const annualJPRef: AnnualJPReference = {
         officialAnnualJP: officialJpInfo.annualJP ?? null,

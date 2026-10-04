@@ -139,7 +139,45 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
   const activeSelectedPlan = activeTabSemester === 1 ? sem1Plan : sem2Plan;
   const activeSelectedData = activeTabSemester === 1 ? s1Data : s2Data;
 
-  const isAnnualReady = Boolean(s1Capacity?.isReady && s2Capacity?.isReady);
+  const hasS1SavedAllocation = useMemo(() => {
+    const allocs = s1Data?.timeAllocation;
+    if (!Array.isArray(allocs) || allocs.length === 0) return false;
+    const total = allocs.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0);
+    if (total <= 0) return false;
+    if (s1Capacity?.availableJP !== null && s1Capacity?.availableJP !== undefined && s1Capacity.availableJP > 0 && total > s1Capacity.availableJP) {
+      return false;
+    }
+    return true;
+  }, [s1Data?.timeAllocation, s1Capacity?.availableJP]);
+
+  const hasS2SavedAllocation = useMemo(() => {
+    const allocs = s2Data?.timeAllocation;
+    if (!Array.isArray(allocs) || allocs.length === 0) return false;
+    const total = allocs.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0);
+    if (total <= 0) return false;
+    if (s2Capacity?.availableJP !== null && s2Capacity?.availableJP !== undefined && s2Capacity.availableJP > 0 && total > s2Capacity.availableJP) {
+      return false;
+    }
+    return true;
+  }, [s2Data?.timeAllocation, s2Capacity?.availableJP]);
+
+  const isAnnualReady = Boolean(
+    s1Capacity?.isReady &&
+    s2Capacity?.isReady &&
+    hasS1SavedAllocation &&
+    hasS2SavedAllocation
+  );
+
+  const step09Guidance = useMemo(() => {
+    if (isAnnualReady) return null;
+    if (!s1Capacity?.isReady || !s2Capacity?.isReady) {
+      return 'Lengkapi Kalender Pendidikan dan JP Mingguan Semester 1 dan Semester 2.';
+    }
+    if (!hasS1SavedAllocation || !hasS2SavedAllocation) {
+      return 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
+    }
+    return 'Lengkapi perencanaan tahunan S1 & S2 terlebih dahulu.';
+  }, [isAnnualReady, s1Capacity?.isReady, s2Capacity?.isReady, hasS1SavedAllocation, hasS2SavedAllocation]);
 
   return (
     <div className="space-y-6">
@@ -358,15 +396,31 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
           <span>Kembali ke Pemetaan Unit/Bab (07)</span>
         </button>
 
-        <button
-          id="btn-next-to-semester"
-          type="button"
-          onClick={onNextStep}
-          className="w-full sm:w-auto flex items-center justify-center gap-2 bg-blue-900 hover:bg-blue-950 text-white py-2.5 px-6 rounded-xl text-sm font-semibold shadow-sm transition cursor-pointer"
-        >
-          <span>Lanjut ke Pilih Semester Aktif (09)</span>
-          <ArrowRight className="w-4 h-4" />
-        </button>
+        <div className="flex flex-col items-end gap-1.5 w-full sm:w-auto">
+          {step09Guidance && (
+            <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-1 rounded-lg font-medium text-right">
+              {step09Guidance}
+            </span>
+          )}
+          <button
+            id="btn-next-to-semester"
+            type="button"
+            disabled={!isAnnualReady}
+            onClick={() => {
+              if (isAnnualReady) {
+                onNextStep();
+              }
+            }}
+            className={`w-full sm:w-auto flex items-center justify-center gap-2 py-2.5 px-6 rounded-xl text-sm font-semibold transition ${
+              isAnnualReady
+                ? 'bg-blue-900 hover:bg-blue-950 text-white shadow-sm cursor-pointer'
+                : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+            }`}
+          >
+            <span>Lanjut ke Pilih Semester Aktif (09)</span>
+            <ArrowRight className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </div>
   );
