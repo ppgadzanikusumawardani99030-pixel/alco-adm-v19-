@@ -472,8 +472,12 @@ export function validateLearningMeetingScheduleData(
     }
   }
 
-  if (data.status === 'COMPLETE' && (data.unresolvedMeetingIds || []).length > 0) {
+  const unresolvedCount = (data.unresolvedMeetingIds || []).length;
+  if (data.status === 'COMPLETE' && unresolvedCount > 0) {
     errors.push('Status COMPLETE tidak valid karena masih terdapat unresolvedMeetingIds.');
+  }
+  if (data.status === 'DRAFT' && unresolvedCount === 0) {
+    errors.push('Status DRAFT tidak valid karena seluruh pertemuan telah terselesaikan (unresolvedMeetingIds kosong).');
   }
 
   // 5. Auto resolver comparison & Manual Override validation
@@ -486,6 +490,19 @@ export function validateLearningMeetingScheduleData(
     schoolDaysPerWeek: calendar.schoolDaysPerWeek,
   });
 
+  if (!subjectSlotResult.isValid || !subjectSlotResult.isReady) {
+    if (subjectSlotResult.errors && subjectSlotResult.errors.length > 0) {
+      errors.push(...subjectSlotResult.errors);
+    } else {
+      errors.push('Resolver slot mata pelajaran belum valid atau belum siap.');
+    }
+    return {
+      isValid: false,
+      isStale,
+      errors,
+    };
+  }
+
   const autoResult = resolveLearningMeetingSchedule({
     semesterPlanId: data.semesterPlanId,
     semester,
@@ -493,6 +510,19 @@ export function validateLearningMeetingScheduleData(
     unitExecutionPlan,
     subjectSlotResult,
   });
+
+  if (!autoResult.isValid || !autoResult.isReady) {
+    if (autoResult.errors && autoResult.errors.length > 0) {
+      errors.push(...autoResult.errors);
+    } else {
+      errors.push('Resolver jadwal pertemuan otomatis belum valid atau belum siap.');
+    }
+    return {
+      isValid: false,
+      isStale,
+      errors,
+    };
+  }
 
   const autoEntryMap = new Map((autoResult.scheduledEntries || []).map((e) => [e.meetingId, e]));
   const effectiveWeeks = getEffectiveWeeksList(calendar, calendarDays);
@@ -515,7 +545,9 @@ export function validateLearningMeetingScheduleData(
           expectedAuto.sessionId !== entry.sessionId ||
           expectedAuto.dayOfWeek !== entry.dayOfWeek ||
           expectedAuto.jp !== entry.jp ||
-          expectedAuto.sourceSlotId !== entry.sourceSlotId
+          expectedAuto.sourceSlotId !== entry.sourceSlotId ||
+          expectedAuto.unitId !== entry.unitId ||
+          expectedAuto.weekIndex !== entry.weekIndex
         ) {
           errors.push(`Entry AUTO "${entry.meetingId}" tidak sesuai dengan slot otomatis terkini.`);
         }

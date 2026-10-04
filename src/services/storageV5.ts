@@ -654,6 +654,21 @@ export function validateStorageStateV5(value: unknown): AppStorageStateV5 {
           );
         }
       }
+
+      // Special check for semesterData.learningMeetingSchedules inner semesterPlanId
+      if (collName === 'semesterData.learningMeetingSchedules') {
+        const innerId = (val as Record<string, unknown>).semesterPlanId;
+
+        if (
+          typeof innerId !== 'string' ||
+          !innerId.trim() ||
+          innerId !== spId
+        ) {
+          throw new Error(
+            `semesterData.learningMeetingSchedules inner semesterPlanId "${innerId}" does not match outer semesterPlanId "${spId}"`
+          );
+        }
+      }
     }
   };
 
@@ -1685,6 +1700,12 @@ export function saveLearningMeetingScheduleV5(
   }
   if (value.status !== 'DRAFT' && value.status !== 'COMPLETE') {
     throw new Error('LearningMeetingScheduleData status harus DRAFT atau COMPLETE');
+  }
+  if (value.status === 'COMPLETE' && value.unresolvedMeetingIds.length > 0) {
+    throw new Error('Status COMPLETE tidak valid karena masih terdapat unresolvedMeetingIds');
+  }
+  if (value.status === 'DRAFT' && value.unresolvedMeetingIds.length === 0) {
+    throw new Error('Status DRAFT tidak valid karena seluruh pertemuan telah terselesaikan (unresolvedMeetingIds kosong)');
   }
   if (!value.basedOnMappingUpdatedAt || typeof value.basedOnMappingUpdatedAt !== 'string') {
     throw new Error('basedOnMappingUpdatedAt wajib diisi');
