@@ -47,6 +47,22 @@ function generateStableId(): string {
   return `m-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 }
 
+function normalizeForComparison(plan: UnitExecutionPlanData): string {
+  const clone = JSON.parse(JSON.stringify(plan));
+  delete clone.updatedAt;
+  if (Array.isArray(clone.units)) {
+    clone.units.forEach((u: any) => {
+      delete u.updatedAt;
+      if (Array.isArray(u.meetings)) {
+        u.meetings.forEach((m: any) => {
+          delete m.updatedAt;
+        });
+      }
+    });
+  }
+  return JSON.stringify(clone);
+}
+
 export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> = ({
   mapping,
   unitExecutionPlan,
@@ -69,14 +85,14 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     message: string;
   } | null>(null);
 
-  // Sync draft if prop changes and is not dirty
+  // Sync draft if persisted source changes genuinely (using stable dependencies)
   useEffect(() => {
     if (unitExecutionPlan) {
       setDraft(JSON.parse(JSON.stringify(unitExecutionPlan)));
     } else {
       setDraft(createEmptyUnitExecutionPlanData(mapping));
     }
-  }, [unitExecutionPlan, mapping]);
+  }, [unitExecutionPlan?.id, unitExecutionPlan?.updatedAt, mapping.id, mapping.updatedAt]);
 
   // Collapsed state for unit cards
   const [expandedUnits, setExpandedUnits] = useState<Record<string, boolean>>(() => {
@@ -99,32 +115,26 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     return validateUnitExecutionPlan(draft, mapping, atp, tp);
   }, [draft, mapping, atp, tp]);
 
-  // 3. Stale State Check
-  const isStale = useMemo(() => {
-    if (unitExecutionPlan) {
-      return isUnitExecutionPlanStale(unitExecutionPlan, mapping);
-    }
-    return false;
-  }, [unitExecutionPlan, mapping]);
+  // 3. Stale State Check (Authority from draft validation)
+  const isStale = validation.isStale;
 
-  // 4. Dirty State Calculation
+  // 4. Dirty State Calculation (Ignoring updatedAt)
   const isDirty = useMemo(() => {
     if (!unitExecutionPlan) {
       // If new, dirty if any meeting has been added or edited
       const hasAnyMeeting = draft.units.some((u) => u.meetings.length > 0);
       return hasAnyMeeting;
     }
-    return JSON.stringify(draft) !== JSON.stringify(unitExecutionPlan);
+    return normalizeForComparison(draft) !== normalizeForComparison(unitExecutionPlan);
   }, [draft, unitExecutionPlan]);
 
-  // Fast lookup maps for ATP & TP items for display
+  // Fast lookup maps for ATP & TP items for display (Canonical ATPItem fields: stepNumber, focus)
   const atpItemsMap = useMemo(() => {
-    const map = new Map<string, { stepNumber?: number; focus?: string; statement?: string }>();
+    const map = new Map<string, { stepNumber?: number; focus?: string }>();
     (atp.items || []).forEach((item) => {
       map.set(item.id, {
         stepNumber: item.stepNumber,
-        focus: item.learningFocus || item.title || item.statement,
-        statement: item.statement,
+        focus: item.focus,
       });
     });
     return map;
@@ -140,6 +150,15 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     });
     return map;
   }, [tp]);
+
+  // Format ATP display text safely
+  const formatAtpDisplay = (atpId: string): string => {
+    const info = atpItemsMap.get(atpId);
+    if (!info) return atpId;
+    const stepNum = info.stepNumber ?? 1;
+    const focusText = info.focus && info.focus.trim() ? info.focus.trim() : '';
+    return focusText ? `Langkah ${stepNum}: ${focusText}` : `Langkah ${stepNum}`;
+  };
 
   // 5. Stale Recovery Handler
   const handleRebuildFromMapping = () => {
@@ -168,7 +187,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
           id: generateStableId(),
           unitId,
           order: nextOrder,
-          title: `Pertemuan ${nextOrder}`,
+          title: '',
           materialIds: [],
           linkedAtpItemIds: [],
           linkedTpIds: [],
@@ -187,7 +206,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
           id: generateStableId(),
           unitId,
           order: 1,
-          title: 'Pertemuan 1',
+          title: '',
           materialIds: [],
           linkedAtpItemIds: [],
           linkedTpIds: [],
@@ -488,7 +507,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
         </div>
       )}
 
-      {/* Stale Warning & Recovery Box */}
+      {/* Stale Warning & Recovery Box (Driven by validation.isStale) */}
       {isStale && (
         <div className="p-4 m-5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="flex items-start gap-2.5">
@@ -641,10 +660,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
                           <div>
                             <strong>{coverageResult.missingAtpItemIds.length} Alur TP (ATP) belum tercakup: </strong>
                             {coverageResult.missingAtpItemIds
-                              .map((id) => {
-                                const info = atpItemsMap.get(id);
-                                return info ? `Langkah ${info.stepNumber || ''}: ${info.focus || ''}` : id;
-                              })
+                              .map((id) => formatAtpDisplay(id))
                               .join('; ')}
                           </div>
                         </div>
@@ -784,7 +800,6 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
                               </label>
                               <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
                                 {(unit.linkedAtpItemIds || []).map((atpId) => {
-                                  const info = atpItemsMap.get(atpId);
                                   const checked = meeting.linkedAtpItemIds.includes(atpId);
                                   return (
                                     <label
@@ -805,9 +820,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
                                         className="mt-0.5 rounded-sm border-slate-300 text-blue-600 focus:ring-blue-500"
                                       />
                                       <span className="text-slate-800 leading-snug">
-                                        {info
-                                          ? `Langkah ${info.stepNumber || ''}: ${info.focus || info.statement || ''}`
-                                          : atpId}
+                                        {formatAtpDisplay(atpId)}
                                       </span>
                                     </label>
                                   );
