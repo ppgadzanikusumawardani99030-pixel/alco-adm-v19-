@@ -13,9 +13,12 @@ import {
   CalendarWorkflowStatus,
   CalendarResolutionStatus,
   SubjectWeeklySchedule,
+  ATPUnitMappingData,
+  UnitExecutionPlanData,
 } from '../../types';
 import { SubjectWeeklyScheduleManager } from '../SubjectWeeklyScheduleManager';
 import { SubjectWeekdayAllocationEditor } from '../SubjectWeekdayAllocationEditor';
+import { LearningMeetingSchedulePreview } from '../LearningMeetingSchedulePreview';
 import {
   calculateEffectiveDays,
   calculateEffectiveWeeks,
@@ -101,6 +104,9 @@ export interface TimePlanningManagerProps {
   timeAllocations: TimeAllocation[];
   semesterJPSetting?: SemesterJPSetting;
   subjectWeeklySchedule?: SubjectWeeklySchedule;
+  mapping?: ATPUnitMappingData;
+  unitExecutionPlan?: UnitExecutionPlanData;
+  semester?: 1 | 2;
   afterTimeSetup?: React.ReactNode;
   viewMode?: 'ALL' | 'TIME_SETUP' | 'ALLOCATION';
   explicitSemesterPlanId?: string;
@@ -121,6 +127,9 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   timeAllocations = [],
   semesterJPSetting,
   subjectWeeklySchedule,
+  mapping,
+  unitExecutionPlan,
+  semester: propSemester,
   afterTimeSetup,
   viewMode = 'ALL',
   explicitSemesterPlanId,
@@ -2537,6 +2546,20 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
                 }
               />
             </div>
+          )}
+
+          {!isK13Curriculum && viewMode === 'ALLOCATION' && (
+            <LearningMeetingSchedulePreview
+              semesterPlanId={effectiveSemesterPlanId}
+              semester={propSemester || (activeSemester === '2' ? 2 : 1)}
+              mapping={mapping}
+              unitExecutionPlan={unitExecutionPlan}
+              schedule={subjectWeeklySchedule}
+              expectedWeeklyJP={canonicalCapacity?.actualScheduledWeeklyJP ?? semesterJPSetting?.actualScheduledWeeklyJP ?? null}
+              calendar={calendar}
+              calendarDays={days}
+              schoolDaysPerWeek={calendar?.schoolDaysPerWeek ?? null}
+            />
           )}
 
           <div id="annual-section-time-allocation" className="bg-white rounded-xl border border-slate-200 shadow-xs p-6">

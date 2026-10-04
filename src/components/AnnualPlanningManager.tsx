@@ -834,6 +834,9 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                     timeAllocations={activeSelectedData?.timeAllocation || []}
                     semesterJPSetting={activeSelectedData?.semesterJPSetting}
                     subjectWeeklySchedule={activeSelectedData?.subjectWeeklySchedule}
+                    mapping={mapping}
+                    unitExecutionPlan={effectiveUnitExecutionPlan || unitExecutionPlan}
+                    semester={activeSelectedPlan.semester}
                     viewMode={
                       activeTaskId === 'time-allocation'
                         ? 'ALLOCATION'
