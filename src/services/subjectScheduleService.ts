@@ -3,7 +3,7 @@ import {
   AcademicCalendar,
   CalendarDay,
 } from '../types';
-import { getEffectiveWeeksList } from './jpEngine';
+import { getEffectiveWeeksList, normalizeCalendarDayStatus } from './jpEngine';
 
 export interface SubjectScheduleValidationResult {
   isValid: boolean;
@@ -213,15 +213,7 @@ export function resolveEffectiveSubjectSlots(params: {
     };
   }
 
-  const effectiveWeeks = getEffectiveWeeksList(calendarDays);
-  const dateToWeekMap = new Map<string, number>();
-  effectiveWeeks.forEach((wk) => {
-    (wk.days || []).forEach((d) => {
-      if (d && d.date) {
-        dateToWeekMap.set(d.date, wk.weekNumber);
-      }
-    });
-  });
+  const effectiveWeeks = getEffectiveWeeksList(calendar, calendarDays);
 
   let currentDate = new Date(startDate);
   while (currentDate <= endDate) {
@@ -234,30 +226,33 @@ export function resolveEffectiveSubjectSlots(params: {
     const dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 = dayOfWeekJs === 0 ? 7 : (dayOfWeekJs as any);
 
     if (dayOfWeek >= 1 && dayOfWeek <= 6) {
-      const calDay = dayMap.get(dateStr);
-      if (!calDay || !calDay.status || calDay.status === 'UNKNOWN') {
-        return {
-          isValid: validation.isValid,
-          isComplete: validation.isComplete,
-          isReady: false,
-          isStale: validation.isStale,
-          errors: [...validation.errors, `Kalender memiliki status UNKNOWN atau belum lengkap pada tanggal ${dateStr}.`],
-          warnings: validation.warnings,
-          slots: [],
-          excludedOccurrences: [],
-          totalMeetingSlots: 0,
-          totalJP: 0,
-          totalExcludedOccurrences: 0,
-        };
-      }
-
       const sessionsOnThisDay = schedule.sessions.filter((s) => s.dayOfWeek === dayOfWeek);
       if (sessionsOnThisDay.length > 0) {
-        const weekIndex = dateToWeekMap.get(dateStr) || 1;
+        const calDay = dayMap.get(dateStr);
+        const canonicalStatus = normalizeCalendarDayStatus(calDay?.status);
+
+        if (canonicalStatus === 'UNKNOWN') {
+          return {
+            isValid: validation.isValid,
+            isComplete: validation.isComplete,
+            isReady: false,
+            isStale: validation.isStale,
+            errors: [...validation.errors, `Kalender memiliki status UNKNOWN atau belum lengkap pada tanggal ${dateStr}.`],
+            warnings: validation.warnings,
+            slots: [],
+            excludedOccurrences: [],
+            totalMeetingSlots: 0,
+            totalJP: 0,
+            totalExcludedOccurrences: 0,
+          };
+        }
+
+        const weekInfo = effectiveWeeks.find((wk) => dateStr >= wk.startDate && dateStr <= wk.endDate);
+        const weekIndex = weekInfo ? weekInfo.weekIndex : 1;
         const month = currentDate.getMonth() + 1;
         const year = currentDate.getFullYear();
 
-        if (calDay.status === 'EFFECTIVE_LEARNING') {
+        if (canonicalStatus === 'EFFECTIVE_LEARNING') {
           for (const s of sessionsOnThisDay) {
             slots.push({
               id: `subject-slot:${semesterPlanId}:${s.id}:${dateStr}`,
@@ -271,14 +266,20 @@ export function resolveEffectiveSubjectSlots(params: {
               year,
             });
           }
-        } else {
+        } else if (
+          canonicalStatus === 'HOLIDAY' ||
+          canonicalStatus === 'BREAK' ||
+          canonicalStatus === 'NON_LEARNING' ||
+          canonicalStatus === 'SCHOOL_EVENT' ||
+          canonicalStatus === 'ASSESSMENT'
+        ) {
           for (const s of sessionsOnThisDay) {
             excludedOccurrences.push({
               sessionId: s.id,
               date: dateStr,
               dayOfWeek,
               jp: s.jp,
-              reason: calDay.status,
+              reason: canonicalStatus,
             });
           }
         }

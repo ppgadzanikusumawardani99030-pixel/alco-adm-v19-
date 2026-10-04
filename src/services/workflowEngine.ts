@@ -827,6 +827,14 @@ export function validateWorkflowDependencies(
         placementReason = 'Tetapkan pembagian Unit/Bab ke Semester 1 dan Semester 2.';
       }
 
+      // Resolve semester plans SEBELUM Subject Weekly Schedule check
+      const sPlans = currentYearPlanId
+        ? v5State.semesterPlans.filter((sp) => sp.yearPlanId === currentYearPlanId)
+        : [];
+
+      const s1 = sPlans.find(sp => sp.semester === 1);
+      const s2 = sPlans.find(sp => sp.semester === 2);
+
       // 3. Check Subject Weekly Schedule completeness (Merdeka Only)
       let isSubjectScheduleReady = true;
       let subjectScheduleReason: string | undefined = undefined;
@@ -866,10 +874,6 @@ export function validateWorkflowDependencies(
       }
 
       // 4. Check Calendar Capacity & Time Allocation
-      const sPlans = currentYearPlanId
-        ? v5State.semesterPlans.filter((sp) => sp.yearPlanId === currentYearPlanId)
-        : [];
-
       let isCapReady = false;
       let hasTimeAllocationsSaved = false;
       let calendarReason: string | undefined = undefined;

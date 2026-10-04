@@ -52,7 +52,7 @@ function generateStableId(): string {
 export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManagerProps> = ({
   semesterPlanId,
   expectedWeeklyJP,
-  schoolDaysPerWeek = 5,
+  schoolDaysPerWeek,
   schedule,
   calendar,
   calendarDays = [],
@@ -68,7 +68,7 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
       sessions: [
         {
           id: generateStableId(),
-          dayOfWeek: 3, // Default Rabu
+          dayOfWeek: 0 as any, // sentinel "Pilih hari..."
           jp: expectedWeeklyJP || 3,
           order: 1,
         },
@@ -93,7 +93,7 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
         sessions: [
           {
             id: generateStableId(),
-            dayOfWeek: 3,
+            dayOfWeek: 0 as any,
             jp: expectedWeeklyJP || 3,
             order: 1,
           },
@@ -102,7 +102,7 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
         updatedAt: new Date().toISOString(),
       });
     }
-  }, [semesterPlanId, schedule?.semesterPlanId, schedule?.updatedAt, expectedWeeklyJP]);
+  }, [semesterPlanId, schedule?.semesterPlanId, schedule?.updatedAt]);
 
   // Validation
   const validation = useMemo(() => {
@@ -127,14 +127,14 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
     return JSON.stringify(draft.sessions) !== JSON.stringify(schedule.sessions) || draft.basedOnWeeklyJP !== schedule.basedOnWeeklyJP;
   }, [draft, schedule]);
 
-  const maxDay = schoolDaysPerWeek === 6 ? 6 : 5;
+  const maxDay = schoolDaysPerWeek === 5 ? 5 : 6;
 
   const handleAddSession = () => {
     setDraft((prev) => {
       const nextOrder = prev.sessions.length + 1;
       const newSession: SubjectWeeklyScheduleSession = {
         id: generateStableId(),
-        dayOfWeek: 1,
+        dayOfWeek: 0 as any, // sentinel "Pilih hari..."
         jp: 2,
         order: nextOrder,
       };
@@ -311,7 +311,7 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
                   <div className="flex-1">
                     <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Hari</label>
                     <select
-                      value={session.dayOfWeek}
+                      value={session.dayOfWeek || 0}
                       onChange={(e) =>
                         handleUpdateSession(session.id, {
                           dayOfWeek: Number(e.target.value) as SubjectScheduleDay,
@@ -319,6 +319,7 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
                       }
                       className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-600"
                     >
+                      <option value={0} disabled>Pilih hari...</option>
                       {[1, 2, 3, 4, 5, 6].filter((d) => d <= maxDay).map((d) => (
                         <option key={d} value={d}>
                           {DAY_LABELS[d as SubjectScheduleDay]}

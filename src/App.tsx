@@ -1039,7 +1039,7 @@ export function App() {
       const semData = getSemesterDataV5(targetSemesterPlanId);
       const sCap = resolveSemesterCapacityV5(targetSemesterPlanId, v5State);
       const expectedJP = sCap?.actualScheduledWeeklyJP ?? null;
-      const schoolDays = semData.academicCalendar?.calendar?.schoolDaysPerWeek ?? 5;
+      const schoolDays = semData.academicCalendar?.calendar?.schoolDaysPerWeek ?? null;
 
       const val = validateSubjectWeeklySchedule(schedule, expectedJP, schoolDays);
       if (!val.isValid || !val.isComplete) {

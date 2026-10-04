@@ -2502,8 +2502,8 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
       {!isK13Curriculum && (
         <SubjectWeeklyScheduleManager
           semesterPlanId={effectiveSemesterPlanId}
-          expectedWeeklyJP={semesterJPSetting?.actualScheduledWeeklyJP ?? null}
-          schoolDaysPerWeek={calendar?.schoolDaysPerWeek ?? 5}
+          expectedWeeklyJP={canonicalCapacity?.actualScheduledWeeklyJP ?? null}
+          schoolDaysPerWeek={calendar?.schoolDaysPerWeek ?? null}
           schedule={subjectWeeklySchedule}
           calendar={calendar}
           calendarDays={calendarDays}
