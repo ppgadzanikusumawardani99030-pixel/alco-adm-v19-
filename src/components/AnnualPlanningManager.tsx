@@ -277,10 +277,17 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     const t4Complete = meetingExactReady;
     const t5Complete = hasS1SavedAllocation && hasS2SavedAllocation;
 
-    const t2Locked = !t1Complete;
-    const t3Locked = !(t1Complete && t2Complete);
-    const t4Locked = !t3Complete;
-    const t5Locked = !t4Complete;
+    const t2Locked =
+      !t1Complete;
+
+    const t3Locked =
+      !(t1Complete && t2Complete);
+
+    const t4Locked =
+      !(t1Complete && t2Complete && t3Complete);
+
+    const t5Locked =
+      !(t1Complete && t2Complete && t3Complete && t4Complete);
 
     return [
       {
@@ -457,78 +464,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     }
   }, [activeTaskId, s1TimeReady, s2TimeReady, placementReady, meetingExactReady]);
 
-  const step09Guidance = useMemo(() => {
-    if (isAnnualReady) return null;
-    const firstOpenTask = annualTasks.find((task) => task.status !== 'COMPLETE');
-    if (firstOpenTask?.id === 'time-s1') {
-      return 'Lengkapi Waktu Semester 1: Kalender, JP Mingguan, dan Jadwal Mapel.';
-    }
-    if (firstOpenTask?.id === 'time-s2') {
-      return 'Lengkapi Waktu Semester 2: Kalender, JP Mingguan, dan Jadwal Mapel.';
-    }
-    if (firstOpenTask?.id === 'placement') {
-      return 'Tetapkan pembagian Unit/Bab ke Semester 1 dan Semester 2.';
-    }
-    if (firstOpenTask?.id === 'meetings') {
-      return 'Lengkapi Struktur Pertemuan sesuai kapasitas kalender.';
-    }
-    if (firstOpenTask?.id === 'time-allocation') {
-      return 'Susun dan simpan Alokasi Waktu Semester 1 dan Semester 2.';
-    }
-    return null;
-  }, [isAnnualReady, annualTasks]);
 
-  const afterTimeSetup = (
-    <>
-      {mapping && effectiveUnitExecutionPlan && onSaveUnitExecutionPlan && (
-        <div id="annual-section-semester-placement">
-          <UnitSemesterPlanningManager
-            mapping={mapping}
-            unitExecutionPlan={effectiveUnitExecutionPlan}
-            s1AvailableJP={s1Capacity?.availableJP ?? null}
-            s2AvailableJP={s2Capacity?.availableJP ?? null}
-            onSave={onSaveUnitExecutionPlan}
-          />
-        </div>
-      )}
-
-      {mapping && atp && tp && onSaveUnitExecutionPlan && (
-        <div id="annual-section-meetings">
-          <UnitExecutionPlanManager
-            mapping={mapping}
-            unitExecutionPlan={unitExecutionPlan}
-            atp={atp}
-            tp={tp}
-            onSave={onSaveUnitExecutionPlan}
-            meetingCapacity={{
-              semester1: {
-                isReady: Boolean(s1SubjectSlots.isReady),
-                targetMeetingCount:
-                  s1SubjectSlots.isReady
-                    ? s1SubjectSlots.totalMeetingSlots
-                    : 0,
-                totalJP:
-                  s1SubjectSlots.isReady
-                    ? s1SubjectSlots.totalJP
-                    : 0,
-              },
-              semester2: {
-                isReady: Boolean(s2SubjectSlots.isReady),
-                targetMeetingCount:
-                  s2SubjectSlots.isReady
-                    ? s2SubjectSlots.totalMeetingSlots
-                    : 0,
-                totalJP:
-                  s2SubjectSlots.isReady
-                    ? s2SubjectSlots.totalJP
-                    : 0,
-              },
-            }}
-          />
-        </div>
-      )}
-    </>
-  );
 
   return (
     <div className="space-y-6">
