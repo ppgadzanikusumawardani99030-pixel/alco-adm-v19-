@@ -98,9 +98,9 @@ export interface TimePlanningManagerProps {
   timeAllocations: TimeAllocation[];
   semesterJPSetting?: SemesterJPSetting;
   explicitSemesterPlanId?: string;
-  onSaveCalendar: (calendar: AcademicCalendar, days: CalendarDay[], explicitSemesterPlanId?: string) => void;
-  onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => void;
-  onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => void;
+  onSaveCalendar: (calendar: AcademicCalendar, days: CalendarDay[], explicitSemesterPlanId?: string) => boolean;
+  onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => boolean;
+  onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => boolean;
 }
 
 export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
@@ -472,11 +472,16 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
 
   const handleSaveJP = () => {
     if (onSaveSemesterJPSetting) {
-      onSaveSemesterJPSetting(jpPerWeek, effectiveSemesterPlanId);
+      const success = onSaveSemesterJPSetting(jpPerWeek, effectiveSemesterPlanId);
+      if (success) {
+        const semLabel = activeSemester === '1' ? '1' : '2';
+        setSaveNotification(`JP aktual tersimpan untuk Semester ${semLabel}.`);
+        setTimeout(() => setSaveNotification(null), 3500);
+      } else {
+        setSaveNotification('Gagal menyimpan JP semester. Perubahan tidak tersimpan.');
+        setTimeout(() => setSaveNotification(null), 3500);
+      }
     }
-    const semLabel = activeSemester === '1' ? '1' : '2';
-    setSaveNotification(`JP aktual tersimpan untuk Semester ${semLabel}.`);
-    setTimeout(() => setSaveNotification(null), 3500);
   };
 
   // Online Discovery & Resolution State
@@ -935,11 +940,17 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
     setDays(finalDays);
 
     const res = confirmCalendarWorkflow(currentCal, finalDays);
-    setWorkflowStatus('CONFIRMED');
-    onSaveCalendar(res.calendar, res.days, effectiveSemesterPlanId);
+    const saveSuccess = onSaveCalendar(res.calendar, res.days, effectiveSemesterPlanId);
 
-    setSaveNotification('Kalender Pendidikan berhasil disimpan & ditetapkan untuk semester ini!');
-    setTimeout(() => setSaveNotification(null), 3500);
+    if (saveSuccess) {
+      setWorkflowStatus('CONFIRMED');
+      setCalendarDraftDirty(false);
+      setSaveNotification('Kalender Pendidikan berhasil disimpan & ditetapkan untuk semester ini!');
+      setTimeout(() => setSaveNotification(null), 3500);
+    } else {
+      setSaveNotification('Gagal menyimpan Kalender Pendidikan. Draf perubahan tetap dipertahankan.');
+      setTimeout(() => setSaveNotification(null), 3500);
+    }
   };
 
   // Reset to Official
@@ -1133,9 +1144,14 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
       setTimeout(() => setSaveNotification(null), 4000);
       return;
     }
-    onSaveTimeAllocations(allocations, effectiveSemesterPlanId);
-    setSaveNotification('Pemetaan Alokasi Waktu Pembelajaran berhasil disimpan!');
-    setTimeout(() => setSaveNotification(null), 3000);
+    const success = onSaveTimeAllocations(allocations, effectiveSemesterPlanId);
+    if (success) {
+      setSaveNotification('Pemetaan Alokasi Waktu Pembelajaran berhasil disimpan!');
+      setTimeout(() => setSaveNotification(null), 3000);
+    } else {
+      setSaveNotification('Gagal menyimpan Pemetaan Alokasi Waktu Pembelajaran.');
+      setTimeout(() => setSaveNotification(null), 3000);
+    }
   };
 
   // Readiness for automatic ATP allocation across Semester 1 & 2
@@ -2224,16 +2240,26 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label className="block text-xs font-semibold text-slate-700">JP Aktual Mapel / Pekan</label>
-                  {officialRule.isOfficial && officialRule.weeklyJP !== null && (
+                  <label className="block text-xs font-semibold text-slate-700">JP Mingguan Mapel</label>
+                  {fallbackAnnualJP !== null && (
                     <span className="text-[10px] text-slate-500 font-medium">
-                      Acuan kurikulum: {officialRule.weeklyJP} JP/pekan
+                      Default Data Pembelajaran: {fallbackAnnualJP} JP/pekan
                     </span>
                   )}
                 </div>
-                <p className="text-[11px] text-slate-500">
-                  Isi sesuai jadwal nyata mapel pada semester ini.
-                </p>
+                {semesterJPSetting?.actualScheduledWeeklyJP !== undefined &&
+                semesterJPSetting?.actualScheduledWeeklyJP !== null &&
+                fallbackAnnualJP !== null &&
+                semesterJPSetting.actualScheduledWeeklyJP !== fallbackAnnualJP ? (
+                  <div className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 p-2 rounded-lg font-medium space-y-0.5">
+                    <div>Penyesuaian Semester: {jpPerWeek ?? '-'} JP/pekan</div>
+                    <div className="text-slate-500 font-normal">Default Data Pembelajaran: {fallbackAnnualJP} JP/pekan</div>
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-slate-500">
+                    Default dari Data Pembelajaran: {fallbackAnnualJP ?? jpPerWeek ?? '-'} JP/pekan
+                  </p>
+                )}
                 <div className="flex items-center gap-2">
                   <input
                     id="input-actual-weekly-jp"

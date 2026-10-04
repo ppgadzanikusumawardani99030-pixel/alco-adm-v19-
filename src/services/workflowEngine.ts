@@ -774,8 +774,10 @@ export function validateWorkflowDependencies(
       missingDependencies: !isATPComplete ? ['Alur Tujuan Pembelajaran (ATP)'] : undefined,
     };
 
-    // 5c. Perencanaan Tahunan (Kalender & JP S1 & S2) step state (Requires structurally complete Pemetaan)
+    // 5c. Perencanaan Tahunan (Kalender & JP S1 & S2) step state (Requires structurally complete Pemetaan & saved time allocations)
     let isAnnualPlanningComplete = false;
+    let annualPlanningReason: string | undefined = undefined;
+
     try {
       const v5State = loadStorageV5();
       const currentYearPlanId = v5State.activeYearPlanId;
@@ -787,7 +789,18 @@ export function validateWorkflowDependencies(
       if (s1 && s2) {
         const s1Cap = resolveSemesterCapacityV5(s1.id, v5State);
         const s2Cap = resolveSemesterCapacityV5(s2.id, v5State);
-        isAnnualPlanningComplete = Boolean(s1Cap?.isReady && s2Cap?.isReady);
+        const s1Allocations = v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s1.id)?.value || [];
+        const s2Allocations = v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s2.id)?.value || [];
+        const isCapReady = Boolean(s1Cap?.isReady && s2Cap?.isReady);
+        const hasTimeAllocationsSaved = s1Allocations.length > 0 && s2Allocations.length > 0;
+
+        isAnnualPlanningComplete = isCapReady && hasTimeAllocationsSaved;
+
+        if (!isCapReady) {
+          annualPlanningReason = 'Memerlukan penetapan Kalender Pendidikan dan JP Mingguan untuk Semester 1 dan Semester 2';
+        } else if (!hasTimeAllocationsSaved) {
+          annualPlanningReason = 'Memerlukan penyimpanan Pemetaan Alokasi Waktu Pembelajaran untuk Semester 1 dan Semester 2';
+        }
       }
     } catch {
       isAnnualPlanningComplete = false;
@@ -811,7 +824,7 @@ export function validateWorkflowDependencies(
         ? 'Memerlukan penyusunan Alur Tujuan Pembelajaran (ATP) terlebih dahulu'
         : !isMappingComplete
         ? 'Memerlukan penyelesaian Pemetaan Unit/Bab & Lingkup Materi (07) terlebih dahulu'
-        : undefined,
+        : annualPlanningReason,
       missingDependencies: !isATPComplete
         ? ['Alur Tujuan Pembelajaran (ATP)']
         : !isMappingComplete

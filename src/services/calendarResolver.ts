@@ -526,10 +526,10 @@ export function confirmCalendarWorkflow(
   const calendar: AcademicCalendar = {
     ...currentCalendar,
     workflowStatus: 'CONFIRMED',
-    resolutionStatus: 'RESOLVED',
+    resolutionStatus: currentCalendar.resolutionStatus,
     reviewStatus: 'CONFIRMED',
     confirmedAt,
-    verifiedAt: confirmedAt,
+    verifiedAt: currentCalendar.verifiedAt,
     updatedAt: confirmedAt,
   };
 

@@ -69,6 +69,8 @@ export interface SemesterJPSetting {
   source:
     | 'SCHOOL_SCHEDULE'
     | 'TEACHER_CONFIRMED'
+    | 'SEMESTER_OVERRIDE'
+    | 'DEFAULT_ANNUAL'
     | 'UNRESOLVED';
 }
 

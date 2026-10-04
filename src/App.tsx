@@ -60,6 +60,7 @@ import {
   saveATPUnitMappingV5,
   saveAcademicCalendarV5,
   saveSemesterJPSettingV5,
+  deleteSemesterJPSettingV5,
   saveTimeAllocationV5,
   saveLearningPlansV5,
   saveAssessmentCriteriaV5,
@@ -845,7 +846,7 @@ export function App() {
     cal: AcademicCalendar,
     days: CalendarDay[],
     explicitSemesterPlanId?: string
-  ) => {
+  ): boolean => {
     const targetSemesterPlanId = explicitSemesterPlanId || activeSemesterPlan?.id;
     const targetSemesterPlan = targetSemesterPlanId
       ? v5State.semesterPlans.find((sp) => sp.id === targetSemesterPlanId)
@@ -860,7 +861,7 @@ export function App() {
         type: 'error',
         message: 'Pilih Semester aktif atau tentukan target semester yang valid sebelum menyimpan kalender.',
       });
-      return;
+      return false;
     }
 
     try {
@@ -884,55 +885,70 @@ export function App() {
       });
 
       refreshV5();
+      return true;
     } catch (err: any) {
       setAppNotice({
         type: 'error',
         message: err instanceof Error ? err.message : 'Gagal menyimpan Kalender Pendidikan.',
       });
+      return false;
     }
   };
 
   const handleSaveSemesterJPSetting = (
     actualWeeklyJP: number | null,
     explicitSemesterPlanId?: string
-  ) => {
+  ): boolean => {
     const targetSemesterPlanId = explicitSemesterPlanId || activeSemesterPlan?.id;
     const targetSemesterPlan = targetSemesterPlanId
       ? v5State.semesterPlans.find((sp) => sp.id === targetSemesterPlanId)
       : activeSemesterPlan;
+
+    const targetYearPlanId = targetSemesterPlan?.yearPlanId || activeYearPlan?.id;
 
     if (!targetSemesterPlan) {
       setAppNotice({
         type: 'error',
         message: 'Pilih Semester aktif atau tentukan target semester sebelum menyimpan JP aktual.',
       });
-      return;
+      return false;
     }
 
     try {
+      const annualJPRef = targetYearPlanId
+        ? v5State.annualJPReferences.find((e) => e.yearPlanId === targetYearPlanId)?.value
+        : undefined;
+      const defaultAnnualJP = annualJPRef?.referenceWeeklyEquivalentJP ?? null;
+
       const isJPProvided =
         typeof actualWeeklyJP === 'number' && Number.isFinite(actualWeeklyJP) && actualWeeklyJP > 0;
 
-      const semesterJPSetting: SemesterJPSetting = {
-        semesterPlanId: targetSemesterPlan.id,
-        actualScheduledWeeklyJP: isJPProvided ? actualWeeklyJP : null,
-        source: isJPProvided ? 'TEACHER_CONFIRMED' : 'UNRESOLVED',
-      };
+      if (!isJPProvided || (defaultAnnualJP !== null && actualWeeklyJP === defaultAnnualJP)) {
+        deleteSemesterJPSettingV5(targetSemesterPlan.id);
+      } else {
+        const semesterJPSetting: SemesterJPSetting = {
+          semesterPlanId: targetSemesterPlan.id,
+          actualScheduledWeeklyJP: actualWeeklyJP,
+          source: 'SEMESTER_OVERRIDE',
+        };
+        saveSemesterJPSettingV5(targetSemesterPlan.id, semesterJPSetting);
+      }
 
-      saveSemesterJPSettingV5(targetSemesterPlan.id, semesterJPSetting);
       refreshV5();
+      return true;
     } catch (err: any) {
       setAppNotice({
         type: 'error',
         message: err instanceof Error ? err.message : 'Gagal menyimpan pengaturan JP semester.',
       });
+      return false;
     }
   };
 
   const handleSaveTimeAllocations = (
     allocations: TimeAllocation[],
     explicitSemesterPlanId?: string
-  ) => {
+  ): boolean => {
     const targetSemesterPlanId = explicitSemesterPlanId || activeSemesterPlan?.id;
     const targetSemesterPlan = targetSemesterPlanId
       ? v5State.semesterPlans.find((sp) => sp.id === targetSemesterPlanId)
@@ -943,17 +959,19 @@ export function App() {
         type: 'error',
         message: 'Pilih Semester aktif atau tentukan target semester sebelum menyimpan alokasi waktu.',
       });
-      return;
+      return false;
     }
 
     try {
       saveTimeAllocationV5(targetSemesterPlan.id, allocations);
       refreshV5();
+      return true;
     } catch (err: any) {
       setAppNotice({
         type: 'error',
         message: err instanceof Error ? err.message : 'Gagal menyimpan alokasi waktu semester.',
       });
+      return false;
     }
   };
   const handleSaveStudents = (stdList: Student[]) => {

@@ -38,9 +38,9 @@ export interface AnnualPlanningManagerProps {
   semesterPlans: SemesterPlan[];
   atp?: ATPData;
   k13Analysis?: K13Analysis;
-  onSaveCalendar: (calendar: AcademicCalendar, days: CalendarDay[], explicitSemesterPlanId?: string) => void;
-  onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => void;
-  onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => void;
+  onSaveCalendar: (calendar: AcademicCalendar, days: CalendarDay[], explicitSemesterPlanId?: string) => boolean;
+  onSaveSemesterJPSetting?: (actualWeeklyJP: number | null, explicitSemesterPlanId?: string) => boolean;
+  onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => boolean;
   onNextStep: () => void;
   onBackToMapping: () => void;
 }

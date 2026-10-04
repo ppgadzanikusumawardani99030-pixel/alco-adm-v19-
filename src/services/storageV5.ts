@@ -1495,6 +1495,15 @@ export function saveSemesterJPSettingV5(
   return value;
 }
 
+export function deleteSemesterJPSettingV5(semesterPlanId: string): void {
+  const state = loadStorageV5();
+  assertSemesterPlanAndParentExist(state, semesterPlanId);
+  const changed = deleteSemesterScopedEntry(state.semesterJPSettings, semesterPlanId);
+  if (changed) {
+    saveStorageV5(state);
+  }
+}
+
 export function saveAcademicCalendarV5(
   semesterPlanId: string,
   value: SemesterCalendarEntry
@@ -1645,15 +1654,6 @@ export function saveEnrichmentV5(
   upsertSemesterScopedEntry(state.semesterData.enrichment, semesterPlanId, value);
   saveStorageV5(state);
   return value;
-}
-
-export function deleteSemesterJPSettingV5(semesterPlanId: string): void {
-  const state = loadStorageV5();
-  assertSemesterPlanAndParentExist(state, semesterPlanId);
-  const changed = deleteSemesterScopedEntry(state.semesterJPSettings, semesterPlanId);
-  if (changed) {
-    saveStorageV5(state);
-  }
 }
 
 export function deleteAcademicCalendarV5(semesterPlanId: string): void {

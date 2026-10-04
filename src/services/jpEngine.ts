@@ -711,7 +711,7 @@ export function calculateAvailableJP(params: {
   subjectWeeklyJP?: number | null;
   effectiveLearningDays?: number | null;
   schoolDaysPerWeek?: number | null;
-  weeklyJPSource?: 'ACTUAL_SCHEDULE' | 'REFERENCE_EQUIVALENT';
+  weeklyJPSource?: 'ACTUAL_SCHEDULE' | 'REFERENCE_EQUIVALENT' | 'DEFAULT_ANNUAL' | 'SEMESTER_OVERRIDE' | 'TEACHER_CONFIRMED';
   calendarStatus?: 'RESOLVED' | 'UNRESOLVED' | 'PARTIAL';
   effectiveDayStatus?: 'RESOLVED' | 'UNRESOLVED' | 'PARTIAL';
   actualScheduledAnnualJP?: number | null;
@@ -1164,6 +1164,14 @@ export function validateTeacherTeachingLoad(
   return calculateTeacherWorkload(assignments, additionalDuties, teacherName);
 }
 
+export interface ResolvedSemesterJP {
+  weeklyJP: number | null;
+  source: 'SEMESTER_OVERRIDE' | 'DEFAULT_ANNUAL' | 'UNRESOLVED';
+  isOverride: boolean;
+  defaultAnnualWeeklyJP: number | null;
+  explanation: string;
+}
+
 /**
  * Kapasitas dan Kesiapan Semester untuk Auto-Allocation ATP
  */
@@ -1175,6 +1183,9 @@ export interface SemesterCapacityInfo {
   effectiveWeekSlots: number | null;
   effectiveLearningDays: number | null;
   actualScheduledWeeklyJP: number | null;
+  jpSource?: 'SEMESTER_OVERRIDE' | 'DEFAULT_ANNUAL' | 'UNRESOLVED';
+  isJPOverridden?: boolean;
+  defaultAnnualWeeklyJP?: number | null;
   availableJP: number | null;
   isReady: boolean;
   unreadyReason?: string;
@@ -1503,6 +1514,72 @@ export function buildAutomaticSemesterAllocations(
 }
 
 /**
+ * Canonical Semester JP Resolver:
+ * Hierarchy:
+ * A. SemesterJPSetting.actualScheduledWeeklyJP (Semester Override / Confirmed)
+ * B. AnnualJPReference.referenceWeeklyEquivalentJP (Default JP/pekan dari Data Pembelajaran)
+ * C. Unresolved
+ */
+export function resolveSemesterJP(
+  semesterPlanId: string,
+  state: {
+    semesterPlans?: Array<{ id: string; semester: number; yearPlanId: string }>;
+    semesterJPSettings?: Array<{ semesterPlanId: string; value?: SemesterJPSetting }>;
+    annualJPReferences?: Array<{ yearPlanId: string; value?: any }>;
+  },
+  overrideSetting?: SemesterJPSetting
+): ResolvedSemesterJP {
+  const sp = state.semesterPlans?.find((s) => s.id === semesterPlanId);
+  const parentYearPlanId = sp?.yearPlanId;
+  const annualJPRef =
+    parentYearPlanId && state.annualJPReferences
+      ? state.annualJPReferences.find((e: any) => e.yearPlanId === parentYearPlanId)?.value
+      : undefined;
+
+  const defaultAnnualWeeklyJP =
+    typeof annualJPRef?.referenceWeeklyEquivalentJP === 'number' && annualJPRef.referenceWeeklyEquivalentJP > 0
+      ? annualJPRef.referenceWeeklyEquivalentJP
+      : null;
+
+  const jpSetting =
+    overrideSetting !== undefined
+      ? overrideSetting
+      : state.semesterJPSettings?.find((e: any) => e.semesterPlanId === semesterPlanId)?.value;
+
+  const explicitVal = jpSetting?.actualScheduledWeeklyJP;
+  if (typeof explicitVal === 'number' && explicitVal > 0) {
+    const isOverride = defaultAnnualWeeklyJP !== null && explicitVal !== defaultAnnualWeeklyJP;
+    return {
+      weeklyJP: explicitVal,
+      source: isOverride ? 'SEMESTER_OVERRIDE' : (jpSetting.source === 'SEMESTER_OVERRIDE' ? 'SEMESTER_OVERRIDE' : 'DEFAULT_ANNUAL'),
+      isOverride,
+      defaultAnnualWeeklyJP,
+      explanation: isOverride
+        ? `Penyesuaian Semester: ${explicitVal} JP/pekan (Default Data Pembelajaran: ${defaultAnnualWeeklyJP ?? '-'} JP/pekan)`
+        : `Default dari Data Pembelajaran: ${explicitVal} JP/pekan`,
+    };
+  }
+
+  if (defaultAnnualWeeklyJP !== null && defaultAnnualWeeklyJP > 0) {
+    return {
+      weeklyJP: defaultAnnualWeeklyJP,
+      source: 'DEFAULT_ANNUAL',
+      isOverride: false,
+      defaultAnnualWeeklyJP,
+      explanation: `Default dari Data Pembelajaran: ${defaultAnnualWeeklyJP} JP/pekan`,
+    };
+  }
+
+  return {
+    weeklyJP: null,
+    source: 'UNRESOLVED',
+    isOverride: false,
+    defaultAnnualWeeklyJP: null,
+    explanation: 'Jam Pelajaran (JP) belum ditentukan di Data Pembelajaran.',
+  };
+}
+
+/**
  * Resolver Kapasitas Semester dari Model Penyimpanan V5
  */
 export function resolveSemesterCapacityV5(
@@ -1513,6 +1590,7 @@ export function resolveSemesterCapacityV5(
       academicCalendar?: Array<{ semesterPlanId: string; value?: { calendar?: AcademicCalendar; days?: CalendarDay[] } }>;
     };
     semesterJPSettings?: Array<{ semesterPlanId: string; value?: SemesterJPSetting }>;
+    annualJPReferences?: Array<{ yearPlanId: string; value?: any }>;
   },
   override?: {
     calendar?: AcademicCalendar;
@@ -1526,10 +1604,6 @@ export function resolveSemesterCapacityV5(
   const calData = override?.calendar
     ? { calendar: override.calendar, days: override.calendarDays || [] }
     : state.semesterData?.academicCalendar?.find((e) => e.semesterPlanId === semesterPlanId)?.value;
-
-  const jpSetting = override?.semesterJPSetting
-    ? override.semesterJPSetting
-    : state.semesterJPSettings?.find((e) => e.semesterPlanId === semesterPlanId)?.value;
 
   const cal = calData?.calendar;
   const days = calData?.days || [];
@@ -1561,20 +1635,11 @@ export function resolveSemesterCapacityV5(
       ? Math.ceil(effectiveWeeks)
       : null;
 
-  const explicitSemesterJP =
-    jpSetting?.actualScheduledWeeklyJP !== undefined && jpSetting?.actualScheduledWeeklyJP !== null
-      ? jpSetting.actualScheduledWeeklyJP
-      : null;
-
-  const parentYearPlanId = sp?.yearPlanId;
-  const annualJPRef =
-    parentYearPlanId && (state as any).annualJPReferences
-      ? (state as any).annualJPReferences.find((e: any) => e.yearPlanId === parentYearPlanId)?.value
-      : undefined;
-
-  const fallbackAnnualJP = annualJPRef?.referenceWeeklyEquivalentJP ?? null;
-
-  const actualScheduledWeeklyJP = explicitSemesterJP !== null ? explicitSemesterJP : fallbackAnnualJP;
+  const resolvedJP = resolveSemesterJP(semesterPlanId, state, override?.semesterJPSetting);
+  const actualScheduledWeeklyJP = resolvedJP.weeklyJP;
+  const jpSource = resolvedJP.source;
+  const isJPOverridden = resolvedJP.isOverride;
+  const defaultAnnualWeeklyJP = resolvedJP.defaultAnnualWeeklyJP;
 
   let availableJP: number | null = null;
   if (
@@ -1588,7 +1653,7 @@ export function resolveSemesterCapacityV5(
       subjectWeeklyJP: actualScheduledWeeklyJP,
       effectiveLearningDays,
       schoolDaysPerWeek,
-      weeklyJPSource: 'ACTUAL_SCHEDULE',
+      weeklyJPSource: jpSource === 'SEMESTER_OVERRIDE' ? 'SEMESTER_OVERRIDE' : 'DEFAULT_ANNUAL',
       calendarStatus: 'RESOLVED',
       effectiveDayStatus: 'RESOLVED',
     });
@@ -1615,6 +1680,9 @@ export function resolveSemesterCapacityV5(
     effectiveWeekSlots,
     effectiveLearningDays,
     actualScheduledWeeklyJP,
+    jpSource,
+    isJPOverridden,
+    defaultAnnualWeeklyJP,
     availableJP,
     isReady,
   };
