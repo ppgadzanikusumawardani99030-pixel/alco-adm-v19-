@@ -30,7 +30,7 @@ import { loadStorageV5, getSemesterDataV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from './unitSemesterPlanningService';
-import { resolveEffectiveSubjectSlots } from './subjectScheduleService';
+import { resolveEffectiveSubjectSlots, resolvePlannedMeetingCapacity } from './subjectScheduleService';
 
 export type WorkflowStatus = 'BLOCKED' | 'READY' | 'IN_PROGRESS' | 'COMPLETE' | 'STALE';
 
@@ -806,27 +806,19 @@ export function validateWorkflowDependencies(
       const s1Data = s1 ? getSemesterDataV5(s1.id) : null;
       const s2Data = s2 ? getSemesterDataV5(s2.id) : null;
 
-      const s1Slots = s1 && s1Data && s1Cap?.actualScheduledWeeklyJP
-        ? resolveEffectiveSubjectSlots({
-            semesterPlanId: s1.id,
-            schedule: s1Data.subjectWeeklySchedule,
-            expectedWeeklyJP: s1Cap.actualScheduledWeeklyJP,
-            calendar: s1Data.academicCalendar?.calendar,
-            calendarDays: s1Data.academicCalendar?.days,
-            schoolDaysPerWeek: s1Data.academicCalendar?.calendar?.schoolDaysPerWeek,
-          })
-        : { isReady: false };
+      const s1PlannedCapacity = resolvePlannedMeetingCapacity({
+        schedule: s1Data?.subjectWeeklySchedule,
+        expectedWeeklyJP: s1Cap?.actualScheduledWeeklyJP ?? null,
+        calendarConfirmed: Boolean(s1Cap?.isCalendarConfirmed),
+        effectiveWeekSlots: s1Cap?.effectiveWeekSlots ?? 0,
+      });
 
-      const s2Slots = s2 && s2Data && s2Cap?.actualScheduledWeeklyJP
-        ? resolveEffectiveSubjectSlots({
-            semesterPlanId: s2.id,
-            schedule: s2Data.subjectWeeklySchedule,
-            expectedWeeklyJP: s2Cap.actualScheduledWeeklyJP,
-            calendar: s2Data.academicCalendar?.calendar,
-            calendarDays: s2Data.academicCalendar?.days,
-            schoolDaysPerWeek: s2Data.academicCalendar?.calendar?.schoolDaysPerWeek,
-          })
-        : { isReady: false };
+      const s2PlannedCapacity = resolvePlannedMeetingCapacity({
+        schedule: s2Data?.subjectWeeklySchedule,
+        expectedWeeklyJP: s2Cap?.actualScheduledWeeklyJP ?? null,
+        calendarConfirmed: Boolean(s2Cap?.isCalendarConfirmed),
+        effectiveWeekSlots: s2Cap?.effectiveWeekSlots ?? 0,
+      });
 
       const s1Allocations = s1
         ? v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s1.id)?.value || []
@@ -836,8 +828,8 @@ export function validateWorkflowDependencies(
         : [];
 
       // Check S1 and S2 time/calendar setup ready states (Waktu S1 & Waktu S2)
-      const isS1TimeReady = Boolean(s1Cap?.isReady && s1Slots.isReady);
-      const isS2TimeReady = Boolean(s2Cap?.isReady && s2Slots.isReady);
+      const isS1TimeReady = Boolean(s1Cap?.isReady && s1PlannedCapacity.isReady);
+      const isS2TimeReady = Boolean(s2Cap?.isReady && s2PlannedCapacity.isReady);
 
       // Check Unit Semester Placement completeness independently (Pembagian Bab)
       let isPlacementComplete = false;
@@ -873,7 +865,7 @@ export function validateWorkflowDependencies(
           meetingReason = 'Lengkapi Struktur Pertemuan pada setiap Unit/Bab terlebih dahulu.';
         } else {
           // Meeting coverage complete! Check exact meeting count matching target slots.
-          if (isPlacementComplete && s1Slots.isReady && s2Slots.isReady) {
+          if (isPlacementComplete && s1PlannedCapacity.isReady && s2PlannedCapacity.isReady) {
             const s1UnitIdsSet = new Set(s1UnitIds);
             let s1Count = 0;
             let s2Count = 0;
@@ -886,13 +878,13 @@ export function validateWorkflowDependencies(
               }
             });
 
-            const s1Target = (s1Slots as any).totalMeetingSlots;
-            const s2Target = (s2Slots as any).totalMeetingSlots;
+            const s1Target = s1PlannedCapacity.totalMeetingCapacity;
+            const s2Target = s2PlannedCapacity.totalMeetingCapacity;
 
             if (s1Count === s1Target && s2Count === s2Target) {
               isMeetingComplete = true;
             } else {
-              meetingReason = `Lengkapi Struktur Pertemuan sesuai kapasitas kalender (S1 ${s1Count}/${s1Target}, S2 ${s2Count}/${s2Target}).`;
+              meetingReason = `Lengkapi Struktur Pertemuan sesuai kapasitas perencanaan (S1 ${s1Count}/${s1Target}, S2 ${s2Count}/${s2Target}).`;
             }
           } else {
             isMeetingComplete = true;
@@ -934,13 +926,13 @@ export function validateWorkflowDependencies(
       if (!isMappingComplete) {
         annualPlanningReason = 'Memerlukan penyelesaian Pemetaan Unit/Bab & Lingkup Materi (07) terlebih dahulu';
       } else if (!isS1TimeReady) {
-        annualPlanningReason = 'Lengkapi Waktu Semester 1: Kalender, JP Mingguan, dan Jadwal Mapel.';
+        annualPlanningReason = 'Waktu Semester 1: Kalender, JP Mingguan, dan Pola Pertemuan Mingguan.';
       } else if (!isS2TimeReady) {
-        annualPlanningReason = 'Lengkapi Waktu Semester 2: Kalender, JP Mingguan, dan Jadwal Mapel.';
+        annualPlanningReason = 'Waktu Semester 2: Kalender, JP Mingguan, dan Pola Pertemuan Mingguan.';
       } else if (!isPlacementComplete) {
         annualPlanningReason = placementReason || 'Tetapkan pembagian Unit/Bab ke Semester 1 dan Semester 2.';
       } else if (!isMeetingComplete) {
-        annualPlanningReason = meetingReason || 'Lengkapi Struktur Pertemuan sesuai kapasitas kalender.';
+        annualPlanningReason = meetingReason || 'Lengkapi Struktur Pertemuan sesuai kapasitas perencanaan.';
       } else if (!isAllocationComplete) {
         annualPlanningReason = allocationReason || 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
       }

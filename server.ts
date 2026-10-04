@@ -1815,7 +1815,7 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
   const additionalS2 = targetS2 - s2ExistingMeetingCount;
 
   if (additionalS1 < 0 || additionalS2 < 0) {
-    return res.status(400).json({ error: 'Kapasitas Pertemuan manual melebihi kapasitas Pertemuan efektif.' });
+    return res.status(400).json({ error: 'Kapasitas Pertemuan manual melebihi kapasitas Pertemuan perencanaan.' });
   }
 
   const unitsContext = sortedMappingUnits.map((unit: any) => {
@@ -1900,7 +1900,7 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
   try {
     const ai = createAIClient(apiKey);
     const prompt = `Anda adalah pakar pengembang kurikulum dan perangkat pembelajaran Kurikulum Merdeka.
-TUGAS ANDA: Menyusun tambahan LearningMeeting untuk mengisi slot Pertemuan yang sudah dihitung secara deterministik dari Kalender Pendidikan dan jadwal mapel.
+TUGAS ANDA: Menyusun tambahan LearningMeeting untuk mengisi kapasitas Pertemuan perencanaan semester berdasarkan Kalender Pendidikan, JP mingguan, dan pola Pertemuan mingguan.
 
 JUMLAH PERTEMUAN YANG DIHASILKAN HARUS EXACT SANGAT PRESISI.
 - Untuk Semester 1: hasilkan total Pertemuan BARU tepat sejumlah: ${additionalS1} Pertemuan.

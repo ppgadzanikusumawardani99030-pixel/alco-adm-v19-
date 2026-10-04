@@ -40,7 +40,6 @@ import {
 } from '../services/unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from '../services/unitSemesterPlanningService';
 import {
-  resolveEffectiveSubjectSlots,
   resolvePlannedMeetingCapacity,
 } from '../services/subjectScheduleService';
 

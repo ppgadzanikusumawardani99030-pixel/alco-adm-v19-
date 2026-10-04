@@ -114,7 +114,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     }
 
     if (!meetingCapacity || !meetingCapacity.semester1.isReady || !meetingCapacity.semester2.isReady) {
-      setGenerationError('Lengkapi Kalender Pendidikan dan Pola Jadwal Mapel Semester 1 & 2 agar AI dapat menyusun jumlah Pertemuan sesuai kapasitas waktu.');
+      setGenerationError('Lengkapi Kalender Pendidikan dan Pola Pertemuan Mingguan Semester 1 & 2 agar AI dapat menyusun jumlah Pertemuan sesuai kapasitas waktu.');
       return;
     }
 
@@ -164,10 +164,10 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
       const additionalS2 = targetS2 - s2Existing;
 
       if (additionalS1 < 0) {
-        throw new Error('Jumlah Pertemuan manual melebihi kapasitas Pertemuan efektif Semester 1. Kurangi Pertemuan manual atau sesuaikan pola jadwal/kalender.');
+        throw new Error('Jumlah Pertemuan manual melebihi kapasitas Pertemuan perencanaan Semester 1. Kurangi Pertemuan manual atau sesuaikan pola jadwal/kalender.');
       }
       if (additionalS2 < 0) {
-        throw new Error('Jumlah Pertemuan manual melebihi kapasitas Pertemuan efektif Semester 2. Kurangi Pertemuan manual atau sesuaikan pola jadwal/kalender.');
+        throw new Error('Jumlah Pertemuan manual melebihi kapasitas Pertemuan perencanaan Semester 2. Kurangi Pertemuan manual atau sesuaikan pola jadwal/kalender.');
       }
 
       // 3. Minimum coverage feasibility
@@ -202,7 +202,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
       // 4. No-work condition
       const isCoverageComplete = validation.isComplete && !isStale;
       if (additionalS1 === 0 && additionalS2 === 0 && isCoverageComplete) {
-        setGenerationNotice('Struktur Pertemuan sudah sesuai kapasitas kalender dan seluruh coverage telah tercakup.');
+        setGenerationNotice('Struktur Pertemuan sudah sesuai kapasitas perencanaan semester dan seluruh coverage telah tercakup.');
         setIsGeneratingMeetings(false);
         return;
       }
@@ -294,7 +294,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
       }
 
       setDraft(mergedDraft);
-      setGenerationNotice(`AI menyusun draf sesuai kapasitas kalender: Semester 1 = ${targetS1} Pertemuan, Semester 2 = ${targetS2} Pertemuan. Tinjau struktur dan pembagian Unit/Bab sebelum menyimpan.`);
+      setGenerationNotice(`AI menyusun draf sesuai kapasitas perencanaan semester: Semester 1 = ${targetS1} Pertemuan, Semester 2 = ${targetS2} Pertemuan. Tinjau struktur dan pembagian Unit/Bab sebelum menyimpan.`);
     } catch (err: any) {
       setGenerationError(err?.message || 'Gagal menyusun draf Pertemuan dengan AI.');
     } finally {
@@ -762,14 +762,14 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
       {!isCapacityReady && (
         <div className="px-5 py-3 text-xs font-medium bg-amber-50 text-amber-900 border-b border-amber-200 flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-          <span>Lengkapi Kalender Pendidikan dan Pola Jadwal Mapel Semester 1 &amp; 2 agar AI dapat menyusun jumlah Pertemuan sesuai kapasitas waktu.</span>
+          <span>Lengkapi Kalender Pendidikan dan Pola Pertemuan Mingguan Semester 1 &amp; 2 agar AI dapat menyusun jumlah Pertemuan sesuai kapasitas waktu.</span>
         </div>
       )}
 
       {isAINoWork && (
         <div className="px-5 py-3 text-xs font-medium bg-emerald-50 text-emerald-950 border-b border-emerald-200 flex items-center gap-2">
           <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span>Struktur Pertemuan sudah sesuai kapasitas kalender dan seluruh coverage telah tercakup.</span>
+          <span>Struktur Pertemuan sudah sesuai kapasitas perencanaan semester dan seluruh coverage telah tercakup.</span>
         </div>
       )}
 
@@ -777,7 +777,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
         <div className="mx-5 mt-4 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs">
           <div className="font-bold text-slate-800 mb-2 flex items-center gap-1.5">
             <Layers className="w-4 h-4 text-indigo-600" />
-            <span>Kapasitas Kalender</span>
+            <span>Kapasitas Perencanaan Semester</span>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="p-3 bg-white rounded-lg border border-slate-200">
