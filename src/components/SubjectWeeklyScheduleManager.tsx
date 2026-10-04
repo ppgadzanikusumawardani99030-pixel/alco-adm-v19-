@@ -69,7 +69,7 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
         {
           id: generateStableId(),
           dayOfWeek: 0 as any, // sentinel "Pilih hari..."
-          jp: expectedWeeklyJP || 3,
+          jp: expectedWeeklyJP && expectedWeeklyJP > 0 ? expectedWeeklyJP : 0,
           order: 1,
         },
       ],
@@ -88,38 +88,71 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
     if (schedule && schedule.semesterPlanId === semesterPlanId) {
       setDraft(JSON.parse(JSON.stringify(schedule)));
     } else {
-      setDraft({
-        semesterPlanId,
-        sessions: [
-          {
-            id: generateStableId(),
-            dayOfWeek: 0 as any,
-            jp: expectedWeeklyJP || 3,
-            order: 1,
-          },
-        ],
-        basedOnWeeklyJP: expectedWeeklyJP || 0,
-        updatedAt: new Date().toISOString(),
+      setDraft((prev) => {
+        if (prev.semesterPlanId === semesterPlanId) {
+          // Parent refresh or expectedWeeklyJP updated without persisted schedule. Keep local edits!
+          const updatedSessions = prev.sessions.map((s, idx) => {
+            if (s.jp <= 0 && idx === 0 && expectedWeeklyJP && expectedWeeklyJP > 0) {
+              return { ...s, jp: expectedWeeklyJP };
+            }
+            return s;
+          });
+          return {
+            ...prev,
+            sessions: updatedSessions,
+            basedOnWeeklyJP: expectedWeeklyJP || 0,
+          };
+        }
+        return {
+          semesterPlanId,
+          sessions: [
+            {
+              id: generateStableId(),
+              dayOfWeek: 0 as any,
+              jp: expectedWeeklyJP && expectedWeeklyJP > 0 ? expectedWeeklyJP : 0,
+              order: 1,
+            },
+          ],
+          basedOnWeeklyJP: expectedWeeklyJP || 0,
+          updatedAt: new Date().toISOString(),
+        };
       });
     }
-  }, [semesterPlanId, schedule?.semesterPlanId, schedule?.updatedAt]);
+  }, [semesterPlanId, schedule?.semesterPlanId, schedule?.updatedAt, expectedWeeklyJP]);
 
-  // Validation
-  const validation = useMemo(() => {
-    return validateSubjectWeeklySchedule(draft, expectedWeeklyJP, schoolDaysPerWeek);
-  }, [draft, expectedWeeklyJP, schoolDaysPerWeek]);
+  // Persisted Validation (stale authority check on stored data)
+  const persistedValidation = useMemo(() => {
+    if (!schedule) return null;
+    return validateSubjectWeeklySchedule(schedule, expectedWeeklyJP, schoolDaysPerWeek);
+  }, [schedule, expectedWeeklyJP, schoolDaysPerWeek]);
 
-  // Effective slots resolution
+  // Candidate Schedule (draft targeted to current expectedWeeklyJP)
+  const candidateSchedule = useMemo(() => {
+    return {
+      ...draft,
+      basedOnWeeklyJP:
+        expectedWeeklyJP && expectedWeeklyJP > 0
+          ? expectedWeeklyJP
+          : draft.basedOnWeeklyJP
+    };
+  }, [draft, expectedWeeklyJP]);
+
+  // Candidate Validation (validates edits targeted to expectedWeeklyJP)
+  const candidateValidation = useMemo(() => {
+    return validateSubjectWeeklySchedule(candidateSchedule, expectedWeeklyJP, schoolDaysPerWeek);
+  }, [candidateSchedule, expectedWeeklyJP, schoolDaysPerWeek]);
+
+  // Effective slots resolution using candidateSchedule (allows instant previews of corrected schedule before saving!)
   const slotResult = useMemo(() => {
     return resolveEffectiveSubjectSlots({
       semesterPlanId,
-      schedule: draft,
+      schedule: candidateSchedule,
       expectedWeeklyJP,
       calendar,
       calendarDays,
       schoolDaysPerWeek,
     });
-  }, [semesterPlanId, draft, expectedWeeklyJP, calendar, calendarDays, schoolDaysPerWeek]);
+  }, [semesterPlanId, candidateSchedule, expectedWeeklyJP, calendar, calendarDays, schoolDaysPerWeek]);
 
   // Dirty state calculation
   const isDirty = useMemo(() => {
@@ -135,7 +168,7 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
       const newSession: SubjectWeeklyScheduleSession = {
         id: generateStableId(),
         dayOfWeek: 0 as any, // sentinel "Pilih hari..."
-        jp: 2,
+        jp: 0, // sentinel 0
         order: nextOrder,
       };
       return {
@@ -178,16 +211,17 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
       return;
     }
 
-    if (!validation.isValid || !validation.isComplete) {
-      setSaveNotice({ type: 'error', message: 'Pola jadwal belum lengkap atau tidak valid sesuai JP mingguan.' });
-      return;
-    }
-
     const toSave: SubjectWeeklySchedule = {
       ...draft,
       basedOnWeeklyJP: expectedWeeklyJP,
       updatedAt: new Date().toISOString(),
     };
+
+    const finalVal = validateSubjectWeeklySchedule(toSave, expectedWeeklyJP, schoolDaysPerWeek);
+    if (!finalVal.isValid || !finalVal.isComplete || finalVal.isStale) {
+      setSaveNotice({ type: 'error', message: 'Pola jadwal belum lengkap atau tidak valid sesuai JP mingguan.' });
+      return;
+    }
 
     const success = onSave(toSave);
     if (success) {
@@ -228,9 +262,9 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
           <button
             type="button"
             onClick={handleSave}
-            disabled={!expectedWeeklyJP || expectedWeeklyJP <= 0 || !validation.isComplete || !isDirty || validation.isStale}
+            disabled={!expectedWeeklyJP || expectedWeeklyJP <= 0 || !candidateValidation.isComplete || !isDirty}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
-              !expectedWeeklyJP || expectedWeeklyJP <= 0 || !validation.isComplete || !isDirty || validation.isStale
+              !expectedWeeklyJP || expectedWeeklyJP <= 0 || !candidateValidation.isComplete || !isDirty
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
                 : 'bg-blue-600 text-white hover:bg-blue-500 shadow-md shadow-blue-600/20'
             }`}
@@ -272,11 +306,25 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
         </div>
       )}
 
+      {/* Persisted Stale Warning */}
+      {persistedValidation?.isStale && (
+        <div className="mx-5 mt-4 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-bold">Perubahan JP Mingguan Terdeteksi</p>
+            <p className="mt-0.5">
+              JP mingguan berubah dari {schedule?.basedOnWeeklyJP ?? 0} menjadi {expectedWeeklyJP ?? 0} JP.
+              Sesuaikan pola jadwal lalu simpan ulang.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Validation Errors / Stale Notice */}
-      {validation.errors.length > 0 && (
+      {candidateValidation.errors.length > 0 && (
         <div className="mx-5 mt-4 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs">
           <ul className="list-disc pl-5 space-y-0.5">
-            {validation.errors.map((err, idx) => (
+            {candidateValidation.errors.map((err, idx) => (
               <li key={idx}>{err}</li>
             ))}
           </ul>
@@ -334,12 +382,14 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
                       type="number"
                       min={1}
                       max={10}
-                      value={session.jp}
-                      onChange={(e) =>
+                      value={session.jp > 0 ? session.jp : ''}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
                         handleUpdateSession(session.id, {
-                          jp: Math.max(1, parseInt(e.target.value || '1', 10)),
-                        })
-                      }
+                          jp: isNaN(val) ? 0 : Math.max(0, val),
+                        });
+                      }}
+                      placeholder="JP..."
                       className="w-full text-xs font-semibold bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-600"
                     />
                   </div>
@@ -364,8 +414,8 @@ export const SubjectWeeklyScheduleManager: React.FC<SubjectWeeklyScheduleManager
         {/* Total Summary Bar */}
         <div className="p-4 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-between text-xs font-bold text-slate-800">
           <span>Total Jadwal Sesi:</span>
-          <span className={`${validation.totalWeeklyJP === expectedWeeklyJP ? 'text-emerald-700' : 'text-rose-700'}`}>
-            {validation.totalWeeklyJP} / {expectedWeeklyJP || 0} JP
+          <span className={`${candidateValidation.totalWeeklyJP === expectedWeeklyJP ? 'text-emerald-700' : 'text-rose-700'}`}>
+            {candidateValidation.totalWeeklyJP} / {expectedWeeklyJP || 0} JP
           </span>
         </div>
       </div>
