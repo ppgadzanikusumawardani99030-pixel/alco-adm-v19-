@@ -2,6 +2,7 @@ import {
   SubjectWeeklySchedule,
   AcademicCalendar,
   CalendarDay,
+  SubjectScheduleDay,
 } from '../types';
 import { getEffectiveWeeksList, normalizeCalendarDayStatus } from './jpEngine';
 
@@ -51,8 +52,22 @@ export interface EffectiveSubjectSlotResult {
   totalExcludedOccurrences: number;
 }
 
+export interface PlannedMeetingCapacityResult {
+  isReady: boolean;
+  isValid: boolean;
+  isComplete: boolean;
+  isStale: boolean;
+  errors: string[];
+  warnings: string[];
+  meetingsPerWeek: number;
+  effectiveWeekSlots: number;
+  totalMeetingCapacity: number;
+  totalJP: number;
+}
+
 /**
- * Validates a SubjectWeeklySchedule against expected weekly JP and school days per week.
+ * Validates a SubjectWeeklySchedule against expected weekly JP.
+ * DayOfWeek requirements (saturday, weekday check) are removed at this stage.
  */
 export function validateSubjectWeeklySchedule(
   schedule: SubjectWeeklySchedule | undefined,
@@ -108,12 +123,6 @@ export function validateSubjectWeeklySchedule(
       sessionIds.add(s.id);
     }
 
-    if (!s.dayOfWeek || ![1, 2, 3, 4, 5, 6].includes(s.dayOfWeek)) {
-      errors.push(`Hari dalam seminggu tidak valid untuk sesi ${s.id}.`);
-    } else if (schoolDaysPerWeek === 5 && s.dayOfWeek === 6) {
-      errors.push('Hari Sabtu (6) tidak valid untuk sekolah 5 hari (schoolDaysPerWeek = 5).');
-    }
-
     if (typeof s.jp !== 'number' || s.jp <= 0 || !Number.isInteger(s.jp)) {
       errors.push(`Jumlah JP untuk sesi ${s.id} harus berupa integer positif.`);
     } else {
@@ -147,7 +156,48 @@ export function validateSubjectWeeklySchedule(
 }
 
 /**
+ * Resolves planned meeting capacity based on schedule length, ignoring weekday allocations.
+ */
+export function resolvePlannedMeetingCapacity(params: {
+  schedule?: SubjectWeeklySchedule;
+  expectedWeeklyJP: number | null;
+  calendarConfirmed: boolean;
+  effectiveWeekSlots: number;
+}): PlannedMeetingCapacityResult {
+  const { schedule, expectedWeeklyJP, calendarConfirmed, effectiveWeekSlots } = params;
+
+  const validation = validateSubjectWeeklySchedule(schedule, expectedWeeklyJP, null);
+
+  const meetingsPerWeek = schedule?.sessions ? schedule.sessions.length : 0;
+  const totalMeetingCapacity = effectiveWeekSlots * meetingsPerWeek;
+  const totalJP = effectiveWeekSlots * (expectedWeeklyJP || 0);
+
+  const isReady = Boolean(
+    validation.isComplete &&
+    !validation.isStale &&
+    calendarConfirmed &&
+    effectiveWeekSlots > 0 &&
+    expectedWeeklyJP &&
+    expectedWeeklyJP > 0
+  );
+
+  return {
+    isReady,
+    isValid: validation.isValid,
+    isComplete: validation.isComplete,
+    isStale: validation.isStale,
+    errors: validation.errors,
+    warnings: validation.warnings,
+    meetingsPerWeek,
+    effectiveWeekSlots,
+    totalMeetingCapacity,
+    totalJP,
+  };
+}
+
+/**
  * Resolves effective subject slots from schedule and academic calendar.
+ * If sessions don't have valid days of the week, it gracefully returns not ready.
  */
 export function resolveEffectiveSubjectSlots(params: {
   semesterPlanId: string;
@@ -173,6 +223,24 @@ export function resolveEffectiveSubjectSlots(params: {
     Array.isArray(calendarDays) &&
     calendarDays.length > 0
   );
+
+  const hasInvalidDayOfWeek = !schedule || schedule.sessions.some(s => !s.dayOfWeek || ![1, 2, 3, 4, 5, 6].includes(s.dayOfWeek));
+
+  if (hasInvalidDayOfWeek) {
+    return {
+      isValid: validation.isValid,
+      isComplete: validation.isComplete,
+      isReady: false,
+      isStale: validation.isStale,
+      errors: [...validation.errors, 'Hari mengajar belum dialokasikan. Slot tanggal aktual ditentukan pada tahap Alokasi Waktu.'],
+      warnings: validation.warnings,
+      slots: [],
+      excludedOccurrences: [],
+      totalMeetingSlots: 0,
+      totalJP: 0,
+      totalExcludedOccurrences: 0,
+    };
+  }
 
   const isReady = validation.isComplete && calendarReady;
 
@@ -266,7 +334,7 @@ export function resolveEffectiveSubjectSlots(params: {
           sessionId: s.id,
           date: dateStr,
           dayOfWeek,
-          jp: s.jp,
+          jp: s.jp || 0,
           weekIndex,
           month,
           year,
@@ -284,7 +352,7 @@ export function resolveEffectiveSubjectSlots(params: {
           sessionId: s.id,
           date: dateStr,
           dayOfWeek,
-          jp: s.jp,
+          jp: s.jp || 0,
           reason: canonicalStatus,
         });
       }

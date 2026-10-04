@@ -84,7 +84,8 @@ export type SubjectScheduleDay = 1 | 2 | 3 | 4 | 5 | 6;
 
 export interface SubjectWeeklyScheduleSession {
   id: string;
-  dayOfWeek: SubjectScheduleDay;
+  /** @deprecated Defer weekday selection to time allocation */
+  dayOfWeek?: SubjectScheduleDay;
   jp: number;
   order: number;
 }

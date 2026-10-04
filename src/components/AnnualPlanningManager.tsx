@@ -39,7 +39,10 @@ import {
   createEmptyUnitExecutionPlanData,
 } from '../services/unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from '../services/unitSemesterPlanningService';
-import { resolveEffectiveSubjectSlots } from '../services/subjectScheduleService';
+import {
+  resolveEffectiveSubjectSlots,
+  resolvePlannedMeetingCapacity,
+} from '../services/subjectScheduleService';
 
 export interface AnnualPlanningManagerProps {
   school: SchoolData;
@@ -210,33 +213,27 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     placementValidation.isComplete
   );
 
-  const s1SubjectSlots = useMemo(() => {
-    if (!sem1Plan || !s1Data?.academicCalendar || !s1Data?.subjectWeeklySchedule || !s1Capacity?.actualScheduledWeeklyJP) {
-      return { isReady: false, totalMeetingSlots: 0, totalJP: 0 };
-    }
-    return resolveEffectiveSubjectSlots({
-      semesterPlanId: sem1Plan.id,
-      schedule: s1Data.subjectWeeklySchedule,
-      expectedWeeklyJP: s1Capacity.actualScheduledWeeklyJP,
-      calendar: s1Data.academicCalendar.calendar,
-      calendarDays: s1Data.academicCalendar.days,
-      schoolDaysPerWeek: s1Data.academicCalendar.calendar.schoolDaysPerWeek,
+  const s1PlannedCapacity = useMemo(() => {
+    const calendarConfirmed = Boolean(s1Data?.academicCalendar?.calendar?.workflowStatus === 'CONFIRMED');
+    const effectiveWeekSlots = s1Capacity?.effectiveWeekSlots || 0;
+    return resolvePlannedMeetingCapacity({
+      schedule: s1Data?.subjectWeeklySchedule,
+      expectedWeeklyJP: s1Capacity?.actualScheduledWeeklyJP ?? null,
+      calendarConfirmed,
+      effectiveWeekSlots,
     });
-  }, [sem1Plan, s1Data, s1Capacity]);
+  }, [s1Data, s1Capacity]);
 
-  const s2SubjectSlots = useMemo(() => {
-    if (!sem2Plan || !s2Data?.academicCalendar || !s2Data?.subjectWeeklySchedule || !s2Capacity?.actualScheduledWeeklyJP) {
-      return { isReady: false, totalMeetingSlots: 0, totalJP: 0 };
-    }
-    return resolveEffectiveSubjectSlots({
-      semesterPlanId: sem2Plan.id,
-      schedule: s2Data.subjectWeeklySchedule,
-      expectedWeeklyJP: s2Capacity.actualScheduledWeeklyJP,
-      calendar: s2Data.academicCalendar.calendar,
-      calendarDays: s2Data.academicCalendar.days,
-      schoolDaysPerWeek: s2Data.academicCalendar.calendar.schoolDaysPerWeek,
+  const s2PlannedCapacity = useMemo(() => {
+    const calendarConfirmed = Boolean(s2Data?.academicCalendar?.calendar?.workflowStatus === 'CONFIRMED');
+    const effectiveWeekSlots = s2Capacity?.effectiveWeekSlots || 0;
+    return resolvePlannedMeetingCapacity({
+      schedule: s2Data?.subjectWeeklySchedule,
+      expectedWeeklyJP: s2Capacity?.actualScheduledWeeklyJP ?? null,
+      calendarConfirmed,
+      effectiveWeekSlots,
     });
-  }, [sem2Plan, s2Data, s2Capacity]);
+  }, [s2Data, s2Capacity]);
 
   const isK13Curriculum = academicSetting.curriculumType === 'K13' || academicSetting.curriculum?.includes('2013');
 
@@ -266,8 +263,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     s1Capacity.actualScheduledWeeklyJP > 0
   );
   const s1ScheduleSaved = Boolean(s1Data?.subjectWeeklySchedule);
-  const s1SlotsReady = Boolean(s1SubjectSlots.isReady);
-  const s1TimeReady = s1CalendarReady && s1JpReady && s1ScheduleSaved && s1SlotsReady;
+  const s1TimeReady = s1CalendarReady && s1JpReady && s1ScheduleSaved && s1PlannedCapacity.isReady;
 
   const s2CalendarReady = Boolean(
     s2Capacity?.isCalendarConfirmed &&
@@ -279,16 +275,19 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     s2Capacity.actualScheduledWeeklyJP > 0
   );
   const s2ScheduleSaved = Boolean(s2Data?.subjectWeeklySchedule);
-  const s2SlotsReady = Boolean(s2SubjectSlots.isReady);
-  const s2TimeReady = s2CalendarReady && s2JpReady && s2ScheduleSaved && s2SlotsReady;
-  const s1MeetingCountMatches = meetingCounts.semester1 === s1SubjectSlots.totalMeetingSlots;
-  const s2MeetingCountMatches = meetingCounts.semester2 === s2SubjectSlots.totalMeetingSlots;
-  const meetingCountDetail = `S1 ${meetingCounts.semester1}/${s1SubjectSlots.totalMeetingSlots} • S2 ${meetingCounts.semester2}/${s2SubjectSlots.totalMeetingSlots} Pertemuan`;
+  const s2TimeReady = s2CalendarReady && s2JpReady && s2ScheduleSaved && s2PlannedCapacity.isReady;
+
+  const s1TargetMeetings = s1PlannedCapacity.totalMeetingCapacity;
+  const s2TargetMeetings = s2PlannedCapacity.totalMeetingCapacity;
+
+  const s1MeetingCountMatches = meetingCounts.semester1 === s1TargetMeetings;
+  const s2MeetingCountMatches = meetingCounts.semester2 === s2TargetMeetings;
+  const meetingCountDetail = `S1 ${meetingCounts.semester1}/${s1TargetMeetings} • S2 ${meetingCounts.semester2}/${s2TargetMeetings} Pertemuan`;
   const meetingCoverageComplete = Boolean(placementReady && meetingValidation?.isComplete);
   const meetingExactReady = Boolean(
     meetingCoverageComplete &&
-    s1SubjectSlots.isReady &&
-    s2SubjectSlots.isReady &&
+    s1PlannedCapacity.isReady &&
+    s2PlannedCapacity.isReady &&
     s1MeetingCountMatches &&
     s2MeetingCountMatches
   );
@@ -318,8 +317,8 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
         title: 'Waktu Semester 1',
         status: t1Complete ? 'COMPLETE' : 'PENDING',
         isLocked: false,
-        detail: s1SubjectSlots.isReady
-          ? `${s1SubjectSlots.totalMeetingSlots} Pertemuan • ${s1SubjectSlots.totalJP} JP`
+        detail: s1PlannedCapacity.isReady
+          ? `${s1PlannedCapacity.totalMeetingCapacity} Pertemuan • ${s1PlannedCapacity.totalJP} JP`
           : 'Belum dihitung',
       },
       {
@@ -328,8 +327,8 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
         status: t2Complete ? 'COMPLETE' : 'PENDING',
         isLocked: t2Locked,
         lockReason: 'Lengkapi Waktu Semester 1 terlebih dahulu',
-        detail: s2SubjectSlots.isReady
-          ? `${s2SubjectSlots.totalMeetingSlots} Pertemuan • ${s2SubjectSlots.totalJP} JP`
+        detail: s2PlannedCapacity.isReady
+          ? `${s2PlannedCapacity.totalMeetingCapacity} Pertemuan • ${s2PlannedCapacity.totalJP} JP`
           : 'Belum dihitung',
       },
       {
@@ -367,8 +366,8 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     meetingCoverageComplete,
     hasS1SavedAllocation,
     hasS2SavedAllocation,
-    s1SubjectSlots,
-    s2SubjectSlots,
+    s1PlannedCapacity,
+    s2PlannedCapacity,
     meetingCountDetail,
   ]);
 
@@ -425,13 +424,13 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
         return {
           num: 1,
           title: 'Waktu Semester 1',
-          desc: 'LENGKAPI Kalender Pendidikan, JP Mingguan, dan Jadwal Mapel Semester 1.',
+          desc: 'LENGKAPI Kalender Pendidikan, JP Mingguan, dan Pola Pertemuan Mingguan Semester 1.',
         };
       case 'time-s2':
         return {
           num: 2,
           title: 'Waktu Semester 2',
-          desc: 'LENGKAPI Kalender Pendidikan, JP Mingguan, dan Jadwal Mapel Semester 2.',
+          desc: 'LENGKAPI Kalender Pendidikan, JP Mingguan, dan Pola Pertemuan Mingguan Semester 2.',
         };
       case 'placement':
         return {
@@ -490,18 +489,18 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
   const s1Guidance = useMemo(() => {
     if (!s1CalendarReady) return 'Simpan & Tetapkan Kalender Pendidikan.';
     if (!s1JpReady) return 'Tentukan JP Mingguan Mapel.';
-    if (!s1ScheduleSaved) return 'Tentukan hari mengajar lalu klik Simpan Pola Jadwal.';
-    if (!s1SlotsReady) return 'Jadwal sudah tersimpan tetapi slot efektif belum valid. Periksa pesan validasi Kalender/Pola Jadwal.';
+    if (!s1ScheduleSaved) return 'Simpan Pola Pertemuan Mingguan.';
+    if (!s1PlannedCapacity.isReady) return 'Pola Pertemuan tersimpan tetapi kapasitas belum valid. Periksa pesan validasi Kalender/Pola Pertemuan.';
     return 'Semester 1 siap. Lanjut ke Semester 2.';
-  }, [s1CalendarReady, s1JpReady, s1ScheduleSaved, s1SlotsReady]);
+  }, [s1CalendarReady, s1JpReady, s1ScheduleSaved, s1PlannedCapacity.isReady]);
 
   const s2Guidance = useMemo(() => {
     if (!s2CalendarReady) return 'Simpan & Tetapkan Kalender Pendidikan.';
     if (!s2JpReady) return 'Tentukan JP Mingguan Mapel.';
-    if (!s2ScheduleSaved) return 'Tentukan hari mengajar lalu klik Simpan Pola Jadwal.';
-    if (!s2SlotsReady) return 'Jadwal sudah tersimpan tetapi slot efektif belum valid. Periksa pesan validasi Kalender/Pola Jadwal.';
+    if (!s2ScheduleSaved) return 'Simpan Pola Pertemuan Mingguan.';
+    if (!s2PlannedCapacity.isReady) return 'Pola Pertemuan tersimpan tetapi kapasitas belum valid. Periksa pesan validasi Kalender/Pola Pertemuan.';
     return 'Semester 2 siap. Lanjut ke Pembagian Bab.';
-  }, [s2CalendarReady, s2JpReady, s2ScheduleSaved, s2SlotsReady]);
+  }, [s2CalendarReady, s2JpReady, s2ScheduleSaved, s2PlannedCapacity.isReady]);
 
   return (
     <div className="space-y-6">
@@ -574,8 +573,8 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                   <div className="text-[10px] text-slate-500 font-medium">JP Aktual • Tersedia</div>
                   <div className="font-bold text-blue-900 mt-0.5">
                     {!isK13Curriculum ? (
-                      s1SubjectSlots.isReady ? (
-                        <span>{s1SubjectSlots.totalMeetingSlots} Pertemuan • {s1SubjectSlots.totalJP} JP Aktual</span>
+                      s1PlannedCapacity.isReady ? (
+                        <span>{s1PlannedCapacity.totalMeetingCapacity} Pertemuan • {s1PlannedCapacity.totalJP} JP Rencana</span>
                       ) : (
                         <span>Belum dihitung</span>
                       )
@@ -616,8 +615,8 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                   <div className="text-[10px] text-slate-500 font-medium">JP Aktual • Tersedia</div>
                   <div className="font-bold text-blue-900 mt-0.5">
                     {!isK13Curriculum ? (
-                      s2SubjectSlots.isReady ? (
-                        <span>{s2SubjectSlots.totalMeetingSlots} Pertemuan • {s2SubjectSlots.totalJP} JP Aktual</span>
+                      s2PlannedCapacity.isReady ? (
+                        <span>{s2PlannedCapacity.totalMeetingCapacity} Pertemuan • {s2PlannedCapacity.totalJP} JP Rencana</span>
                       ) : (
                         <span>Belum dihitung</span>
                       )
@@ -645,8 +644,8 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                 <div className="bg-slate-800/90 p-2 rounded-xl border border-slate-700/60">
                   <div className="text-[10px] text-slate-400 font-medium">Total JP Efektif (S1+S2)</div>
                   <div className="font-bold text-white mt-0.5">
-                    {!isK13Curriculum && s1SubjectSlots.isReady && s2SubjectSlots.isReady ? (
-                      <span>{s1SubjectSlots.totalJP + s2SubjectSlots.totalJP} JP Aktual ({s1SubjectSlots.totalMeetingSlots + s2SubjectSlots.totalMeetingSlots} Pertemuan)</span>
+                    {!isK13Curriculum && s1PlannedCapacity.isReady && s2PlannedCapacity.isReady ? (
+                      <span>{s1PlannedCapacity.totalJP + s2PlannedCapacity.totalJP} JP Rencana ({s1PlannedCapacity.totalMeetingCapacity + s2PlannedCapacity.totalMeetingCapacity} Pertemuan)</span>
                     ) : (
                       <span>{totalAnnualAvailableJP !== null ? `${totalAnnualAvailableJP} JP` : 'Belum Lengkap'}</span>
                     )}
@@ -714,25 +713,25 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                     {s1ScheduleSaved ? (
                       <span className="text-emerald-700 font-bold flex items-center gap-1.5">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Pola Jadwal Mapel (Tersimpan)</span>
+                        <span>Pola Pertemuan Mingguan (Tersimpan)</span>
                       </span>
                     ) : (
                       <span className="text-slate-400 flex items-center gap-1.5">
                         <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
-                        <span>Pola Jadwal Mapel</span>
+                        <span>Pola Pertemuan Mingguan</span>
                       </span>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    {s1SlotsReady ? (
+                    {s1PlannedCapacity.isReady ? (
                       <span className="text-emerald-700 font-bold flex items-center gap-1.5">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Slot Pertemuan Efektif ({s1SubjectSlots.totalMeetingSlots} Pertemuan • {s1SubjectSlots.totalJP} JP)</span>
+                        <span>Kapasitas Pertemuan Perencanaan ({s1PlannedCapacity.totalMeetingCapacity} Pertemuan • {s1PlannedCapacity.totalJP} JP)</span>
                       </span>
                     ) : (
                       <span className="text-slate-400 flex items-center gap-1.5">
                         <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
-                        <span>Slot Pertemuan Efektif</span>
+                        <span>Kapasitas Pertemuan Perencanaan</span>
                       </span>
                     )}
                   </div>
@@ -784,25 +783,25 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                     {s2ScheduleSaved ? (
                       <span className="text-emerald-700 font-bold flex items-center gap-1.5">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Pola Jadwal Mapel (Tersimpan)</span>
+                        <span>Pola Pertemuan Mingguan (Tersimpan)</span>
                       </span>
                     ) : (
                       <span className="text-slate-400 flex items-center gap-1.5">
                         <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
-                        <span>Pola Jadwal Mapel</span>
+                        <span>Pola Pertemuan Mingguan</span>
                       </span>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
-                    {s2SlotsReady ? (
+                    {s2PlannedCapacity.isReady ? (
                       <span className="text-emerald-700 font-bold flex items-center gap-1.5">
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Slot Pertemuan Efektif ({s2SubjectSlots.totalMeetingSlots} Pertemuan • {s2SubjectSlots.totalJP} JP)</span>
+                        <span>Kapasitas Pertemuan Perencanaan ({s2PlannedCapacity.totalMeetingCapacity} Pertemuan • {s2PlannedCapacity.totalJP} JP)</span>
                       </span>
                     ) : (
                       <span className="text-slate-400 flex items-center gap-1.5">
                         <span className="w-3.5 h-3.5 border border-slate-300 rounded-full inline-block" />
-                        <span>Slot Pertemuan Efektif</span>
+                        <span>Kapasitas Pertemuan Perencanaan</span>
                       </span>
                     )}
                   </div>
@@ -909,26 +908,14 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                   onSave={onSaveUnitExecutionPlan}
                   meetingCapacity={{
                     semester1: {
-                      isReady: Boolean(s1SubjectSlots.isReady),
-                      targetMeetingCount:
-                        s1SubjectSlots.isReady
-                          ? s1SubjectSlots.totalMeetingSlots
-                          : 0,
-                      totalJP:
-                        s1SubjectSlots.isReady
-                          ? s1SubjectSlots.totalJP
-                          : 0,
+                      isReady: s1PlannedCapacity.isReady,
+                      targetMeetingCount: s1PlannedCapacity.totalMeetingCapacity,
+                      totalJP: s1PlannedCapacity.totalJP,
                     },
                     semester2: {
-                      isReady: Boolean(s2SubjectSlots.isReady),
-                      targetMeetingCount:
-                        s2SubjectSlots.isReady
-                          ? s2SubjectSlots.totalMeetingSlots
-                          : 0,
-                      totalJP:
-                        s2SubjectSlots.isReady
-                          ? s2SubjectSlots.totalJP
-                          : 0,
+                      isReady: s2PlannedCapacity.isReady,
+                      targetMeetingCount: s2PlannedCapacity.totalMeetingCapacity,
+                      totalJP: s2PlannedCapacity.totalJP,
                     },
                   }}
                 />

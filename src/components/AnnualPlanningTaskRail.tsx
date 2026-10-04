@@ -93,7 +93,7 @@ export const AnnualPlanningTaskRail: React.FC<AnnualPlanningTaskRailProps> = ({
                         </span>
                         {isActive && (
                           <span className="px-1.5 py-0.5 rounded-full bg-blue-600 text-white font-bold text-[9px] uppercase tracking-wide">
-                            Buka
+                            Sedang dibuka
                           </span>
                         )}
                         {!isActive && task.status === 'COMPLETE' && (
