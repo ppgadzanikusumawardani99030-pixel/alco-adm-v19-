@@ -14,7 +14,6 @@ import {
   AlertTriangle,
   Info,
   CheckCircle2,
-  Clock,
   Ban,
   Layers,
 } from 'lucide-react';
@@ -173,7 +172,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
     return flat;
   }, [unitExecutionPlan, semesterUnitIds, mappingUnitOrderMap, unitMap]);
 
-  // Handle prerequisite check for mapping & execution plan
+  // 1. Prerequisite check for mapping & execution plan
   if (!mapping || !unitExecutionPlan) {
     return (
       <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs">
@@ -188,7 +187,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
     );
   }
 
-  // Handle case where calendar is not ready / confirmed
+  // 2. Calendar confirmed + start/end check
   const isCalendarConfirmed = calendar?.workflowStatus === 'CONFIRMED';
   if (!isCalendarConfirmed || !calendar?.startDate || !calendar?.endDate) {
     return (
@@ -212,15 +211,16 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
     );
   }
 
-  // Handle case where weekday allocation is incomplete
+  // 3. Weekday valid check
   const hasInvalidDayOfWeek =
     !schedule ||
+    !schedule.sessions ||
     schedule.sessions.length === 0 ||
     schedule.sessions.some(
       (s) => !s.dayOfWeek || s.dayOfWeek < 1 || s.dayOfWeek > (schoolDaysPerWeek === 5 ? 5 : 6)
     );
 
-  if (hasInvalidDayOfWeek || !subjectSlotResult.isReady) {
+  if (hasInvalidDayOfWeek) {
     return (
       <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs">
         <div className="flex items-center gap-2 text-slate-800 font-bold mb-3">
@@ -240,17 +240,101 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
     );
   }
 
-  // When scheduleResult is available
+  // 4. Subject slot result ready check
+  if (!subjectSlotResult.isReady) {
+    const errorMessages =
+      subjectSlotResult.errors.length > 0
+        ? subjectSlotResult.errors
+        : ['Kalender atau kapasitas jadwal semester belum siap untuk menghasilkan slot tanggal aktual.'];
+
+    return (
+      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs">
+        <div className="flex items-center gap-2 text-slate-800 font-bold mb-3">
+          <Calendar className="w-5 h-5 text-indigo-600" />
+          <h3>Jadwal Pertemuan Aktual (Pratinjau)</h3>
+        </div>
+        <div className="p-4 bg-amber-50 rounded-lg border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Jadwal aktual belum dapat dihitung.</p>
+            <ul className="mt-1 space-y-0.5 text-amber-800 list-disc list-inside">
+              {errorMessages.map((err, idx) => (
+                <li key={idx}>{err}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 5. Schedule result valid check
+  if (!scheduleResult || !scheduleResult.isValid) {
+    const errorMessages =
+      scheduleResult?.errors && scheduleResult.errors.length > 0
+        ? scheduleResult.errors
+        : ['Struktur pertemuan atau pembagian semester tidak valid.'];
+
+    return (
+      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs">
+        <div className="flex items-center gap-2 text-slate-800 font-bold mb-3">
+          <Calendar className="w-5 h-5 text-indigo-600" />
+          <h3>Jadwal Pertemuan Aktual (Pratinjau)</h3>
+        </div>
+        <div className="p-4 bg-rose-50 rounded-lg border border-rose-200 text-rose-900 text-xs flex items-start gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Jadwal Pertemuan belum dapat disusun.</p>
+            <ul className="mt-1 space-y-0.5 text-rose-800 list-disc list-inside">
+              {errorMessages.map((err, idx) => (
+                <li key={idx}>{err}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 6. Schedule result ready check
+  if (!scheduleResult.isReady) {
+    const errorMessages =
+      scheduleResult.errors && scheduleResult.errors.length > 0
+        ? scheduleResult.errors
+        : ['Jadwal Pertemuan belum siap dihitung.'];
+
+    return (
+      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs">
+        <div className="flex items-center gap-2 text-slate-800 font-bold mb-3">
+          <Calendar className="w-5 h-5 text-indigo-600" />
+          <h3>Jadwal Pertemuan Aktual (Pratinjau)</h3>
+        </div>
+        <div className="p-4 bg-amber-50 rounded-lg border border-amber-200 text-amber-900 text-xs flex items-start gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Jadwal Pertemuan belum siap dihitung.</p>
+            <ul className="mt-1 space-y-0.5 text-amber-800 list-disc list-inside">
+              {errorMessages.map((err, idx) => (
+                <li key={idx}>{err}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 7. When scheduleResult is valid and ready
   const scheduledEntryMap = new Map(
-    (scheduleResult?.scheduledEntries || []).map((e) => [e.meetingId, e])
+    (scheduleResult.scheduledEntries || []).map((e) => [e.meetingId, e])
   );
 
-  const totalMeetings = scheduleResult?.totalMeetings ?? semesterMeetings.length;
-  const totalAvailableSlots = scheduleResult?.totalAvailableSlots ?? subjectSlotResult.totalMeetingSlots;
-  const totalScheduledMeetings = scheduleResult?.totalScheduledMeetings ?? 0;
-  const totalUnscheduledMeetings = scheduleResult?.totalUnscheduledMeetings ?? 0;
-  const totalActualJP = scheduleResult?.totalActualJP ?? 0;
-  const totalExcludedOccurrences = scheduleResult?.totalExcludedOccurrences ?? subjectSlotResult.totalExcludedOccurrences;
+  const totalMeetings = scheduleResult.totalMeetings;
+  const totalAvailableSlots = scheduleResult.totalAvailableSlots;
+  const totalScheduledMeetings = scheduleResult.totalScheduledMeetings;
+  const totalUnscheduledMeetings = scheduleResult.totalUnscheduledMeetings;
+  const totalActualJP = scheduleResult.totalActualJP;
+  const totalExcludedOccurrences = scheduleResult.totalExcludedOccurrences;
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-6">
