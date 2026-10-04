@@ -193,8 +193,6 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   );
   const [hasChanges, setHasChanges] = useState(false);
   const [hasExplicitTargetUnitCount, setHasExplicitTargetUnitCount] = useState(false);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generateError, setGenerateError] = useState<string | null>(null);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
   const [saveErrorNotice, setSaveErrorNotice] = useState<string | null>(null);
   const [localValidationNotice, setLocalValidationNotice] = useState<string | null>(null);
@@ -271,7 +269,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         phase: academicSetting?.phase,
         tpData: tp,
         atpData: atp,
-        targetUnitCount: units.length > 0 ? units.length : undefined,
+        targetUnitCount: hasExplicitTargetUnitCount ? units.length : undefined,
       });
 
       if (generated && Array.isArray(generated.units) && generated.units.length > 0) {
@@ -435,6 +433,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   };
 
   const handleAddEmptyBab = () => {
+    setHasExplicitTargetUnitCount(true);
     const nextOrder = units.length + 1;
     const newUnit: ATPUnitMapping = {
       id: `unit-${Date.now()}-${nextOrder}-${Math.random().toString(36).substring(2, 6)}`,
@@ -1122,7 +1121,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
                 id="btn-generate-canonical-mapping"
                 type="button"
                 onClick={handleGenerateMapping}
-                disabled={isGeneratingMapping || (atp.items || []).length === 0}
+                disabled={isGeneratingMapping || (atp.items || []).length === 0 || (tp.items || []).length === 0}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Susun struktur Bab dan Lingkup Materi awal secara otomatis dari butir TP & alur ATP"
               >
