@@ -8,6 +8,7 @@ import {
   ATPData,
   CPAnalysisData,
   ATPUnitMappingData,
+  UnitExecutionPlanData,
 } from '../types';
 import {
   normalizeLearningExperiencePhase,
@@ -880,6 +881,60 @@ export async function analyzeATPUnitMappingWithAI(
     return data.data;
   } catch (err) {
     throw new Error(formatAIErrorMessage(err, 'menganalisis pemetaan Bab & Lingkup Materi'));
+  }
+}
+
+export interface AIMeetingSuggestion {
+  title: string;
+  materialIds: string[];
+  linkedAtpItemIds: string[];
+  linkedTpIds: string[];
+}
+
+export interface AIUnitMeetingSuggestion {
+  unitId: string;
+  meetings: AIMeetingSuggestion[];
+}
+
+export interface AIMeetingGenerationResult {
+  units: AIUnitMeetingSuggestion[];
+}
+
+export interface GenerateUnitMeetingsWithAIParams {
+  subject?: string;
+  grade?: string;
+  phase?: string;
+  mapping: ATPUnitMappingData;
+  tpData: TPData;
+  atpData: ATPData;
+  currentPlan: UnitExecutionPlanData;
+}
+
+export async function generateUnitMeetingsWithAI(
+  params: GenerateUnitMeetingsWithAIParams
+): Promise<AIMeetingGenerationResult> {
+  try {
+    const res = await aiFetch('/api/ai/generate-unit-meetings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      if (errData.code === 'AI_NOT_CONFIGURED') {
+        throw new Error('Layanan AI belum dikonfigurasi pada server.');
+      }
+      throw new Error(errData.error || `Gagal menyusun draf Pertemuan dengan AI (Status ${res.status})`);
+    }
+
+    const data = await res.json();
+    if (!data.data || !Array.isArray(data.data.units)) {
+      throw new Error('Hasil respon AI tidak memuat data unit meeting yang valid.');
+    }
+    return data.data;
+  } catch (err) {
+    throw new Error(formatAIErrorMessage(err, 'menyusun draf Pertemuan dengan AI'));
   }
 }
 

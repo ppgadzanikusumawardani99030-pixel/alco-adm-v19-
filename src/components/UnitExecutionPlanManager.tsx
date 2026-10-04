@@ -30,7 +30,9 @@ import {
   Check,
   ChevronDown,
   ChevronUp,
+  Sparkles,
 } from 'lucide-react';
+import { generateUnitMeetingsWithAI } from '../services/aiService';
 
 export interface UnitExecutionPlanManagerProps {
   mapping: ATPUnitMappingData;
@@ -84,6 +86,78 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     type: 'success' | 'error' | 'warning';
     message: string;
   } | null>(null);
+  const [isGeneratingMeetings, setIsGeneratingMeetings] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
+  const [generationNotice, setGenerationNotice] = useState<string | null>(null);
+
+  const totalMeetingsCount = useMemo(() => {
+    return draft.units.reduce((sum, u) => sum + (u.meetings || []).length, 0);
+  }, [draft]);
+
+  const handleGenerateWithAI = async () => {
+    if (validation.isStale || !validation.isValid || validation.isComplete || isGeneratingMeetings) {
+      return;
+    }
+
+    setIsGeneratingMeetings(true);
+    setGenerationError(null);
+    setGenerationNotice(null);
+
+    try {
+      const result = await generateUnitMeetingsWithAI({
+        mapping,
+        tpData: tp,
+        atpData: atp,
+        currentPlan: draft,
+      });
+
+      if (!result || !Array.isArray(result.units)) {
+        throw new Error('Hasil AI tidak valid.');
+      }
+
+      const mergedDraft: UnitExecutionPlanData = JSON.parse(JSON.stringify(draft));
+      const unitPlanMap = new Map(mergedDraft.units.map((u) => [u.unitId, u]));
+
+      for (const su of result.units) {
+        let uPlan = unitPlanMap.get(su.unitId);
+        if (!uPlan) {
+          uPlan = { unitId: su.unitId, meetings: [] };
+          mergedDraft.units.push(uPlan);
+        }
+
+        const existingCount = uPlan.meetings.length;
+        const newMeetings: LearningMeeting[] = (su.meetings || []).map((m, idx) => ({
+          id: generateStableId(),
+          unitId: su.unitId,
+          order: existingCount + idx + 1,
+          title: (m.title || `Pertemuan ${existingCount + idx + 1}`).trim(),
+          materialIds: Array.isArray(m.materialIds) ? m.materialIds : [],
+          linkedAtpItemIds: Array.isArray(m.linkedAtpItemIds) ? m.linkedAtpItemIds : [],
+          linkedTpIds: Array.isArray(m.linkedTpIds) ? m.linkedTpIds : [],
+        }));
+
+        uPlan.meetings.push(...newMeetings);
+      }
+
+      const resVal = validateUnitExecutionPlan(mergedDraft, mapping, atp, tp);
+      if (!resVal.isValid) {
+        setGenerationError('Hasil AI tidak lolos validasi canonical Struktur Pertemuan.');
+        setIsGeneratingMeetings(false);
+        return;
+      }
+
+      setDraft(mergedDraft);
+      if (resVal.isComplete) {
+        setGenerationNotice('Draf Pertemuan berhasil disusun AI dan seluruh coverage Materi, ATP, dan TP telah tercakup. Tinjau sebelum menyimpan.');
+      } else {
+        setGenerationNotice('Draf Pertemuan berhasil dilengkapi AI, tetapi masih ada coverage yang perlu ditinjau.');
+      }
+    } catch (err: any) {
+      setGenerationError(err?.message || 'Gagal menyusun draf Pertemuan dengan AI.');
+    } finally {
+      setIsGeneratingMeetings(false);
+    }
+  };
 
   // Sync draft if persisted source changes genuinely (using stable dependencies)
   useEffect(() => {
@@ -444,6 +518,28 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
             </div>
           </div>
 
+          {!validation.isComplete && (
+            <button
+              type="button"
+              onClick={handleGenerateWithAI}
+              disabled={isGeneratingMeetings || validation.isStale || !validation.isValid || validation.isComplete}
+              className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+                isGeneratingMeetings || validation.isStale || !validation.isValid || validation.isComplete
+                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                  : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-600/20'
+              }`}
+            >
+              <Sparkles className={`w-4 h-4 ${isGeneratingMeetings ? 'animate-spin' : ''}`} />
+              <span>
+                {isGeneratingMeetings
+                  ? 'Menyusun AI...'
+                  : totalMeetingsCount === 0
+                  ? 'Susun Pertemuan dengan AI'
+                  : 'Lengkapi Pertemuan dengan AI'}
+              </span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleSave}
@@ -459,6 +555,26 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
           </button>
         </div>
       </div>
+
+      {generationError && (
+        <div className="px-5 py-3 text-xs font-medium bg-rose-50 text-rose-800 border-b border-rose-200 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>{generationError}</span>
+          </div>
+          <button type="button" onClick={() => setGenerationError(null)} className="text-[11px] font-bold underline cursor-pointer">Tutup</button>
+        </div>
+      )}
+
+      {generationNotice && (
+        <div className="px-5 py-3 text-xs font-medium bg-indigo-50 text-indigo-900 border-b border-indigo-200 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span>{generationNotice}</span>
+          </div>
+          <button type="button" onClick={() => setGenerationNotice(null)} className="text-[11px] font-bold underline cursor-pointer">Tutup</button>
+        </div>
+      )}
 
       {/* Info Notice regarding next step allocation */}
       <div className="bg-slate-50 border-b border-slate-200 px-5 py-2.5 text-xs text-slate-600 flex items-center justify-between gap-2">

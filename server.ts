@@ -1719,6 +1719,237 @@ Kembalikan respon JSON dengan skema:
   });
 });
 
+// Endpoint: AI Generate Unit Meetings Draft
+app.post('/api/ai/generate-unit-meetings', async (req, res) => {
+  const { subject = 'Mata Pelajaran', grade = '', phase = '', mapping, tpData, atpData, currentPlan } = req.body || {};
+
+  if (!mapping || !Array.isArray(mapping.units)) {
+    return res.status(400).json({ error: 'Data pemetaan Unit/Bab (mapping) diperlukan.' });
+  }
+  if (!tpData || !Array.isArray(tpData.items)) {
+    return res.status(400).json({ error: 'Data TP canonical diperlukan.' });
+  }
+  if (!atpData || !Array.isArray(atpData.items)) {
+    return res.status(400).json({ error: 'Data ATP canonical diperlukan.' });
+  }
+
+  const validTpMap = new Map(tpData.items.map((tp: any) => [tp.id, tp]));
+  const validAtpMap = new Map(atpData.items.map((atp: any) => [atp.id, atp]));
+
+  const unitsContext = mapping.units.map((unit: any) => {
+    const unitPlan = currentPlan?.units?.find((u: any) => u.unitId === unit.id);
+    const existingMeetings = unitPlan?.meetings || [];
+
+    const coveredMaterials = new Set(existingMeetings.flatMap((m: any) => m.materialIds || []));
+    const coveredAtp = new Set(existingMeetings.flatMap((m: any) => m.linkedAtpItemIds || []));
+    const coveredTp = new Set(existingMeetings.flatMap((m: any) => m.linkedTpIds || []));
+
+    const missingMaterials = (unit.materials || []).filter((m: any) => !coveredMaterials.has(m.id)).map((m: any) => m.id);
+    const missingAtp = (unit.linkedAtpItemIds || []).filter((id: string) => !coveredAtp.has(id));
+    const missingTp = (unit.linkedTpIds || []).filter((id: string) => !coveredTp.has(id));
+
+    return {
+      unitId: unit.id,
+      unitTitle: unit.title,
+      materials: (unit.materials || []).map((m: any) => ({
+        id: m.id,
+        title: m.title,
+        linkedAtpItemIds: m.linkedAtpItemIds || [],
+        linkedTpIds: m.linkedTpIds || [],
+      })),
+      atpItems: (unit.linkedAtpItemIds || []).map((id: string) => {
+        const item = validAtpMap.get(id);
+        return {
+          id,
+          stepNumber: item?.stepNumber || 1,
+          focus: item?.focus || '',
+          linkedTpIds: item?.linkedTpIds || [],
+        };
+      }),
+      tpItems: (unit.linkedTpIds || []).map((id: string) => {
+        const item = validTpMap.get(id);
+        return {
+          id,
+          code: item?.code || 'TP',
+          statement: item?.statement || '',
+        };
+      }),
+      existingMeetings: existingMeetings.map((m: any) => ({
+        title: m.title,
+        materialIds: m.materialIds || [],
+        linkedAtpItemIds: m.linkedAtpItemIds || [],
+        linkedTpIds: m.linkedTpIds || [],
+      })),
+      missingCoverage: {
+        materialIds: missingMaterials,
+        atpItemIds: missingAtp,
+        tpIds: missingTp,
+      },
+    };
+  });
+
+  const apiKey = resolveApiKey(req);
+  if (apiKey) {
+    try {
+      const ai = createAIClient(apiKey);
+      const prompt = `Anda adalah pakar pengembang kurikulum dan perangkat pembelajaran Kurikulum Merdeka.
+TUGAS ANDA: Menyusun tambahan Pertemuan pembelajaran yang pedagogis dan realistis untuk melengkapi coverage Unit/Bab berdasarkan data canonical yang diberikan.
+
+RULES WAJIB:
+1. Jangan mengubah Pertemuan existing.
+2. Hanya usulkan PERTEMUAN BARU untuk melengkapi missingCoverage (atau menyusun seluruh pertemuan jika belum ada pertemuan).
+3. Gunakan HANYA unitId, material ID, ATP item ID, dan TP ID yang diberikan pada masing-masing Unit.
+4. DILARANG membuat ID baru untuk Unit, Materi, ATP, atau TP.
+5. Satu Pertemuan boleh memiliki banyak Materi, banyak ATP, banyak TP.
+6. Referensi yang sama boleh muncul pada beberapa Pertemuan jika pedagogis relevan.
+7. Prioritaskan melengkapi missingCoverage.
+8. Pertemuan yang diusulkan harus mempunyai title substantive.
+9. Jangan output: JP, semester, minggu, tanggal, duration, assessment, learning model.
+
+DATA KONTEKS UNIT:
+${JSON.stringify(unitsContext, null, 2)}
+
+Kembalikan respon JSON dengan skema:
+{
+  "units": [
+    {
+      "unitId": "EXACT_UNIT_ID",
+      "meetings": [
+        {
+          "title": "...",
+          "materialIds": ["EXACT_ID"],
+          "linkedAtpItemIds": ["EXACT_ID"],
+          "linkedTpIds": ["EXACT_ID"]
+        }
+      ]
+    }
+  ]
+}`;
+
+      const response = await generateContentWithRetry(ai, {
+        contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              units: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    unitId: { type: Type.STRING },
+                    meetings: {
+                      type: Type.ARRAY,
+                      items: {
+                        type: Type.OBJECT,
+                        properties: {
+                          title: { type: Type.STRING },
+                          materialIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                          linkedAtpItemIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                          linkedTpIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        },
+                        required: ['title', 'materialIds', 'linkedAtpItemIds', 'linkedTpIds'],
+                      },
+                    },
+                  },
+                  required: ['unitId', 'meetings'],
+                },
+              },
+            },
+            required: ['units'],
+          },
+        },
+      });
+
+      const parsed = cleanAndParseJSON(response.text, null);
+      if (parsed && Array.isArray(parsed.units)) {
+        const validUnitsMap = new Map(mapping.units.map((u: any) => [u.id, u]));
+        const sanitizedUnits: any[] = [];
+
+        for (const su of parsed.units) {
+          const uId = su.unitId;
+          const canonicalUnit = validUnitsMap.get(uId);
+          if (!canonicalUnit) {
+            return res.status(400).json({ error: `AI menghasilkan unitId tidak valid: '${uId}'` });
+          }
+
+          const validMatIds = new Set((canonicalUnit.materials || []).map((m: any) => m.id));
+          const validAtpIds = new Set(canonicalUnit.linkedAtpItemIds || []);
+          const validTpIds = new Set(canonicalUnit.linkedTpIds || []);
+
+          const sanitizedMeetings: any[] = [];
+          const rawMeetings = Array.isArray(su.meetings) ? su.meetings : [];
+
+          for (const m of rawMeetings) {
+            const title = typeof m.title === 'string' ? m.title.trim() : '';
+            if (!title) continue;
+
+            const matIds = Array.isArray(m.materialIds) ? Array.from(new Set(m.materialIds.filter((id: string) => validMatIds.has(id)))) : [];
+            const atpIds = Array.isArray(m.linkedAtpItemIds) ? Array.from(new Set(m.linkedAtpItemIds.filter((id: string) => validAtpIds.has(id)))) : [];
+            const tpIds = Array.isArray(m.linkedTpIds) ? Array.from(new Set(m.linkedTpIds.filter((id: string) => validTpIds.has(id)))) : [];
+
+            sanitizedMeetings.push({
+              title,
+              materialIds: matIds,
+              linkedAtpItemIds: atpIds,
+              linkedTpIds: tpIds,
+            });
+          }
+
+          sanitizedUnits.push({
+            unitId: uId,
+            meetings: sanitizedMeetings,
+          });
+        }
+
+        return res.json({
+          success: true,
+          data: { units: sanitizedUnits },
+          engine: 'gemini',
+        });
+      }
+    } catch (err: any) {
+      console.warn('Gemini Unit Meetings generation failed:', err);
+    }
+  }
+
+  const fallbackUnits = mapping.units.map((unit: any) => {
+    const unitPlan = currentPlan?.units?.find((u: any) => u.unitId === unit.id);
+    const existingMeetings = unitPlan?.meetings || [];
+    const coveredMaterials = new Set(existingMeetings.flatMap((m: any) => m.materialIds || []));
+    const missingMaterials = (unit.materials || []).filter((m: any) => !coveredMaterials.has(m.id));
+
+    const meetings = missingMaterials.map((mat: any, idx: number) => ({
+      title: `Pembelajaran ${mat.title}`,
+      materialIds: [mat.id],
+      linkedAtpItemIds: mat.linkedAtpItemIds || unit.linkedAtpItemIds || [],
+      linkedTpIds: mat.linkedTpIds || unit.linkedTpIds || [],
+    }));
+
+    if (existingMeetings.length === 0 && meetings.length === 0 && (unit.materials || []).length > 0) {
+      const mat = unit.materials[0];
+      meetings.push({
+        title: `Pertemuan Pendahuluan ${unit.title || 'Bab'}`,
+        materialIds: [mat.id],
+        linkedAtpItemIds: mat.linkedAtpItemIds || unit.linkedAtpItemIds || [],
+        linkedTpIds: mat.linkedTpIds || unit.linkedTpIds || [],
+      });
+    }
+
+    return {
+      unitId: unit.id,
+      meetings,
+    };
+  });
+
+  return res.json({
+    success: true,
+    data: { units: fallbackUnits },
+    engine: 'fallback_engine',
+  });
+});
+
 // Endpoint: AI Analyze ATP Unit Mapping (Read-Only Analysis)
 app.post('/api/ai/analyze-atp-unit-mapping', async (req, res) => {
   const { subject, grade, phase, tpData, atpData, currentMapping } = req.body || {};
