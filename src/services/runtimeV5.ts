@@ -101,6 +101,7 @@ export function getRuntimeContextV5(): RuntimeContextV5 {
       tp: state.annualData.tp.find((e) => e.yearPlanId === yearPlanId)?.value,
       atp: state.annualData.atp.find((e) => e.yearPlanId === yearPlanId)?.value,
       atpUnitMapping: state.annualData.atpUnitMappings?.find((e) => e.yearPlanId === yearPlanId)?.value,
+      unitExecutionPlan: state.annualData.unitExecutionPlans?.find((e) => e.yearPlanId === yearPlanId)?.value,
       curriculumContext: state.annualData.curriculumContext.find(
         (e) => e.yearPlanId === yearPlanId
       )?.value,

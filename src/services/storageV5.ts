@@ -21,6 +21,7 @@ import {
   TPData,
   ATPData,
   ATPUnitMappingData,
+  UnitExecutionPlanData,
   CurriculumContextLock,
   AnnualJPReference,
   SemesterJPSetting,
@@ -33,6 +34,7 @@ import {
   RemedialRecord,
   EnrichmentRecord,
 } from '../types';
+import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 
 export { STORAGE_KEY_V5 };
 
@@ -43,6 +45,7 @@ export interface AnnualDataV5Result {
   tp: TPData | undefined;
   atp: ATPData | undefined;
   atpUnitMapping: ATPUnitMappingData | undefined;
+  unitExecutionPlan: UnitExecutionPlanData | undefined;
   curriculumContext: CurriculumContextLock | undefined;
   annualJPReference: AnnualJPReference | undefined;
 }
@@ -105,6 +108,7 @@ export function createInitialStorageV5(): AppStorageStateV5 {
       tp: [],
       atp: [],
       atpUnitMappings: [],
+      unitExecutionPlans: [],
       curriculumContext: [],
     },
     semesterData: {
@@ -195,6 +199,10 @@ export function validateStorageStateV5(value: unknown): AppStorageStateV5 {
     annualData.atpUnitMappings = [];
   }
   assertArray(annualData, 'atpUnitMappings', 'data.annualData');
+  if (annualData.unitExecutionPlans === undefined) {
+    annualData.unitExecutionPlans = [];
+  }
+  assertArray(annualData, 'unitExecutionPlans', 'data.annualData');
   assertArray(annualData, 'curriculumContext', 'data.annualData');
 
   // Validate semesterData structure & collections
@@ -542,6 +550,12 @@ export function validateStorageStateV5(value: unknown): AppStorageStateV5 {
     validateYearScopedCollection(
       annualData.atpUnitMappings as Array<Record<string, unknown>>,
       'annualData.atpUnitMappings'
+    );
+  }
+  if (Array.isArray(annualData.unitExecutionPlans)) {
+    validateYearScopedCollection(
+      annualData.unitExecutionPlans as Array<Record<string, unknown>>,
+      'annualData.unitExecutionPlans'
     );
   }
   validateYearScopedCollection(
@@ -1196,6 +1210,9 @@ export function getAnnualDataV5(yearPlanId: string): AnnualDataV5Result {
   const atpUnitMapping = (state.annualData.atpUnitMappings || []).find(
     (e) => e.yearPlanId === yearPlanId
   )?.value;
+  const unitExecutionPlan = (state.annualData.unitExecutionPlans || []).find(
+    (e) => e.yearPlanId === yearPlanId
+  )?.value;
   const curriculumContext = state.annualData.curriculumContext.find(
     (e) => e.yearPlanId === yearPlanId
   )?.value;
@@ -1210,6 +1227,7 @@ export function getAnnualDataV5(yearPlanId: string): AnnualDataV5Result {
     tp,
     atp,
     atpUnitMapping,
+    unitExecutionPlan,
     curriculumContext,
     annualJPReference,
   };
@@ -1219,6 +1237,12 @@ export function getATPUnitMappingV5(yearPlanId: string): ATPUnitMappingData | un
   const state = loadStorageV5();
   assertYearPlanExists(state, yearPlanId);
   return (state.annualData.atpUnitMappings || []).find((e) => e.yearPlanId === yearPlanId)?.value;
+}
+
+export function getUnitExecutionPlanV5(yearPlanId: string): UnitExecutionPlanData | undefined {
+  const state = loadStorageV5();
+  assertYearPlanExists(state, yearPlanId);
+  return (state.annualData.unitExecutionPlans || []).find((e) => e.yearPlanId === yearPlanId)?.value;
 }
 
 export function saveCPV5(yearPlanId: string, value: CPData): CPData {
@@ -1263,6 +1287,41 @@ export function saveATPUnitMappingV5(
     state.annualData.atpUnitMappings = [];
   }
   upsertAnnualScopedEntry(state.annualData.atpUnitMappings, yearPlanId, value);
+  saveStorageV5(state);
+  return value;
+}
+
+export function saveUnitExecutionPlanV5(
+  yearPlanId: string,
+  value: UnitExecutionPlanData
+): UnitExecutionPlanData {
+  const state = loadStorageV5();
+  assertYearPlanExists(state, yearPlanId);
+
+  const mapping = getATPUnitMappingV5(yearPlanId);
+  if (!mapping) {
+    throw new Error('UnitExecutionPlan tidak dapat disimpan karena Pemetaan Unit/Bab belum tersedia.');
+  }
+
+  const annualData = getAnnualDataV5(yearPlanId);
+  const atp = annualData.atp || null;
+  const tp = annualData.tp || null;
+
+  const validation = validateUnitExecutionPlan(value, mapping, atp, tp);
+
+  if (!validation.isValid) {
+    throw new Error(`UnitExecutionPlan tidak valid: ${validation.errors.join('; ')}`);
+  }
+
+  if (validation.isStale) {
+    throw new Error('UnitExecutionPlan tidak dapat disimpan karena struktur Pemetaan Unit/Bab telah berubah (stale).');
+  }
+
+  if (!state.annualData.unitExecutionPlans) {
+    state.annualData.unitExecutionPlans = [];
+  }
+
+  upsertAnnualScopedEntry(state.annualData.unitExecutionPlans, yearPlanId, value);
   saveStorageV5(state);
   return value;
 }
@@ -1330,6 +1389,16 @@ export function deleteATPUnitMappingV5(yearPlanId: string): void {
   assertYearPlanExists(state, yearPlanId);
   if (!state.annualData.atpUnitMappings) return;
   const changed = deleteAnnualScopedEntry(state.annualData.atpUnitMappings, yearPlanId);
+  if (changed) {
+    saveStorageV5(state);
+  }
+}
+
+export function deleteUnitExecutionPlanV5(yearPlanId: string): void {
+  const state = loadStorageV5();
+  assertYearPlanExists(state, yearPlanId);
+  if (!state.annualData.unitExecutionPlans) return;
+  const changed = deleteAnnualScopedEntry(state.annualData.unitExecutionPlans, yearPlanId);
   if (changed) {
     saveStorageV5(state);
   }

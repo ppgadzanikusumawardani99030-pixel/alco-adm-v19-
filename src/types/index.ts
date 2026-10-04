@@ -505,6 +505,47 @@ export interface ATPUnitMappingData {
   updatedAt: string;
 }
 
+export interface LearningMeeting {
+  id: string;
+
+  // canonical parent
+  unitId: string;
+
+  // urutan meeting dalam Unit
+  order: number;
+
+  // display / pedagogical title
+  title: string;
+
+  // canonical references
+  materialIds: string[];
+  linkedAtpItemIds: string[];
+  linkedTpIds: string[];
+}
+
+export interface UnitExecutionPlan {
+  unitId: string;
+  meetings: LearningMeeting[];
+}
+
+export interface UnitExecutionPlanData {
+  id: string;
+
+  // YearPlan / annual context
+  academicSettingId: string;
+
+  // canonical mapping dependency
+  mappingId: string;
+
+  // execution structure
+  units: UnitExecutionPlan[];
+
+  // lineage
+  basedOnMappingUpdatedAt: string;
+
+  updatedAt: string;
+}
+
 export type DocumentType =
   | 'CP'
   | 'ANALISIS_CP_TP'
