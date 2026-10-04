@@ -316,6 +316,30 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
           atp={atp}
           tp={tp}
           onSave={onSaveUnitExecutionPlan}
+          meetingCapacity={{
+            semester1: {
+              isReady: Boolean(s1SubjectSlots.isReady),
+              targetMeetingCount:
+                s1SubjectSlots.isReady
+                  ? s1SubjectSlots.totalMeetingSlots
+                  : 0,
+              totalJP:
+                s1SubjectSlots.isReady
+                  ? s1SubjectSlots.totalJP
+                  : 0,
+            },
+            semester2: {
+              isReady: Boolean(s2SubjectSlots.isReady),
+              targetMeetingCount:
+                s2SubjectSlots.isReady
+                  ? s2SubjectSlots.totalMeetingSlots
+                  : 0,
+              totalJP:
+                s2SubjectSlots.isReady
+                  ? s2SubjectSlots.totalJP
+                  : 0,
+            },
+          }}
         />
       )}
 

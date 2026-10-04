@@ -254,7 +254,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
           id: generateStableId(),
           unitId: su.unitId,
           order: existingCount + idx + 1,
-          title: (m.title || `Pertemuan ${existingCount + idx + 1}`).trim(),
+          title: m.title.trim(),
           materialIds: Array.isArray(m.materialIds) ? m.materialIds : [],
           linkedAtpItemIds: Array.isArray(m.linkedAtpItemIds) ? m.linkedAtpItemIds : [],
           linkedTpIds: Array.isArray(m.linkedTpIds) ? m.linkedTpIds : [],
@@ -707,27 +707,21 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
             </div>
           </div>
 
-          {!validation.isComplete && (
-            <button
-              type="button"
-              onClick={handleGenerateWithAI}
-              disabled={isGeneratingMeetings || validation.isStale || !validation.isValid || validation.isComplete}
-              className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
-                isGeneratingMeetings || validation.isStale || !validation.isValid || validation.isComplete
-                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
-                  : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-600/20'
-              }`}
-            >
-              <Sparkles className={`w-4 h-4 ${isGeneratingMeetings ? 'animate-spin' : ''}`} />
-              <span>
-                {isGeneratingMeetings
-                  ? 'Menyusun AI...'
-                  : totalMeetingsCount === 0
-                  ? 'Susun Pertemuan dengan AI'
-                  : 'Lengkapi Pertemuan dengan AI'}
-              </span>
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={handleGenerateWithAI}
+            disabled={isGeneratingMeetings || validation.isStale || !validation.isValid || !isCapacityReady || isAINoWork}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              isGeneratingMeetings || validation.isStale || !validation.isValid || !isCapacityReady || isAINoWork
+                ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                : 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-600/20'
+            }`}
+          >
+            <Sparkles className={`w-4 h-4 ${isGeneratingMeetings ? 'animate-spin' : ''}`} />
+            <span>
+              {isGeneratingMeetings ? 'Menyusun AI...' : buttonAILabel}
+            </span>
+          </button>
 
           <button
             type="button"
@@ -762,6 +756,43 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
             <span>{generationNotice}</span>
           </div>
           <button type="button" onClick={() => setGenerationNotice(null)} className="text-[11px] font-bold underline cursor-pointer">Tutup</button>
+        </div>
+      )}
+
+      {!isCapacityReady && (
+        <div className="px-5 py-3 text-xs font-medium bg-amber-50 text-amber-900 border-b border-amber-200 flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>Lengkapi Kalender Pendidikan dan Pola Jadwal Mapel Semester 1 &amp; 2 agar AI dapat menyusun jumlah Pertemuan sesuai kapasitas waktu.</span>
+        </div>
+      )}
+
+      {isAINoWork && (
+        <div className="px-5 py-3 text-xs font-medium bg-emerald-50 text-emerald-950 border-b border-emerald-200 flex items-center gap-2">
+          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+          <span>Struktur Pertemuan sudah sesuai kapasitas kalender dan seluruh coverage telah tercakup.</span>
+        </div>
+      )}
+
+      {meetingCapacity && (
+        <div className="mx-5 mt-4 p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+          <div className="font-bold text-slate-800 mb-2 flex items-center gap-1.5">
+            <Layers className="w-4 h-4 text-indigo-600" />
+            <span>Kapasitas Kalender</span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="p-3 bg-white rounded-lg border border-slate-200">
+              <span className="font-medium text-slate-500 block">Semester 1:</span>
+              <span className="font-bold text-slate-800 mt-1 block">
+                {meetingCapacity.semester1.targetMeetingCount} Pertemuan • {meetingCapacity.semester1.totalJP} JP
+              </span>
+            </div>
+            <div className="p-3 bg-white rounded-lg border border-slate-200">
+              <span className="font-medium text-slate-500 block">Semester 2:</span>
+              <span className="font-bold text-slate-800 mt-1 block">
+                {meetingCapacity.semester2.targetMeetingCount} Pertemuan • {meetingCapacity.semester2.totalJP} JP
+              </span>
+            </div>
+          </div>
         </div>
       )}
 
