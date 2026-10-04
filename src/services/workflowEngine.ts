@@ -29,6 +29,7 @@ import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferenc
 import { loadStorageV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
+import { resolveUnitSemesterPlacement } from './unitSemesterPlanningService';
 
 export type WorkflowStatus = 'BLOCKED' | 'READY' | 'IN_PROGRESS' | 'COMPLETE' | 'STALE';
 
@@ -810,7 +811,22 @@ export function validateWorkflowDependencies(
         }
       }
 
-      // 2. Check Calendar Capacity & Time Allocation
+      // 2. Check Unit Semester Placement completeness
+      let isPlacementComplete = false;
+      let placementReason: string | undefined = undefined;
+
+      if (isMeetingComplete && currentPlan && currentMapping) {
+        const placementVal = resolveUnitSemesterPlacement(currentPlan, currentMapping);
+        if (!placementVal.isValid || !placementVal.isComplete) {
+          placementReason = 'Tetapkan pembagian Unit/Bab ke Semester 1 dan Semester 2.';
+        } else {
+          isPlacementComplete = true;
+        }
+      } else if (isMeetingComplete) {
+        placementReason = 'Tetapkan pembagian Unit/Bab ke Semester 1 dan Semester 2.';
+      }
+
+      // 3. Check Calendar Capacity & Time Allocation
       const sPlans = currentYearPlanId
         ? v5State.semesterPlans.filter((sp) => sp.yearPlanId === currentYearPlanId)
         : [];
@@ -850,12 +866,14 @@ export function validateWorkflowDependencies(
         }
       }
 
-      isAnnualPlanningComplete = isMeetingComplete && isCapReady && hasTimeAllocationsSaved;
+      isAnnualPlanningComplete = isMeetingComplete && isPlacementComplete && isCapReady && hasTimeAllocationsSaved;
 
       if (!isMappingComplete) {
         annualPlanningReason = 'Memerlukan penyelesaian Pemetaan Unit/Bab & Lingkup Materi (07) terlebih dahulu';
       } else if (!isMeetingComplete) {
         annualPlanningReason = meetingReason;
+      } else if (!isPlacementComplete) {
+        annualPlanningReason = placementReason;
       } else if (!isCapReady) {
         annualPlanningReason = calendarReason;
       } else if (!hasTimeAllocationsSaved) {

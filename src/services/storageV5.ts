@@ -35,6 +35,7 @@ import {
   EnrichmentRecord,
 } from '../types';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
+import { resolveUnitSemesterPlacement } from './unitSemesterPlanningService';
 
 export { STORAGE_KEY_V5 };
 
@@ -1315,6 +1316,16 @@ export function saveUnitExecutionPlanV5(
 
   if (validation.isStale) {
     throw new Error('UnitExecutionPlan tidak dapat disimpan karena struktur Pemetaan Unit/Bab telah berubah (stale).');
+  }
+
+  if (value.semesterPlacement !== undefined) {
+    const placementVal = resolveUnitSemesterPlacement(value, mapping);
+    if (!placementVal.isValid) {
+      throw new Error(`UnitSemesterPlacement tidak valid: ${placementVal.errors.join('; ')}`);
+    }
+    if (placementVal.isStale) {
+      throw new Error('UnitSemesterPlacement tidak dapat disimpan karena struktur Pemetaan Unit/Bab telah berubah (stale).');
+    }
   }
 
   if (!state.annualData.unitExecutionPlans) {

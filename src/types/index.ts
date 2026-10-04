@@ -432,8 +432,9 @@ export interface ATPItem {
   jp?: number | null; // Compatibility field
   /**
    * @deprecated BUKAN canonical authority penempatan semester ke depan.
-   * Canonical semester placement nantinya berasal dari: TimeAllocation → SemesterPlan.
-   * Dipertahankan untuk backward compatibility legacy runtime.
+   * Canonical semester placement untuk Kurikulum Merdeka
+   * berasal dari UnitExecutionPlanData.semesterPlacement.
+   * ATPItem.semester hanya legacy compatibility.
    */
   semester?: 1 | 2 | null;
   /**
@@ -528,6 +529,22 @@ export interface UnitExecutionPlan {
   meetings: LearningMeeting[];
 }
 
+export interface UnitSemesterPlacement {
+  mode: 'CONTIGUOUS_BOUNDARY';
+
+  /**
+   * Unit terakhir yang masuk Semester 1.
+   *
+   * null = tidak ada Unit di Semester 1
+   * last Unit ID = semua Unit masuk Semester 1
+   *
+   * Unit setelah ID ini otomatis Semester 2.
+   */
+  semester1LastUnitId: string | null;
+
+  updatedAt: string;
+}
+
 export interface UnitExecutionPlanData {
   id: string;
 
@@ -539,6 +556,9 @@ export interface UnitExecutionPlanData {
 
   // execution structure
   units: UnitExecutionPlan[];
+
+  // semester placement
+  semesterPlacement?: UnitSemesterPlacement;
 
   // lineage
   basedOnMappingUpdatedAt: string;

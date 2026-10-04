@@ -1,0 +1,375 @@
+import React, { useState, useMemo, useEffect } from 'react';
+import {
+  ATPUnitMappingData,
+  UnitExecutionPlanData,
+  UnitSemesterPlacement,
+} from '../types';
+import {
+  resolveUnitSemesterPlacement,
+  suggestSemesterBoundary,
+} from '../services/unitSemesterPlanningService';
+import {
+  Layers,
+  Sparkles,
+  Save,
+  CheckCircle2,
+  AlertCircle,
+  AlertTriangle,
+  Info,
+  Calendar,
+  BookOpen,
+} from 'lucide-react';
+
+export interface UnitSemesterPlanningManagerProps {
+  mapping: ATPUnitMappingData;
+  unitExecutionPlan: UnitExecutionPlanData;
+  s1AvailableJP: number | null;
+  s2AvailableJP: number | null;
+  onSave: (plan: UnitExecutionPlanData) => boolean;
+}
+
+export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerProps> = ({
+  mapping,
+  unitExecutionPlan,
+  s1AvailableJP,
+  s2AvailableJP,
+  onSave,
+}) => {
+  // Local draft state for semesterPlacement
+  const [placementDraft, setPlacementDraft] = useState<UnitSemesterPlacement>(() => {
+    if (unitExecutionPlan.semesterPlacement) {
+      return JSON.parse(JSON.stringify(unitExecutionPlan.semesterPlacement));
+    }
+    return {
+      mode: 'CONTIGUOUS_BOUNDARY',
+      semester1LastUnitId: null,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+
+  const [saveNotice, setSaveNotice] = useState<{
+    type: 'success' | 'error' | 'warning';
+    message: string;
+  } | null>(null);
+
+  // Sync draft if prop updates and matches
+  useEffect(() => {
+    if (unitExecutionPlan.semesterPlacement) {
+      setPlacementDraft(JSON.parse(JSON.stringify(unitExecutionPlan.semesterPlacement)));
+    }
+  }, [unitExecutionPlan.semesterPlacement]);
+
+  // Temporary draft plan combining parent unitExecutionPlan with local placementDraft for validation & preview
+  const draftPlan: UnitExecutionPlanData = useMemo(() => {
+    return {
+      ...unitExecutionPlan,
+      semesterPlacement: placementDraft,
+    };
+  }, [unitExecutionPlan, placementDraft]);
+
+  // Validation
+  const validation = useMemo(() => {
+    return resolveUnitSemesterPlacement(draftPlan, mapping);
+  }, [draftPlan, mapping]);
+
+  // Dirty state calculation based purely on semesterPlacement comparison
+  const isDirty = useMemo(() => {
+    return JSON.stringify(placementDraft) !== JSON.stringify(unitExecutionPlan.semesterPlacement || null);
+  }, [placementDraft, unitExecutionPlan.semesterPlacement]);
+
+  const sortedUnits = useMemo(() => {
+    return [...(mapping.units || [])].sort((a, b) => a.order - b.order);
+  }, [mapping]);
+
+  // Unit meeting counts lookup map
+  const unitMeetingCounts = useMemo(() => {
+    const map = new Map<string, number>();
+    (unitExecutionPlan.units || []).forEach((u) => {
+      map.set(u.unitId, (u.meetings || []).length);
+    });
+    return map;
+  }, [unitExecutionPlan]);
+
+  const handleBoundaryChange = (val: string) => {
+    const lastId = val === '__NONE__' ? null : val;
+    setPlacementDraft({
+      mode: 'CONTIGUOUS_BOUNDARY',
+      semester1LastUnitId: lastId,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const handleSuggest = () => {
+    const suggestedId = suggestSemesterBoundary(unitExecutionPlan, mapping, s1AvailableJP, s2AvailableJP);
+    if (suggestedId !== undefined) {
+      setPlacementDraft({
+        mode: 'CONTIGUOUS_BOUNDARY',
+        semester1LastUnitId: suggestedId,
+        updatedAt: new Date().toISOString(),
+      });
+      setSaveNotice({
+        type: 'warning',
+        message: 'Saran pembagian semester telah diterapkan pada draf. Tinjau dan klik Simpan Pembagian Semester.',
+      });
+    } else {
+      alert('Jumlah Unit/Bab kurang dari 2, penentuan semester dapat dilakukan secara manual.');
+    }
+  };
+
+  const handleSave = () => {
+    if (!validation.isValid) {
+      setSaveNotice({
+        type: 'error',
+        message: 'Pembagian semester tidak valid. Periksa kembali batas akhir Semester 1.',
+      });
+      return;
+    }
+
+    if (validation.isStale) {
+      setSaveNotice({
+        type: 'error',
+        message: 'Data stale relatif terhadap pemetaan terbaru.',
+      });
+      return;
+    }
+
+    const updatedPlan: UnitExecutionPlanData = {
+      ...unitExecutionPlan,
+      semesterPlacement: {
+        ...placementDraft,
+        updatedAt: new Date().toISOString(),
+      },
+      updatedAt: new Date().toISOString(),
+    };
+
+    const success = onSave(updatedPlan);
+    if (success) {
+      setSaveNotice({
+        type: 'success',
+        message: 'Pembagian Unit/Bab ke Semester berhasil disimpan.',
+      });
+      setTimeout(() => setSaveNotice(null), 4000);
+    }
+  };
+
+  // Separate units into S1 and S2 based on validation resolvedUnits
+  const sem1Units = useMemo(() => {
+    const s1Ids = new Set(validation.semester1UnitIds);
+    return sortedUnits.filter((u) => s1Ids.has(u.id));
+  }, [sortedUnits, validation.semester1UnitIds]);
+
+  const sem2Units = useMemo(() => {
+    const s2Ids = new Set(validation.semester2UnitIds);
+    return sortedUnits.filter((u) => s2Ids.has(u.id));
+  }, [sortedUnits, validation.semester2UnitIds]);
+
+  const selectValue = placementDraft.semester1LastUnitId === null ? '__NONE__' : placementDraft.semester1LastUnitId;
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden mb-8">
+      {/* Header */}
+      <div className="p-5 sm:p-6 bg-slate-900 text-white flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 mb-1">
+            <Calendar className="w-5 h-5 text-blue-400" />
+            <h2 className="text-lg font-bold">Pembagian Unit/Bab ke Semester</h2>
+            <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-semibold border border-blue-400/30">
+              Whole Unit Placement
+            </span>
+          </div>
+          <p className="text-xs text-slate-300">
+            Satu Unit/Bab ditempatkan utuh pada satu semester. Pertemuan mengikuti semester Unit.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {validation.isComplete ? (
+            <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              <CheckCircle2 className="w-3.5 h-3.5" /> PENEMPATAN LENGKAP
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+              <AlertCircle className="w-3.5 h-3.5" /> BELUM DITETAPKAN
+            </span>
+          )}
+
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={!isDirty || !validation.isValid || validation.isStale}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
+              !isDirty || !validation.isValid || validation.isStale
+                ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                : 'bg-blue-600 text-white hover:bg-blue-500 shadow-md shadow-blue-600/20'
+            }`}
+          >
+            <Save className="w-4 h-4" />
+            <span>Simpan Pembagian Semester</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Save Notice */}
+      {saveNotice && (
+        <div
+          className={`px-5 py-3 text-xs font-medium border-b flex items-center justify-between ${
+            saveNotice.type === 'success'
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : saveNotice.type === 'warning'
+              ? 'bg-amber-50 text-amber-800 border-amber-200'
+              : 'bg-rose-50 text-rose-800 border-rose-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {saveNotice.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : saveNotice.type === 'warning' ? (
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span>{saveNotice.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSaveNotice(null)}
+            className="text-[11px] font-bold underline hover:opacity-80 cursor-pointer"
+          >
+            Tutup
+          </button>
+        </div>
+      )}
+
+      {/* Warnings / Errors */}
+      {validation.errors.length > 0 && (
+        <div className="mx-5 mt-4 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs">
+          <ul className="list-disc pl-5 space-y-0.5">
+            {validation.errors.map((err, idx) => (
+              <li key={idx}>{err}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {validation.warnings.length > 0 && (
+        <div className="mx-5 mt-4 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs">
+          <ul className="list-disc pl-5 space-y-0.5">
+            {validation.warnings.map((warn, idx) => (
+              <li key={idx}>{warn}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Boundary Control & Suggestion */}
+      <div className="p-5 sm:p-6 bg-slate-50 border-b border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 flex-1">
+          <label className="text-xs font-bold text-slate-700 shrink-0">
+            Batas Akhir Semester 1:
+          </label>
+          <select
+            value={selectValue}
+            onChange={(e) => handleBoundaryChange(e.target.value)}
+            className="text-xs font-semibold bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-600 max-w-sm"
+          >
+            <option value="__NONE__">Tidak ada Unit di Semester 1 (Semua masuk Semester 2)</option>
+            {sortedUnits.map((u) => (
+              <option key={u.id} value={u.id}>
+                Setelah {u.title || `Bab ${u.order}`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <button
+          type="button"
+          onClick={handleSuggest}
+          disabled={s1AvailableJP === null || s2AvailableJP === null}
+          className="px-4 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs border border-indigo-200 flex items-center gap-1.5 shadow-2xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+        >
+          <Sparkles className="w-3.5 h-3.5" />
+          <span>Sarankan Pembagian</span>
+        </button>
+      </div>
+
+      <div className="px-5 py-2 text-[11px] text-slate-500 bg-white border-b border-slate-100">
+        <em>Saran didasarkan pada rasio kapasitas semester dan jumlah Pertemuan per Unit. Guru tetap menetapkan hasil akhir.</em>
+      </div>
+
+      {/* Preview Two Columns */}
+      <div className="p-5 sm:p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Semester 1 Section */}
+        <div className="rounded-2xl border border-blue-200 bg-blue-50/30 p-4 space-y-3">
+          <div className="flex items-center justify-between pb-2 border-b border-blue-100">
+            <h3 className="font-bold text-blue-900 text-sm flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-blue-700" />
+              <span>SEMESTER 1 (Ganjil)</span>
+            </h3>
+            <span className="text-xs font-bold bg-blue-100 text-blue-800 px-2.5 py-0.5 rounded-full">
+              {sem1Units.length} Unit
+            </span>
+          </div>
+
+          {sem1Units.length === 0 ? (
+            <div className="p-6 text-center rounded-xl border border-dashed border-blue-200 bg-white/50 text-xs text-slate-500">
+              Tidak ada Unit di Semester 1
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {sem1Units.map((u) => {
+                const meetingsCount = unitMeetingCounts.get(u.id) || 0;
+                return (
+                  <div key={u.id} className="p-3 rounded-xl bg-white border border-blue-100 shadow-2xs flex items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2">
+                      <BookOpen className="w-4 h-4 text-blue-600 shrink-0" />
+                      <span className="font-bold text-slate-900">{u.title || `Bab ${u.order}`}</span>
+                    </div>
+                    <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                      {meetingsCount} Pertemuan
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Semester 2 Section */}
+        <div className="rounded-2xl border border-indigo-200 bg-indigo-50/30 p-4 space-y-3">
+          <div className="flex items-center justify-between pb-2 border-b border-indigo-100">
+            <h3 className="font-bold text-indigo-900 text-sm flex items-center gap-2">
+              <Calendar className="w-4 h-4 text-indigo-700" />
+              <span>SEMESTER 2 (Genap)</span>
+            </h3>
+            <span className="text-xs font-bold bg-indigo-100 text-indigo-800 px-2.5 py-0.5 rounded-full">
+              {sem2Units.length} Unit
+            </span>
+          </div>
+
+          {sem2Units.length === 0 ? (
+            <div className="p-6 text-center rounded-xl border border-dashed border-indigo-200 bg-white/50 text-xs text-slate-500">
+              Tidak ada Unit di Semester 2
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {sem2Units.map((u) => {
+                const meetingsCount = unitMeetingCounts.get(u.id) || 0;
+                return (
+                  <div key={u.id} className="p-3 rounded-xl bg-white border border-indigo-100 shadow-2xs flex items-center justify-between gap-3 text-xs">
+                    <div className="flex items-center gap-2">
+                      <BookOpen className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <span className="font-bold text-slate-900">{u.title || `Bab ${u.order}`}</span>
+                    </div>
+                    <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md">
+                      {meetingsCount} Pertemuan
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
