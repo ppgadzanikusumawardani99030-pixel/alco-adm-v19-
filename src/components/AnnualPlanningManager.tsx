@@ -354,7 +354,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
         title: 'Alokasi Waktu',
         status: t5Complete ? 'COMPLETE' : 'PENDING',
         isLocked: t5Locked,
-        lockReason: 'Lengkapi Struktur Pertemuan sesuai kapasitas kalender terlebih dahulu',
+        lockReason: 'Lengkapi Struktur Pertemuan sesuai kapasitas perencanaan terlebih dahulu',
       },
     ];
   }, [
@@ -441,7 +441,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
         return {
           num: 4,
           title: 'Struktur Pertemuan',
-          desc: 'Susun Pertemuan sesuai pembagian Bab dan kapasitas kalender.',
+          desc: 'Susun Pertemuan sesuai pembagian Bab dan kapasitas perencanaan.',
         };
       case 'time-allocation':
         return {

@@ -30,7 +30,7 @@ import { loadStorageV5, getSemesterDataV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from './unitSemesterPlanningService';
-import { resolveEffectiveSubjectSlots, resolvePlannedMeetingCapacity } from './subjectScheduleService';
+import { resolvePlannedMeetingCapacity } from './subjectScheduleService';
 
 export type WorkflowStatus = 'BLOCKED' | 'READY' | 'IN_PROGRESS' | 'COMPLETE' | 'STALE';
 

@@ -290,7 +290,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
       const isCountMatch = finalS1Count === targetS1 && finalS2Count === targetS2;
 
       if (!resVal.isValid || !resPlac.isValid || !isCountMatch) {
-        throw new Error('Draf hasil AI tidak sesuai dengan kapasitas slot kalender atau pembagian semester tidak valid.');
+        throw new Error('Draf hasil AI tidak sesuai dengan kapasitas perencanaan atau pembagian semester tidak valid.');
       }
 
       setDraft(mergedDraft);
