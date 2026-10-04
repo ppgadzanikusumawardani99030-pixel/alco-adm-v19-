@@ -731,3 +731,95 @@ export function buildLearningMeetingScheduleData(params: {
     updatedAt: new Date().toISOString(),
   };
 }
+
+export interface ExactScheduleReadinessResult {
+  isReady: boolean;
+  isStale: boolean;
+  errors: string[];
+}
+
+/**
+ * Checks whether persisted LearningMeetingScheduleData for a semester is complete and valid:
+ * - data exists
+ * - status === 'COMPLETE'
+ * - unresolvedMeetingIds.length === 0
+ * - not stale relative to mapping, UnitExecutionPlan, SubjectWeeklySchedule, calendar, current weekly JP
+ * - passes validateLearningMeetingScheduleData()
+ */
+export function isLearningMeetingScheduleReady(params: {
+  schedule: LearningMeetingScheduleData | null | undefined;
+  semester: 1 | 2;
+  mapping: ATPUnitMappingData | null | undefined;
+  unitExecutionPlan: UnitExecutionPlanData | null | undefined;
+  subjectWeeklySchedule: SubjectWeeklyScheduleData | null | undefined;
+  expectedWeeklyJP: number | null | undefined;
+  calendar: AcademicCalendarData | null | undefined;
+  calendarDays?: CalendarDay[];
+}): ExactScheduleReadinessResult {
+  const {
+    schedule,
+    semester,
+    mapping,
+    unitExecutionPlan,
+    subjectWeeklySchedule,
+    expectedWeeklyJP,
+    calendar,
+    calendarDays = [],
+  } = params;
+
+  if (!schedule) {
+    return {
+      isReady: false,
+      isStale: false,
+      errors: ['Jadwal pertemuan belum disusun atau disimpan.'],
+    };
+  }
+
+  if (schedule.status !== 'COMPLETE') {
+    return {
+      isReady: false,
+      isStale: false,
+      errors: ['Status jadwal belum COMPLETE.'],
+    };
+  }
+
+  if (!Array.isArray(schedule.unresolvedMeetingIds) || schedule.unresolvedMeetingIds.length > 0) {
+    return {
+      isReady: false,
+      isStale: false,
+      errors: ['Masih terdapat pertemuan yang belum terjadwal (unresolvedMeetingIds > 0).'],
+    };
+  }
+
+  if (
+    !mapping ||
+    !unitExecutionPlan ||
+    !subjectWeeklySchedule ||
+    !expectedWeeklyJP ||
+    expectedWeeklyJP <= 0 ||
+    !calendar
+  ) {
+    return {
+      isReady: false,
+      isStale: false,
+      errors: ['Prasyarat validasi jadwal belum lengkap (mapping, plan, jadwal mingguan, kalender, atau JP).'],
+    };
+  }
+
+  const validation = validateLearningMeetingScheduleData({
+    data: schedule,
+    semester,
+    mapping,
+    unitExecutionPlan,
+    subjectWeeklySchedule,
+    expectedWeeklyJP,
+    calendar,
+    calendarDays,
+  });
+
+  return {
+    isReady: validation.isValid && !validation.isStale,
+    isStale: validation.isStale,
+    errors: validation.errors,
+  };
+}

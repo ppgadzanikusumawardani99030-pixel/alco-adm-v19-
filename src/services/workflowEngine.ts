@@ -31,6 +31,7 @@ import { resolveSemesterCapacityV5 } from './jpEngine';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from './unitSemesterPlanningService';
 import { resolvePlannedMeetingCapacity } from './subjectScheduleService';
+import { isLearningMeetingScheduleReady } from './learningMeetingScheduleService';
 
 export type WorkflowStatus = 'BLOCKED' | 'READY' | 'IN_PROGRESS' | 'COMPLETE' | 'STALE';
 
@@ -894,29 +895,49 @@ export function validateWorkflowDependencies(
         meetingReason = 'Lengkapi Struktur Pertemuan pada setiap Unit/Bab terlebih dahulu.';
       }
 
-      // Check Time Allocation completeness (Alokasi Waktu)
+      // Check exact schedule readiness S1 + S2 (completion authority for Step 08 Kurikulum Merdeka)
       let isAllocationComplete = false;
       let allocationReason: string | undefined = undefined;
+      let isScheduleStale = false;
 
       if (s1 && s2) {
-        const isS1AllocValid =
-          Array.isArray(s1Allocations) &&
-          s1Allocations.length > 0 &&
-          s1Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) > 0 &&
-          (s1Cap?.availableJP === null || s1Cap?.availableJP === undefined || s1Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) <= s1Cap.availableJP);
+        const s1WeeklyJP = s1Cap?.actualScheduledWeeklyJP ?? s1Data?.semesterJPSetting?.actualScheduledWeeklyJP;
+        const s2WeeklyJP = s2Cap?.actualScheduledWeeklyJP ?? s2Data?.semesterJPSetting?.actualScheduledWeeklyJP;
 
-        const isS2AllocValid =
-          Array.isArray(s2Allocations) &&
-          s2Allocations.length > 0 &&
-          s2Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) > 0 &&
-          (s2Cap?.availableJP === null || s2Cap?.availableJP === undefined || s2Allocations.reduce((sum, a) => sum + (Number(a.allocatedJP ?? a.jp) || 0), 0) <= s2Cap.availableJP);
+        const s1ScheduleReadiness = isLearningMeetingScheduleReady({
+          schedule: s1Data?.learningMeetingSchedule,
+          semester: 1,
+          mapping: currentMapping,
+          unitExecutionPlan: effectivePlan || currentPlan,
+          subjectWeeklySchedule: s1Data?.subjectWeeklySchedule,
+          expectedWeeklyJP: s1WeeklyJP,
+          calendar: s1Data?.academicCalendar?.calendar,
+          calendarDays: s1Data?.academicCalendar?.days || [],
+        });
 
-        isAllocationComplete = isS1AllocValid && isS2AllocValid;
+        const s2ScheduleReadiness = isLearningMeetingScheduleReady({
+          schedule: s2Data?.learningMeetingSchedule,
+          semester: 2,
+          mapping: currentMapping,
+          unitExecutionPlan: effectivePlan || currentPlan,
+          subjectWeeklySchedule: s2Data?.subjectWeeklySchedule,
+          expectedWeeklyJP: s2WeeklyJP,
+          calendar: s2Data?.academicCalendar?.calendar,
+          calendarDays: s2Data?.academicCalendar?.days || [],
+        });
+
+        isAllocationComplete = s1ScheduleReadiness.isReady && s2ScheduleReadiness.isReady;
+
         if (!isAllocationComplete) {
-          allocationReason = 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
+          if (s1ScheduleReadiness.isStale || s2ScheduleReadiness.isStale) {
+            isScheduleStale = true;
+            allocationReason = 'Jadwal Aktual berubah/stale dan perlu disusun ulang.';
+          } else {
+            allocationReason = 'Lengkapi dan simpan Jadwal Aktual Semester 1 dan Semester 2 terlebih dahulu.';
+          }
         }
       } else {
-        allocationReason = 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
+        allocationReason = 'Lengkapi dan simpan Jadwal Aktual Semester 1 dan Semester 2 terlebih dahulu.';
       }
 
       // Step 08 Complete Check
@@ -934,26 +955,27 @@ export function validateWorkflowDependencies(
       } else if (!isMeetingComplete) {
         annualPlanningReason = meetingReason || 'Lengkapi Struktur Pertemuan sesuai kapasitas perencanaan.';
       } else if (!isAllocationComplete) {
-        annualPlanningReason = allocationReason || 'Susun dan simpan Pemetaan Alokasi Waktu Semester 1 dan Semester 2 terlebih dahulu.';
+        annualPlanningReason = allocationReason || 'Lengkapi dan simpan Jadwal Aktual Semester 1 dan Semester 2 terlebih dahulu.';
       }
     } catch {
       isAnnualPlanningComplete = false;
     }
 
     const isAnnualPlanningBlocked = !isMappingComplete;
+    const isAnnualPlanningStale = isMappingStale || isScheduleStale;
 
     stepStates['annual-planning'] = {
       id: 'annual-planning',
       status: isAnnualPlanningBlocked
         ? 'BLOCKED'
-        : isMappingStale
+        : isAnnualPlanningStale
         ? 'STALE'
         : isAnnualPlanningComplete
         ? 'COMPLETE'
         : 'READY',
       isBlocked: isAnnualPlanningBlocked,
       isComplete: isAnnualPlanningComplete && !isAnnualPlanningBlocked,
-      isStale: isMappingStale,
+      isStale: isAnnualPlanningStale,
       reason: !isATPComplete
         ? 'Memerlukan penyusunan Alur Tujuan Pembelajaran (ATP) terlebih dahulu'
         : !isMappingComplete
@@ -967,7 +989,7 @@ export function validateWorkflowDependencies(
     };
 
     // 6. Semester Selection step state
-    const isSemesterBlocked = !isAnnualPlanningComplete || isMappingStale;
+    const isSemesterBlocked = !isAnnualPlanningComplete || isAnnualPlanningStale;
     stepStates.semester = {
       id: 'semester',
       status: isSemesterBlocked ? 'BLOCKED' : 'READY',

@@ -43,6 +43,7 @@ import { resolveUnitSemesterPlacement } from '../services/unitSemesterPlanningSe
 import {
   resolvePlannedMeetingCapacity,
 } from '../services/subjectScheduleService';
+import { isLearningMeetingScheduleReady } from '../services/learningMeetingScheduleService';
 
 export interface AnnualPlanningManagerProps {
   school: SchoolData;
@@ -239,6 +240,40 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
 
   const isK13Curriculum = academicSetting.curriculumType === 'K13' || academicSetting.curriculum?.includes('2013');
 
+  const s1ScheduleReadiness = useMemo(() => {
+    return isLearningMeetingScheduleReady({
+      schedule: s1Data?.learningMeetingSchedule,
+      semester: 1,
+      mapping,
+      unitExecutionPlan: effectiveUnitExecutionPlan || unitExecutionPlan,
+      subjectWeeklySchedule: s1Data?.subjectWeeklySchedule,
+      expectedWeeklyJP: s1Capacity?.actualScheduledWeeklyJP ?? s1Data?.semesterJPSetting?.actualScheduledWeeklyJP,
+      calendar: s1Data?.academicCalendar?.calendar,
+      calendarDays: s1Data?.academicCalendar?.days || [],
+    });
+  }, [s1Data, mapping, effectiveUnitExecutionPlan, unitExecutionPlan, s1Capacity]);
+
+  const isS1ExactScheduleReady = s1ScheduleReadiness.isReady;
+
+  const s2ScheduleReadiness = useMemo(() => {
+    return isLearningMeetingScheduleReady({
+      schedule: s2Data?.learningMeetingSchedule,
+      semester: 2,
+      mapping,
+      unitExecutionPlan: effectiveUnitExecutionPlan || unitExecutionPlan,
+      subjectWeeklySchedule: s2Data?.subjectWeeklySchedule,
+      expectedWeeklyJP: s2Capacity?.actualScheduledWeeklyJP ?? s2Data?.semesterJPSetting?.actualScheduledWeeklyJP,
+      calendar: s2Data?.academicCalendar?.calendar,
+      calendarDays: s2Data?.academicCalendar?.days || [],
+    });
+  }, [s2Data, mapping, effectiveUnitExecutionPlan, unitExecutionPlan, s2Capacity]);
+
+  const isS2ExactScheduleReady = s2ScheduleReadiness.isReady;
+
+  const isTask5Complete = !isK13Curriculum
+    ? (isS1ExactScheduleReady && isS2ExactScheduleReady)
+    : (hasS1SavedAllocation && hasS2SavedAllocation);
+
   const meetingCounts = useMemo(() => {
     const empty = { semester1: 0, semester2: 0 };
     if (!effectiveUnitExecutionPlan || !placementValidation?.isComplete) return empty;
@@ -299,7 +334,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     const t2Complete = s2TimeReady;
     const t3Complete = placementReady;
     const t4Complete = meetingExactReady;
-    const t5Complete = hasS1SavedAllocation && hasS2SavedAllocation;
+    const t5Complete = isTask5Complete;
 
     const t2Locked =
       !t1Complete;
@@ -366,8 +401,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     placementReady,
     meetingExactReady,
     meetingCoverageComplete,
-    hasS1SavedAllocation,
-    hasS2SavedAllocation,
+    isTask5Complete,
     s1PlannedCapacity,
     s2PlannedCapacity,
     meetingCountDetail,
@@ -869,7 +903,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                               : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-300'
                           }`}
                         >
-                          Semester 1 {hasS1SavedAllocation && '✓'}
+                          Semester 1 {(!isK13Curriculum ? isS1ExactScheduleReady : hasS1SavedAllocation) && '✓'}
                         </button>
                         <button
                           type="button"
@@ -882,7 +916,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                               : 'bg-white text-slate-700 hover:bg-slate-100 border border-slate-300'
                           }`}
                         >
-                          Semester 2 {hasS2SavedAllocation && '✓'}
+                          Semester 2 {(!isK13Curriculum ? isS2ExactScheduleReady : hasS2SavedAllocation) && '✓'}
                         </button>
                       </div>
                     ) : undefined}
@@ -971,24 +1005,31 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
             {activeTaskId === 'time-allocation' && (
               <div className="pt-4 border-t border-blue-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
                 <span className="text-slate-600 font-medium">
-                  {hasS1SavedAllocation && hasS2SavedAllocation ? (
+                  {isTask5Complete ? (
                     <span className="text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 font-bold flex items-center gap-1">
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
                       Seluruh rangkaian Perencanaan Tahunan (Step 08) telah selesai disusun!
                     </span>
+                  ) : (!isK13Curriculum && (s1ScheduleReadiness.isStale || s2ScheduleReadiness.isStale)) ? (
+                    <span className="text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 font-bold flex items-center gap-1.5">
+                      <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                      Jadwal Aktual berubah/stale dan perlu disusun ulang.
+                    </span>
                   ) : (
                     <span className="text-amber-800 bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200 font-bold flex items-center gap-1.5">
                       <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                      Selesaikan dan simpan Alokasi Waktu Semester 1 &amp; 2 terlebih dahulu.
+                      {!isK13Curriculum
+                        ? 'Lengkapi dan simpan Jadwal Aktual Semester 1 dan Semester 2 terlebih dahulu.'
+                        : 'Selesaikan dan simpan Alokasi Waktu Semester 1 & 2 terlebih dahulu.'}
                     </span>
                   )}
                 </span>
                 <button
                   type="button"
-                  disabled={!(hasS1SavedAllocation && hasS2SavedAllocation)}
+                  disabled={!isTask5Complete}
                   onClick={onNextStep}
                   className={`px-5 py-2.5 rounded-xl font-bold transition flex items-center gap-2 cursor-pointer ${
-                    hasS1SavedAllocation && hasS2SavedAllocation
+                    isTask5Complete
                       ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
                       : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
                   }`}
