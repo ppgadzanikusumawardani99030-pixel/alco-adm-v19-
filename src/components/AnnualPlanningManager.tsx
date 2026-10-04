@@ -637,7 +637,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
 
       {/* Embedded TimePlanningManager for the selected semester */}
       {activeSelectedPlan && (
-        <div id="time-planning-container" key={activeSelectedPlan.id} className="pt-1 scroll-mt-4">
+        <div id="time-planning-container" className="pt-1 scroll-mt-4">
           <TimePlanningManager
             school={school}
             profile={profile}
