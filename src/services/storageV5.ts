@@ -1596,8 +1596,10 @@ export function saveSubjectWeeklyScheduleV5(
     }
     sessionIds.add(s.id);
 
-    if (!s.dayOfWeek || ![1, 2, 3, 4, 5, 6].includes(s.dayOfWeek)) {
-      throw new Error(`dayOfWeek tidak valid: ${s.dayOfWeek}`);
+    if (s.dayOfWeek !== undefined && s.dayOfWeek !== null) {
+      if (![1, 2, 3, 4, 5, 6].includes(s.dayOfWeek as any)) {
+        throw new Error(`dayOfWeek tidak valid: ${s.dayOfWeek}`);
+      }
     }
     if (typeof s.jp !== 'number' || s.jp <= 0 || !Number.isInteger(s.jp)) {
       throw new Error(`JP session harus berupa integer positif: ${s.jp}`);
