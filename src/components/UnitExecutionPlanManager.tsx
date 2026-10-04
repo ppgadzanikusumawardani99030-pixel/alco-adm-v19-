@@ -33,6 +33,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { generateUnitMeetingsWithAI } from '../services/aiService';
+import { suggestSemesterBoundaryByMeetingSlots, resolveUnitSemesterPlacement } from '../services/unitSemesterPlanningService';
 
 export interface UnitExecutionPlanManagerProps {
   mapping: ATPUnitMappingData;
@@ -40,6 +41,18 @@ export interface UnitExecutionPlanManagerProps {
   atp: ATPData;
   tp: TPData;
   onSave: (plan: UnitExecutionPlanData) => boolean;
+  meetingCapacity?: {
+    semester1: {
+      isReady: boolean;
+      targetMeetingCount: number;
+      totalJP: number;
+    };
+    semester2: {
+      isReady: boolean;
+      targetMeetingCount: number;
+      totalJP: number;
+    };
+  };
 }
 
 function generateStableId(): string {
@@ -71,6 +84,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
   atp,
   tp,
   onSave,
+  meetingCapacity,
 }) => {
   // 1. Initialize local draft
   const initialDraft = useMemo<UnitExecutionPlanData>(() => {
@@ -95,7 +109,12 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
   }, [draft]);
 
   const handleGenerateWithAI = async () => {
-    if (validation.isStale || !validation.isValid || validation.isComplete || isGeneratingMeetings) {
+    if (validation.isStale || !validation.isValid || isGeneratingMeetings) {
+      return;
+    }
+
+    if (!meetingCapacity || !meetingCapacity.semester1.isReady || !meetingCapacity.semester2.isReady) {
+      setGenerationError('Lengkapi Kalender Pendidikan dan Pola Jadwal Mapel Semester 1 & 2 agar AI dapat menyusun jumlah Pertemuan sesuai kapasitas waktu.');
       return;
     }
 
@@ -104,11 +123,106 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     setGenerationNotice(null);
 
     try {
+      // 1. Resolve semesterPlacement candidate
+      let candidatePlacement = draft.semesterPlacement;
+      const targetS1 = meetingCapacity.semester1.targetMeetingCount;
+      const targetS2 = meetingCapacity.semester2.targetMeetingCount;
+
+      if (!candidatePlacement || candidatePlacement.mode !== 'CONTIGUOUS_BOUNDARY') {
+        const boundary = suggestSemesterBoundaryByMeetingSlots(draft, mapping, targetS1, targetS2);
+        if (boundary !== undefined) {
+          candidatePlacement = {
+            mode: 'CONTIGUOUS_BOUNDARY',
+            semester1LastUnitId: boundary,
+            updatedAt: new Date().toISOString()
+          };
+        }
+      }
+
+      if (!candidatePlacement) {
+        throw new Error('Pembagian unit semester sementara tidak dapat dihitung.');
+      }
+
+      const placementResult = resolveUnitSemesterPlacement({ ...draft, semesterPlacement: candidatePlacement }, mapping);
+      if (!placementResult.isValid) {
+        throw new Error('Pembagian unit semester sementara tidak valid.');
+      }
+
+      const s1UnitIds = new Set(placementResult.semester1UnitIds);
+      const s2UnitIds = new Set(placementResult.semester2UnitIds);
+
+      // 2. Count existing meetings in S1 and S2
+      let s1Existing = 0;
+      let s2Existing = 0;
+      draft.units.forEach((u) => {
+        const count = u.meetings?.length || 0;
+        if (s1UnitIds.has(u.unitId)) s1Existing += count;
+        else if (s2UnitIds.has(u.unitId)) s2Existing += count;
+      });
+
+      const additionalS1 = targetS1 - s1Existing;
+      const additionalS2 = targetS2 - s2Existing;
+
+      if (additionalS1 < 0) {
+        throw new Error('Jumlah Pertemuan manual melebihi kapasitas Pertemuan efektif Semester 1. Kurangi Pertemuan manual atau sesuaikan pola jadwal/kalender.');
+      }
+      if (additionalS2 < 0) {
+        throw new Error('Jumlah Pertemuan manual melebihi kapasitas Pertemuan efektif Semester 2. Kurangi Pertemuan manual atau sesuaikan pola jadwal/kalender.');
+      }
+
+      // 3. Minimum coverage feasibility
+      let missingCoverageUnitsS1Count = 0;
+      let missingCoverageUnitsS2Count = 0;
+
+      mapping.units.forEach((unit) => {
+        const unitPlan = draft.units.find((u) => u.unitId === unit.id);
+        const existingMeetings = unitPlan?.meetings || [];
+
+        const coveredMaterials = new Set(existingMeetings.flatMap((m) => m.materialIds || []));
+        const coveredAtp = new Set(existingMeetings.flatMap((m) => m.linkedAtpItemIds || []));
+        const coveredTp = new Set(existingMeetings.flatMap((m) => m.linkedTpIds || []));
+
+        const hasMissing = (unit.materials || []).some((m) => !coveredMaterials.has(m.id)) ||
+                           (unit.linkedAtpItemIds || []).some((id) => !coveredAtp.has(id)) ||
+                           (unit.linkedTpIds || []).some((id) => !coveredTp.has(id));
+
+        if (hasMissing) {
+          if (s1UnitIds.has(unit.id)) {
+            missingCoverageUnitsS1Count++;
+          } else if (s2UnitIds.has(unit.id)) {
+            missingCoverageUnitsS2Count++;
+          }
+        }
+      });
+
+      if (additionalS1 < missingCoverageUnitsS1Count || additionalS2 < missingCoverageUnitsS2Count) {
+        throw new Error('Kapasitas Pertemuan tersisa tidak cukup untuk melengkapi coverage tanpa mengubah Pertemuan manual. Tinjau Pertemuan yang sudah ada.');
+      }
+
+      // 4. No-work condition
+      const isCoverageComplete = validation.isComplete && !isStale;
+      if (additionalS1 === 0 && additionalS2 === 0 && isCoverageComplete) {
+        setGenerationNotice('Struktur Pertemuan sudah sesuai kapasitas kalender dan seluruh coverage telah tercakup.');
+        setIsGeneratingMeetings(false);
+        return;
+      }
+
       const result = await generateUnitMeetingsWithAI({
         mapping,
         tpData: tp,
         atpData: atp,
         currentPlan: draft,
+        capacityContext: {
+          semester1LastUnitId: candidatePlacement.semester1LastUnitId,
+          semester1: {
+            targetMeetingCount: targetS1,
+            totalJP: meetingCapacity.semester1.totalJP,
+          },
+          semester2: {
+            targetMeetingCount: targetS2,
+            totalJP: meetingCapacity.semester2.totalJP,
+          },
+        },
       });
 
       if (!result || !Array.isArray(result.units)) {
@@ -116,6 +230,16 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
       }
 
       const mergedDraft: UnitExecutionPlanData = JSON.parse(JSON.stringify(draft));
+      
+      // Update mergedDraft.semesterPlacement if not already present
+      if (!mergedDraft.semesterPlacement) {
+        mergedDraft.semesterPlacement = {
+          mode: 'CONTIGUOUS_BOUNDARY',
+          semester1LastUnitId: candidatePlacement.semester1LastUnitId,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+
       const unitPlanMap = new Map(mergedDraft.units.map((u) => [u.unitId, u]));
 
       for (const su of result.units) {
@@ -139,19 +263,38 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
         uPlan.meetings.push(...newMeetings);
       }
 
+      // Sequential normalize order
+      mergedDraft.units.forEach((u) => {
+        if (Array.isArray(u.meetings)) {
+          u.meetings.forEach((m, idx) => {
+            m.order = idx + 1;
+          });
+        }
+      });
+
+      // Post-merge validation
       const resVal = validateUnitExecutionPlan(mergedDraft, mapping, atp, tp);
-      if (!resVal.isValid) {
-        setGenerationError('Hasil AI tidak lolos validasi canonical Struktur Pertemuan.');
-        setIsGeneratingMeetings(false);
-        return;
+      const resPlac = resolveUnitSemesterPlacement(mergedDraft, mapping);
+
+      let finalS1Count = 0;
+      let finalS2Count = 0;
+      const resS1Set = new Set(resPlac.semester1UnitIds);
+      const resS2Set = new Set(resPlac.semester2UnitIds);
+
+      mergedDraft.units.forEach((u) => {
+        const count = u.meetings?.length || 0;
+        if (resS1Set.has(u.unitId)) finalS1Count += count;
+        else if (resS2Set.has(u.unitId)) finalS2Count += count;
+      });
+
+      const isCountMatch = finalS1Count === targetS1 && finalS2Count === targetS2;
+
+      if (!resVal.isValid || !resPlac.isValid || !isCountMatch) {
+        throw new Error('Draf hasil AI tidak sesuai dengan kapasitas slot kalender atau pembagian semester tidak valid.');
       }
 
       setDraft(mergedDraft);
-      if (resVal.isComplete) {
-        setGenerationNotice('Draf Pertemuan berhasil disusun AI dan seluruh coverage Materi, ATP, dan TP telah tercakup. Tinjau sebelum menyimpan.');
-      } else {
-        setGenerationNotice('Draf Pertemuan berhasil dilengkapi AI, tetapi masih ada coverage yang perlu ditinjau.');
-      }
+      setGenerationNotice(`AI menyusun draf sesuai kapasitas kalender: Semester 1 = ${targetS1} Pertemuan, Semester 2 = ${targetS2} Pertemuan. Tinjau struktur dan pembagian Unit/Bab sebelum menyimpan.`);
     } catch (err: any) {
       setGenerationError(err?.message || 'Gagal menyusun draf Pertemuan dengan AI.');
     } finally {
@@ -201,6 +344,52 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     }
     return normalizeForComparison(draft) !== normalizeForComparison(unitExecutionPlan);
   }, [draft, unitExecutionPlan]);
+
+  const isCapacityReady = Boolean(
+    meetingCapacity &&
+    meetingCapacity.semester1.isReady &&
+    meetingCapacity.semester2.isReady
+  );
+
+  const buttonAILabel = useMemo(() => {
+    if (totalMeetingsCount === 0) {
+      return "Susun Pertemuan sesuai Kalender dengan AI";
+    }
+    return "Lengkapi Pertemuan sesuai Kalender dengan AI";
+  }, [totalMeetingsCount]);
+
+  const isAINoWork = useMemo(() => {
+    if (!isCapacityReady || !meetingCapacity) return false;
+    const targetS1 = meetingCapacity.semester1.targetMeetingCount;
+    const targetS2 = meetingCapacity.semester2.targetMeetingCount;
+
+    let candidatePlacement = draft.semesterPlacement;
+    if (!candidatePlacement || candidatePlacement.mode !== 'CONTIGUOUS_BOUNDARY') {
+      const boundary = suggestSemesterBoundaryByMeetingSlots(draft, mapping, targetS1, targetS2);
+      if (boundary !== undefined) {
+        candidatePlacement = {
+          mode: 'CONTIGUOUS_BOUNDARY',
+          semester1LastUnitId: boundary,
+          updatedAt: new Date().toISOString()
+        };
+      }
+    }
+    if (!candidatePlacement) return false;
+    const plac = resolveUnitSemesterPlacement({ ...draft, semesterPlacement: candidatePlacement }, mapping);
+    if (!plac.isValid) return false;
+
+    let s1Existing = 0;
+    let s2Existing = 0;
+    const s1UnitIds = new Set(plac.semester1UnitIds);
+    draft.units.forEach((u) => {
+      const count = u.meetings?.length || 0;
+      if (s1UnitIds.has(u.unitId)) s1Existing += count;
+      else s2Existing += count;
+    });
+
+    const isCoverageComplete = validation.isComplete && !isStale;
+    return s1Existing === targetS1 && s2Existing === targetS2 && isCoverageComplete;
+  }, [isCapacityReady, meetingCapacity, draft, mapping, validation.isComplete, isStale]);
 
   // Fast lookup maps for ATP & TP items for display (Canonical ATPItem fields: stepNumber, focus)
   const atpItemsMap = useMemo(() => {

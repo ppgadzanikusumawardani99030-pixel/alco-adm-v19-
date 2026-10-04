@@ -34,13 +34,14 @@ import {
   UnitExecutionPlanData,
   SubjectWeeklySchedule,
 } from './types';
-import { getSubjectJP } from './services/jpEngine';
+import { getSubjectJP, resolveSemesterCapacityV5 } from './services/jpEngine';
 import {
   AppStorageStateV5,
   AdministrationWorkspaceV5,
 } from './types/storageV5';
 import {
   loadStorageV5,
+  getSemesterDataV5,
   saveStorageV5,
   createProfileV5,
   updateProfileV5,

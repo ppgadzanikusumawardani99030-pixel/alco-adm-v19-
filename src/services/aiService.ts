@@ -908,6 +908,17 @@ export interface GenerateUnitMeetingsWithAIParams {
   tpData: TPData;
   atpData: ATPData;
   currentPlan: UnitExecutionPlanData;
+  capacityContext?: {
+    semester1LastUnitId: string | null;
+    semester1: {
+      targetMeetingCount: number;
+      totalJP: number;
+    };
+    semester2: {
+      targetMeetingCount: number;
+      totalJP: number;
+    };
+  };
 }
 
 export async function generateUnitMeetingsWithAI(

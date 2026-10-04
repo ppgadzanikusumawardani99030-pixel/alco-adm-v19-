@@ -167,3 +167,91 @@ export function suggestSemesterBoundary(
 
   return sortedUnits[bestBoundaryIndex].id;
 }
+
+/**
+ * Suggests semester boundary based on meeting slots capacity.
+ */
+export function suggestSemesterBoundaryByMeetingSlots(
+  plan: UnitExecutionPlanData,
+  mapping: ATPUnitMappingData,
+  s1MeetingSlots: number,
+  s2MeetingSlots: number
+): string | null | undefined {
+  if (plan.semesterPlacement && plan.semesterPlacement.mode === 'CONTIGUOUS_BOUNDARY') {
+    const lastS1Id = plan.semesterPlacement.semester1LastUnitId;
+    if (lastS1Id === null) {
+      return null;
+    }
+    const exists = (mapping.units || []).some((u) => u.id === lastS1Id);
+    if (exists) {
+      return lastS1Id;
+    }
+  }
+
+  const sortedUnits = [...(mapping.units || [])].sort((a, b) => a.order - b.order);
+  if (sortedUnits.length === 0) return undefined;
+
+  const totalSlots = s1MeetingSlots + s2MeetingSlots;
+  if (totalSlots <= 0) return undefined;
+
+  if (s1MeetingSlots === 0 && s2MeetingSlots > 0) return null;
+  if (s2MeetingSlots === 0 && s1MeetingSlots > 0) return sortedUnits[sortedUnits.length - 1].id;
+
+  const unitPlanMap = new Map((plan.units || []).map((u) => [u.unitId, u]));
+
+  const unitWeights = sortedUnits.map((u) => {
+    const up = unitPlanMap.get(u.id);
+    const meetingCount = up?.meetings?.length || 0;
+    if (meetingCount > 0) return meetingCount;
+    return Math.max(
+      1,
+      u.materials?.length || 0,
+      u.linkedAtpItemIds?.length || 0,
+      u.linkedTpIds?.length || 0
+    );
+  });
+
+  const totalWeight = unitWeights.reduce((sum, w) => sum + w, 0);
+  const targetS1Share = s1MeetingSlots / totalSlots;
+
+  let bestBoundaryId: string | null = null;
+  let minScore = Infinity;
+
+  const enforceAtLeastOneInEach = sortedUnits.length >= 2 && s1MeetingSlots > 0 && s2MeetingSlots > 0;
+
+  const startB = enforceAtLeastOneInEach ? 0 : -1;
+  const endB = enforceAtLeastOneInEach ? sortedUnits.length - 2 : sortedUnits.length - 1;
+
+  for (let b = startB; b <= endB; b++) {
+    let s1Weight = 0;
+    let s1ExistingMeetings = 0;
+    for (let i = 0; i <= b; i++) {
+      s1Weight += unitWeights[i];
+      const up = unitPlanMap.get(sortedUnits[i].id);
+      s1ExistingMeetings += up?.meetings?.length || 0;
+    }
+
+    let s2Weight = 0;
+    let s2ExistingMeetings = 0;
+    for (let i = b + 1; i < sortedUnits.length; i++) {
+      s2Weight += unitWeights[i];
+      const up = unitPlanMap.get(sortedUnits[i].id);
+      s2ExistingMeetings += up?.meetings?.length || 0;
+    }
+
+    const currentShare = totalWeight > 0 ? s1Weight / totalWeight : 0;
+    const diff = Math.abs(currentShare - targetS1Share);
+
+    const hasOverCapacity = s1ExistingMeetings > s1MeetingSlots || s2ExistingMeetings > s2MeetingSlots;
+    const penalty = hasOverCapacity ? 1e9 : 0;
+
+    const score = diff + penalty;
+
+    if (score < minScore) {
+      minScore = score;
+      bestBoundaryId = b === -1 ? null : sortedUnits[b].id;
+    }
+  }
+
+  return bestBoundaryId;
+}

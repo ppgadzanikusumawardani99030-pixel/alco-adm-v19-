@@ -1721,7 +1721,7 @@ Kembalikan respon JSON dengan skema:
 
 // Endpoint: AI Generate Unit Meetings Draft
 app.post('/api/ai/generate-unit-meetings', async (req, res) => {
-  const { subject = 'Mata Pelajaran', grade = '', phase = '', mapping, tpData, atpData, currentPlan } = req.body || {};
+  const { subject = 'Mata Pelajaran', grade = '', phase = '', mapping, tpData, atpData, currentPlan, capacityContext } = req.body || {};
 
   if (!mapping || !Array.isArray(mapping.units)) {
     return res.status(400).json({ error: 'Data pemetaan Unit/Bab (mapping) diperlukan.' });
@@ -1733,10 +1733,92 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
     return res.status(400).json({ error: 'Data ATP canonical diperlukan.' });
   }
 
-  const validTpMap = new Map(tpData.items.map((tp: any) => [tp.id, tp]));
-  const validAtpMap = new Map(atpData.items.map((atp: any) => [atp.id, atp]));
+  const validTpMap = new Map<string, any>(tpData.items.map((tp: any) => [tp.id, tp]));
+  const validAtpMap = new Map<string, any>(atpData.items.map((atp: any) => [atp.id, atp]));
 
-  const unitsContext = mapping.units.map((unit: any) => {
+  const sortedMappingUnits = [...(mapping.units || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
+  const validUnitIdsSet = new Set(sortedMappingUnits.map((u) => u.id));
+
+  const semester1LastUnitId = capacityContext?.semester1LastUnitId;
+  const semester1UnitIds: string[] = [];
+  const semester2UnitIds: string[] = [];
+
+  if (semester1LastUnitId !== undefined) {
+    if (semester1LastUnitId === null) {
+      sortedMappingUnits.forEach((u) => semester2UnitIds.push(u.id));
+    } else {
+      if (!validUnitIdsSet.has(semester1LastUnitId)) {
+        return res.status(400).json({ error: `semester1LastUnitId '${semester1LastUnitId}' tidak dikenal pada mapping.units` });
+      }
+      let reachedLastS1 = false;
+      for (const u of sortedMappingUnits) {
+        if (!reachedLastS1) {
+          semester1UnitIds.push(u.id);
+          if (u.id === semester1LastUnitId) {
+            reachedLastS1 = true;
+          }
+        } else {
+          semester2UnitIds.push(u.id);
+        }
+      }
+    }
+  } else {
+    const currentPlacement = currentPlan?.semesterPlacement;
+    if (currentPlacement && currentPlacement.mode === 'CONTIGUOUS_BOUNDARY') {
+      const lastS1 = currentPlacement.semester1LastUnitId;
+      if (lastS1 === null) {
+        sortedMappingUnits.forEach((u) => semester2UnitIds.push(u.id));
+      } else {
+        if (!validUnitIdsSet.has(lastS1)) {
+          return res.status(400).json({ error: `semester1LastUnitId '${lastS1}' dari currentPlan tidak dikenal.` });
+        }
+        let reachedLastS1 = false;
+        for (const u of sortedMappingUnits) {
+          if (!reachedLastS1) {
+            semester1UnitIds.push(u.id);
+            if (u.id === lastS1) {
+              reachedLastS1 = true;
+            }
+          } else {
+            semester2UnitIds.push(u.id);
+          }
+        }
+      }
+    }
+  }
+
+  if (currentPlan?.semesterPlacement && capacityContext) {
+    if (currentPlan.semesterPlacement.semester1LastUnitId !== capacityContext.semester1LastUnitId) {
+      return res.status(400).json({ error: 'Boundary semester dari currentPlan tidak sama dengan capacityContext.' });
+    }
+  }
+
+  let s1ExistingMeetingCount = 0;
+  let s2ExistingMeetingCount = 0;
+
+  const s1UnitsSet = new Set(semester1UnitIds);
+  const s2UnitsSet = new Set(semester2UnitIds);
+
+  (currentPlan?.units || []).forEach((u: any) => {
+    const meetCount = u.meetings?.length || 0;
+    if (s1UnitsSet.has(u.unitId)) {
+      s1ExistingMeetingCount += meetCount;
+    } else if (s2UnitsSet.has(u.unitId)) {
+      s2ExistingMeetingCount += meetCount;
+    }
+  });
+
+  const targetS1 = capacityContext?.semester1?.targetMeetingCount ?? 0;
+  const targetS2 = capacityContext?.semester2?.targetMeetingCount ?? 0;
+
+  const additionalS1 = targetS1 - s1ExistingMeetingCount;
+  const additionalS2 = targetS2 - s2ExistingMeetingCount;
+
+  if (additionalS1 < 0 || additionalS2 < 0) {
+    return res.status(400).json({ error: 'Kapasitas Pertemuan manual melebihi kapasitas Pertemuan efektif.' });
+  }
+
+  const unitsContext = sortedMappingUnits.map((unit: any) => {
     const unitPlan = currentPlan?.units?.find((u: any) => u.unitId === unit.id);
     const existingMeetings = unitPlan?.meetings || [];
 
@@ -1748,9 +1830,12 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
     const missingAtp = (unit.linkedAtpItemIds || []).filter((id: string) => !coveredAtp.has(id));
     const missingTp = (unit.linkedTpIds || []).filter((id: string) => !coveredTp.has(id));
 
+    const semester = s1UnitsSet.has(unit.id) ? 1 : s2UnitsSet.has(unit.id) ? 2 : 1;
+
     return {
       unitId: unit.id,
       unitTitle: unit.title,
+      semester,
       materials: (unit.materials || []).map((m: any) => ({
         id: m.id,
         title: m.title,
@@ -1788,23 +1873,55 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
     };
   });
 
+  const semesterCapacity = {
+    semester1: {
+      targetMeetingCount: targetS1,
+      existingMeetingCount: s1ExistingMeetingCount,
+      additionalMeetingsNeeded: additionalS1,
+      totalJP: capacityContext?.semester1?.totalJP ?? 0
+    },
+    semester2: {
+      targetMeetingCount: targetS2,
+      existingMeetingCount: s2ExistingMeetingCount,
+      additionalMeetingsNeeded: additionalS2,
+      totalJP: capacityContext?.semester2?.totalJP ?? 0
+    }
+  };
+
   const apiKey = resolveApiKey(req);
-  if (apiKey) {
-    try {
-      const ai = createAIClient(apiKey);
-      const prompt = `Anda adalah pakar pengembang kurikulum dan perangkat pembelajaran Kurikulum Merdeka.
-TUGAS ANDA: Menyusun tambahan Pertemuan pembelajaran yang pedagogis dan realistis untuk melengkapi coverage Unit/Bab berdasarkan data canonical yang diberikan.
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      code: 'AI_NOT_CONFIGURED',
+      error: 'Layanan AI belum dikonfigurasi pada server.'
+    });
+  }
+
+  try {
+    const ai = createAIClient(apiKey);
+    const prompt = `Anda adalah pakar pengembang kurikulum dan perangkat pembelajaran Kurikulum Merdeka.
+TUGAS ANDA: Menyusun tambahan LearningMeeting untuk mengisi slot Pertemuan yang sudah dihitung secara deterministik dari Kalender Pendidikan dan jadwal mapel.
+
+JUMLAH PERTEMUAN YANG DIHASILKAN HARUS EXACT SANGAT PRESISI.
+- Untuk Semester 1: hasilkan total Pertemuan BARU tepat sejumlah: ${additionalS1} Pertemuan.
+- Untuk Semester 2: hasilkan total Pertemuan BARU tepat sejumlah: ${additionalS2} Pertemuan.
+
+Pertemuan existing (yang sudah ada) tidak boleh diubah atau dihapus.
 
 RULES WAJIB:
-1. Jangan mengubah Pertemuan existing.
-2. Hanya usulkan PERTEMUAN BARU untuk melengkapi missingCoverage (atau menyusun seluruh pertemuan jika belum ada pertemuan).
-3. Gunakan HANYA unitId, material ID, ATP item ID, dan TP ID yang diberikan pada masing-masing Unit.
-4. DILARANG membuat ID baru untuk Unit, Materi, ATP, atau TP.
-5. Satu Pertemuan boleh memiliki banyak Materi, banyak ATP, banyak TP.
-6. Referensi yang sama boleh muncul pada beberapa Pertemuan jika pedagogis relevan.
-7. Prioritaskan melengkapi missingCoverage.
-8. Pertemuan yang diusulkan harus mempunyai title substantive.
-9. Jangan output: JP, semester, minggu, tanggal, duration, assessment, learning model.
+1. Gunakan HANYA Unit yang diberikan. Satu Pertemuan hanya milik satu Unit.
+2. Unit sudah dikelompokkan ke semester. Jangan pindahkan Unit atau mengubah semesternya.
+3. Jangan output field 'semester' dalam list meetings Anda. Semester diwarisi dari parent Unit-nya.
+4. Jangan output: JP, tanggal, minggu, duration, assessment, learning model.
+5. Referensi materialIds, linkedAtpItemIds, dan linkedTpIds harus menggunakan ID canonical yang persis yang ada di data konteks unit.
+6. ID atau Materi canonical yang sama boleh digunakan ulang di beberapa Pertemuan jika secara pedagogis diperlukan (misalnya untuk penguatan/praktik/refleksi lanjutan).
+7. Dilarang menciptakan ID baru atau Materi canonical baru yang tidak terdaftar di konteks unit.
+8. Semua missingCoverage yang tertera wajib tercakup sepenuhnya dalam tambahan Pertemuan yang Anda buat.
+9. Judul Pertemuan harus substantif, kreatif, dan berbeda secara pedagogis. Hindari judul generik seperti "Pertemuan 1", "Pertemuan 2", atau "Pembelajaran materi X".
+10. Setiap Pertemuan yang diusulkan wajib memiliki minimal satu referensi canonical (tidak boleh ketiganya: materialIds, linkedAtpItemIds, dan linkedTpIds kosong).
+
+KAPASITAS SEMESTER DETIL:
+${JSON.stringify(semesterCapacity, null, 2)}
 
 DATA KONTEKS UNIT:
 ${JSON.stringify(unitsContext, null, 2)}
@@ -1826,128 +1943,204 @@ Kembalikan respon JSON dengan skema:
   ]
 }`;
 
-      const response = await generateContentWithRetry(ai, {
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              units: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    unitId: { type: Type.STRING },
-                    meetings: {
-                      type: Type.ARRAY,
-                      items: {
-                        type: Type.OBJECT,
-                        properties: {
-                          title: { type: Type.STRING },
-                          materialIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-                          linkedAtpItemIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-                          linkedTpIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        },
-                        required: ['title', 'materialIds', 'linkedAtpItemIds', 'linkedTpIds'],
+    const response = await generateContentWithRetry(ai, {
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            units: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  unitId: { type: Type.STRING },
+                  meetings: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        title: { type: Type.STRING },
+                        materialIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        linkedAtpItemIds: { type: Type.ARRAY, items: { type: Type.STRING } },
+                        linkedTpIds: { type: Type.ARRAY, items: { type: Type.STRING } },
                       },
+                      required: ['title', 'materialIds', 'linkedAtpItemIds', 'linkedTpIds'],
                     },
                   },
-                  required: ['unitId', 'meetings'],
                 },
+                required: ['unitId', 'meetings'],
               },
             },
-            required: ['units'],
           },
+          required: ['units'],
         },
+      },
+    });
+
+    const parsed = cleanAndParseJSON(response.text, null);
+    if (!parsed || !Array.isArray(parsed.units)) {
+      return res.status(400).json({ error: 'AI mengembalikan format respon yang tidak valid.' });
+    }
+
+    const validUnitsMap = new Map<string, any>(mapping.units.map((u: any) => [u.id, u]));
+    const seenUnitIds = new Set<string>();
+
+    let suggS1Count = 0;
+    let suggS2Count = 0;
+
+    const unitCoverageMap = new Map<string, {
+      materials: Set<string>;
+      atpItems: Set<string>;
+      tps: Set<string>;
+    }>();
+
+    // Initialize with existing meetings coverage
+    for (const unit of mapping.units) {
+      const unitPlan = currentPlan?.units?.find((u: any) => u.unitId === unit.id);
+      const existingMeetings = unitPlan?.meetings || [];
+      unitCoverageMap.set(unit.id, {
+        materials: new Set(existingMeetings.flatMap((m: any) => m.materialIds || [])),
+        atpItems: new Set(existingMeetings.flatMap((m: any) => m.linkedAtpItemIds || [])),
+        tps: new Set(existingMeetings.flatMap((m: any) => m.linkedTpIds || [])),
       });
+    }
 
-      const parsed = cleanAndParseJSON(response.text, null);
-      if (parsed && Array.isArray(parsed.units)) {
-        const validUnitsMap = new Map(mapping.units.map((u: any) => [u.id, u]));
-        const sanitizedUnits: any[] = [];
+    const sanitizedUnits: any[] = [];
 
-        for (const su of parsed.units) {
-          const uId = su.unitId;
-          const canonicalUnit = validUnitsMap.get(uId);
-          if (!canonicalUnit) {
-            return res.status(400).json({ error: `AI menghasilkan unitId tidak valid: '${uId}'` });
-          }
+    for (const su of parsed.units) {
+      if (!su || typeof su !== 'object') {
+        return res.status(400).json({ error: 'Struktur Unit dari AI tidak valid.' });
+      }
+      const uId = su.unitId;
+      if (!uId) {
+        return res.status(400).json({ error: 'AI mengembalikan Unit tanpa unitId.' });
+      }
+      if (seenUnitIds.has(uId)) {
+        return res.status(400).json({ error: `AI mengembalikan unitId '${uId}' ganda.` });
+      }
+      seenUnitIds.add(uId);
 
-          const validMatIds = new Set((canonicalUnit.materials || []).map((m: any) => m.id));
-          const validAtpIds = new Set(canonicalUnit.linkedAtpItemIds || []);
-          const validTpIds = new Set(canonicalUnit.linkedTpIds || []);
+      const canonicalUnit = validUnitsMap.get(uId);
+      if (!canonicalUnit) {
+        return res.status(400).json({ error: `AI menghasilkan unitId tidak valid: '${uId}'` });
+      }
 
-          const sanitizedMeetings: any[] = [];
-          const rawMeetings = Array.isArray(su.meetings) ? su.meetings : [];
+      const validMatIds = new Set((canonicalUnit.materials || []).map((m: any) => m.id));
+      const validAtpIds = new Set(canonicalUnit.linkedAtpItemIds || []);
+      const validTpIds = new Set(canonicalUnit.linkedTpIds || []);
 
-          for (const m of rawMeetings) {
-            const title = typeof m.title === 'string' ? m.title.trim() : '';
-            if (!title) continue;
+      const semester = s1UnitsSet.has(uId) ? 1 : s2UnitsSet.has(uId) ? 2 : 1;
 
-            const matIds = Array.isArray(m.materialIds) ? Array.from(new Set(m.materialIds.filter((id: string) => validMatIds.has(id)))) : [];
-            const atpIds = Array.isArray(m.linkedAtpItemIds) ? Array.from(new Set(m.linkedAtpItemIds.filter((id: string) => validAtpIds.has(id)))) : [];
-            const tpIds = Array.isArray(m.linkedTpIds) ? Array.from(new Set(m.linkedTpIds.filter((id: string) => validTpIds.has(id)))) : [];
+      const rawMeetings = su.meetings;
+      if (!Array.isArray(rawMeetings)) {
+        return res.status(400).json({ error: `AI mengembalikan meetings bukan array untuk unit '${uId}'` });
+      }
 
-            sanitizedMeetings.push({
-              title,
-              materialIds: matIds,
-              linkedAtpItemIds: atpIds,
-              linkedTpIds: tpIds,
-            });
-          }
+      const sanitizedMeetings: any[] = [];
+      const cov = unitCoverageMap.get(uId)!;
 
-          sanitizedUnits.push({
-            unitId: uId,
-            meetings: sanitizedMeetings,
-          });
+      for (const m of rawMeetings) {
+        if (!m || typeof m !== 'object') {
+          return res.status(400).json({ error: 'Pertemuan dari AI tidak valid.' });
+        }
+        const title = typeof m.title === 'string' ? m.title.trim() : '';
+        if (!title) {
+          return res.status(400).json({ error: `Judul Pertemuan kosong pada unit '${uId}'.` });
         }
 
-        return res.json({
-          success: true,
-          data: { units: sanitizedUnits },
-          engine: 'gemini',
+        if (!Array.isArray(m.materialIds) || !Array.isArray(m.linkedAtpItemIds) || !Array.isArray(m.linkedTpIds)) {
+          return res.status(400).json({ error: `Array referensi kosong atau salah tipe pada unit '${uId}'.` });
+        }
+
+        const uniqMatIds = new Set(m.materialIds);
+        const uniqAtpIds = new Set(m.linkedAtpItemIds);
+        const uniqTpIds = new Set(m.linkedTpIds);
+
+        if (uniqMatIds.size !== m.materialIds.length || uniqAtpIds.size !== m.linkedAtpItemIds.length || uniqTpIds.size !== m.linkedTpIds.length) {
+          return res.status(400).json({ error: `AI menghasilkan referensi ganda dalam satu array pada unit '${uId}'.` });
+        }
+
+        for (const matId of m.materialIds) {
+          if (!validMatIds.has(matId)) {
+            return res.status(400).json({ error: `AI merujuk materialId '${matId}' yang tidak valid/bukan milik unit '${uId}'.` });
+          }
+          cov.materials.add(matId);
+        }
+        for (const atpId of m.linkedAtpItemIds) {
+          if (!validAtpIds.has(atpId)) {
+            return res.status(400).json({ error: `AI merujuk atpId '${atpId}' yang tidak valid/bukan milik unit '${uId}'.` });
+          }
+          cov.atpItems.add(atpId);
+        }
+        for (const tpId of m.linkedTpIds) {
+          if (!validTpIds.has(tpId)) {
+            return res.status(400).json({ error: `AI merujuk tpId '${tpId}' yang tidak valid/bukan milik unit '${uId}'.` });
+          }
+          cov.tps.add(tpId);
+        }
+
+        if (m.materialIds.length + m.linkedAtpItemIds.length + m.linkedTpIds.length === 0) {
+          return res.status(400).json({ error: `Pertemuan '${title}' tidak memiliki referensi canonical apa pun.` });
+        }
+
+        if (semester === 1) suggS1Count++;
+        else suggS2Count++;
+
+        sanitizedMeetings.push({
+          title,
+          materialIds: m.materialIds,
+          linkedAtpItemIds: m.linkedAtpItemIds,
+          linkedTpIds: m.linkedTpIds,
         });
       }
-    } catch (err: any) {
-      console.warn('Gemini Unit Meetings generation failed:', err);
-    }
-  }
 
-  const fallbackUnits = mapping.units.map((unit: any) => {
-    const unitPlan = currentPlan?.units?.find((u: any) => u.unitId === unit.id);
-    const existingMeetings = unitPlan?.meetings || [];
-    const coveredMaterials = new Set(existingMeetings.flatMap((m: any) => m.materialIds || []));
-    const missingMaterials = (unit.materials || []).filter((m: any) => !coveredMaterials.has(m.id));
-
-    const meetings = missingMaterials.map((mat: any, idx: number) => ({
-      title: `Pembelajaran ${mat.title}`,
-      materialIds: [mat.id],
-      linkedAtpItemIds: mat.linkedAtpItemIds || unit.linkedAtpItemIds || [],
-      linkedTpIds: mat.linkedTpIds || unit.linkedTpIds || [],
-    }));
-
-    if (existingMeetings.length === 0 && meetings.length === 0 && (unit.materials || []).length > 0) {
-      const mat = unit.materials[0];
-      meetings.push({
-        title: `Pertemuan Pendahuluan ${unit.title || 'Bab'}`,
-        materialIds: [mat.id],
-        linkedAtpItemIds: mat.linkedAtpItemIds || unit.linkedAtpItemIds || [],
-        linkedTpIds: mat.linkedTpIds || unit.linkedTpIds || [],
+      sanitizedUnits.push({
+        unitId: uId,
+        meetings: sanitizedMeetings,
       });
     }
 
-    return {
-      unitId: unit.id,
-      meetings,
-    };
-  });
+    if (suggS1Count !== additionalS1 || suggS2Count !== additionalS2) {
+      return res.status(400).json({
+        error: `Jumlah Pertemuan baru dari AI (${suggS1Count} S1, ${suggS2Count} S2) tidak sesuai kapasitas target (${additionalS1} S1, ${additionalS2} S2).`
+      });
+    }
 
-  return res.json({
-    success: true,
-    data: { units: fallbackUnits },
-    engine: 'fallback_engine',
-  });
+    for (const unit of mapping.units) {
+      const cov = unitCoverageMap.get(unit.id);
+      if (cov) {
+        const expectedMats = (unit.materials || []).map((m: any) => m.id);
+        const expectedAtp = unit.linkedAtpItemIds || [];
+        const expectedTp = unit.linkedTpIds || [];
+
+        for (const matId of expectedMats) {
+          if (!cov.materials.has(matId)) {
+            return res.status(400).json({ error: `Cakupan Materi '${matId}' belum terpenuhi pada Unit '${unit.id}'.` });
+          }
+        }
+        for (const atpId of expectedAtp) {
+          if (!cov.atpItems.has(atpId)) {
+            return res.status(400).json({ error: `Cakupan ATP '${atpId}' belum terpenuhi pada Unit '${unit.id}'.` });
+          }
+        }
+        for (const tpId of expectedTp) {
+          if (!cov.tps.has(tpId)) {
+            return res.status(400).json({ error: `Cakupan TP '${tpId}' belum terpenuhi pada Unit '${unit.id}'.` });
+          }
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: { units: sanitizedUnits },
+      engine: 'gemini',
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Gagal memproses penyusunan AI.' });
+  }
 });
 
 // Endpoint: AI Analyze ATP Unit Mapping (Read-Only Analysis)

@@ -835,38 +835,46 @@ export function validateWorkflowDependencies(
       const s1 = sPlans.find(sp => sp.semester === 1);
       const s2 = sPlans.find(sp => sp.semester === 2);
 
+      const s1Cap = s1 ? resolveSemesterCapacityV5(s1.id, v5State) : null;
+      const s2Cap = s2 ? resolveSemesterCapacityV5(s2.id, v5State) : null;
+
+      const s1Data = s1 ? getSemesterDataV5(s1.id) : null;
+      const s2Data = s2 ? getSemesterDataV5(s2.id) : null;
+
+      const s1Slots = s1 && s1Data && s1Cap?.actualScheduledWeeklyJP
+        ? resolveEffectiveSubjectSlots({
+            semesterPlanId: s1.id,
+            schedule: s1Data.subjectWeeklySchedule,
+            expectedWeeklyJP: s1Cap.actualScheduledWeeklyJP,
+            calendar: s1Data.academicCalendar?.calendar,
+            calendarDays: s1Data.academicCalendar?.days,
+            schoolDaysPerWeek: s1Data.academicCalendar?.calendar?.schoolDaysPerWeek,
+          })
+        : { isReady: false };
+
+      const s2Slots = s2 && s2Data && s2Cap?.actualScheduledWeeklyJP
+        ? resolveEffectiveSubjectSlots({
+            semesterPlanId: s2.id,
+            schedule: s2Data.subjectWeeklySchedule,
+            expectedWeeklyJP: s2Cap.actualScheduledWeeklyJP,
+            calendar: s2Data.academicCalendar?.calendar,
+            calendarDays: s2Data.academicCalendar?.days,
+            schoolDaysPerWeek: s2Data.academicCalendar?.calendar?.schoolDaysPerWeek,
+          })
+        : { isReady: false };
+
+      const s1Allocations = s1
+        ? v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s1.id)?.value || []
+        : [];
+      const s2Allocations = s2
+        ? v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s2.id)?.value || []
+        : [];
+
       // 3. Check Subject Weekly Schedule completeness (Merdeka Only)
       let isSubjectScheduleReady = true;
       let subjectScheduleReason: string | undefined = undefined;
 
       if (curriculumType === 'KURIKULUM_MERDEKA' && s1 && s2) {
-        const s1Data = getSemesterDataV5(s1.id);
-        const s2Data = getSemesterDataV5(s2.id);
-        const s1Cap = resolveSemesterCapacityV5(s1.id, v5State);
-        const s2Cap = resolveSemesterCapacityV5(s2.id, v5State);
-
-        const s1Slots = s1Data.academicCalendar && s1Data.subjectWeeklySchedule && s1Cap?.actualScheduledWeeklyJP
-          ? resolveEffectiveSubjectSlots({
-              semesterPlanId: s1.id,
-              schedule: s1Data.subjectWeeklySchedule,
-              expectedWeeklyJP: s1Cap.actualScheduledWeeklyJP,
-              calendar: s1Data.academicCalendar.calendar,
-              calendarDays: s1Data.academicCalendar.days,
-              schoolDaysPerWeek: s1Data.academicCalendar.calendar.schoolDaysPerWeek,
-            })
-          : { isReady: false };
-
-        const s2Slots = s2Data.academicCalendar && s2Data.subjectWeeklySchedule && s2Cap?.actualScheduledWeeklyJP
-          ? resolveEffectiveSubjectSlots({
-              semesterPlanId: s2.id,
-              schedule: s2Data.subjectWeeklySchedule,
-              expectedWeeklyJP: s2Cap.actualScheduledWeeklyJP,
-              calendar: s2Data.academicCalendar.calendar,
-              calendarDays: s2Data.academicCalendar.days,
-              schoolDaysPerWeek: s2Data.academicCalendar.calendar.schoolDaysPerWeek,
-            })
-          : { isReady: false };
-
         isSubjectScheduleReady = Boolean(s1Slots.isReady && s2Slots.isReady);
         if (!isSubjectScheduleReady) {
           subjectScheduleReason = 'Tetapkan pola jadwal mapel dan pastikan slot Pertemuan efektif tersedia pada Semester 1 dan Semester 2.';
@@ -880,10 +888,6 @@ export function validateWorkflowDependencies(
       let allocationReason: string | undefined = undefined;
 
       if (s1 && s2) {
-        const s1Cap = resolveSemesterCapacityV5(s1.id, v5State);
-        const s2Cap = resolveSemesterCapacityV5(s2.id, v5State);
-        const s1Allocations = v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s1.id)?.value || [];
-        const s2Allocations = v5State.semesterData?.timeAllocation?.find((e) => e.semesterPlanId === s2.id)?.value || [];
         isCapReady = Boolean(s1Cap?.isReady && s2Cap?.isReady);
         const isS1AllocValid =
           Array.isArray(s1Allocations) &&

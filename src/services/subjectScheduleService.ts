@@ -225,64 +225,68 @@ export function resolveEffectiveSubjectSlots(params: {
     const dayOfWeekJs = currentDate.getDay(); // 0 = Sunday, 1 = Monday ... 6 = Saturday
     const dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 = dayOfWeekJs === 0 ? 7 : (dayOfWeekJs as any);
 
-    if (dayOfWeek >= 1 && dayOfWeek <= 6) {
-      const sessionsOnThisDay = schedule.sessions.filter((s) => s.dayOfWeek === dayOfWeek);
-      if (sessionsOnThisDay.length > 0) {
-        const calDay = dayMap.get(dateStr);
-        const canonicalStatus = normalizeCalendarDayStatus(calDay?.status);
+    const sessionsOnThisDay = (dayOfWeek >= 1 && dayOfWeek <= 6)
+      ? schedule.sessions.filter((s) => s.dayOfWeek === dayOfWeek)
+      : [];
 
-        if (canonicalStatus === 'UNKNOWN') {
-          return {
-            isValid: validation.isValid,
-            isComplete: validation.isComplete,
-            isReady: false,
-            isStale: validation.isStale,
-            errors: [...validation.errors, `Kalender memiliki status UNKNOWN atau belum lengkap pada tanggal ${dateStr}.`],
-            warnings: validation.warnings,
-            slots: [],
-            excludedOccurrences: [],
-            totalMeetingSlots: 0,
-            totalJP: 0,
-            totalExcludedOccurrences: 0,
-          };
-        }
+    if (sessionsOnThisDay.length === 0) {
+      currentDate.setDate(currentDate.getDate() + 1);
+      continue;
+    }
 
-        const weekInfo = effectiveWeeks.find((wk) => dateStr >= wk.startDate && dateStr <= wk.endDate);
-        const weekIndex = weekInfo ? weekInfo.weekIndex : 1;
-        const month = currentDate.getMonth() + 1;
-        const year = currentDate.getFullYear();
+    const calDay = dayMap.get(dateStr);
+    const canonicalStatus = normalizeCalendarDayStatus(calDay?.status);
 
-        if (canonicalStatus === 'EFFECTIVE_LEARNING') {
-          for (const s of sessionsOnThisDay) {
-            slots.push({
-              id: `subject-slot:${semesterPlanId}:${s.id}:${dateStr}`,
-              semesterPlanId,
-              sessionId: s.id,
-              date: dateStr,
-              dayOfWeek,
-              jp: s.jp,
-              weekIndex,
-              month,
-              year,
-            });
-          }
-        } else if (
-          canonicalStatus === 'HOLIDAY' ||
-          canonicalStatus === 'BREAK' ||
-          canonicalStatus === 'NON_LEARNING' ||
-          canonicalStatus === 'SCHOOL_EVENT' ||
-          canonicalStatus === 'ASSESSMENT'
-        ) {
-          for (const s of sessionsOnThisDay) {
-            excludedOccurrences.push({
-              sessionId: s.id,
-              date: dateStr,
-              dayOfWeek,
-              jp: s.jp,
-              reason: canonicalStatus,
-            });
-          }
-        }
+    if (canonicalStatus === 'UNKNOWN') {
+      return {
+        isValid: validation.isValid,
+        isComplete: validation.isComplete,
+        isReady: false,
+        isStale: validation.isStale,
+        errors: [...validation.errors, `Kalender memiliki status UNKNOWN atau belum lengkap pada tanggal ${dateStr}.`],
+        warnings: validation.warnings,
+        slots: [],
+        excludedOccurrences: [],
+        totalMeetingSlots: 0,
+        totalJP: 0,
+        totalExcludedOccurrences: 0,
+      };
+    }
+
+    const weekInfo = effectiveWeeks.find((wk) => dateStr >= wk.startDate && dateStr <= wk.endDate);
+    const weekIndex = weekInfo ? weekInfo.weekIndex : 1;
+    const month = currentDate.getMonth() + 1;
+    const year = currentDate.getFullYear();
+
+    if (canonicalStatus === 'EFFECTIVE_LEARNING') {
+      for (const s of sessionsOnThisDay) {
+        slots.push({
+          id: `subject-slot:${semesterPlanId}:${s.id}:${dateStr}`,
+          semesterPlanId,
+          sessionId: s.id,
+          date: dateStr,
+          dayOfWeek,
+          jp: s.jp,
+          weekIndex,
+          month,
+          year,
+        });
+      }
+    } else if (
+      canonicalStatus === 'HOLIDAY' ||
+      canonicalStatus === 'BREAK' ||
+      canonicalStatus === 'NON_LEARNING' ||
+      canonicalStatus === 'SCHOOL_EVENT' ||
+      canonicalStatus === 'ASSESSMENT'
+    ) {
+      for (const s of sessionsOnThisDay) {
+        excludedOccurrences.push({
+          sessionId: s.id,
+          date: dateStr,
+          dayOfWeek,
+          jp: s.jp,
+          reason: canonicalStatus,
+        });
       }
     }
 
