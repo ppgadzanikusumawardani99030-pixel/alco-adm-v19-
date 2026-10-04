@@ -294,7 +294,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
     }
 
     const exists = items.some((i) => i.id === currentItem.id);
-    let toSave: ATPItem;
+    let toSave: any;
 
     if (exists) {
       const existing = items.find((i) => i.id === currentItem.id)!;
@@ -307,7 +307,6 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
     } else {
       toSave = {
         id: currentItem.id,
-        stepNumber: items.length + 1,
         linkedTpIds: effectiveLinkedIds,
         focus: currentItem.focus?.trim() || undefined,
       };

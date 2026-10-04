@@ -442,20 +442,15 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
     });
   });
 
-  // Precompute Unit semantic profile
-  const unitProfiles = units.map((u) => {
-    const titleTokens = extractSubstantiveTokens(u.title || '');
-    const matTokens = (u.materials || []).flatMap((m) => extractSubstantiveTokens(m.title || ''));
-    const linkedTpTokens = (u.linkedTpIds || []).flatMap((id) => {
-      const t = tpMap.get(id);
-      return extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''}`);
-    });
+  // 1. Precompute Unit manual profiles (Primary Authority)
+  const unitManualProfiles = units.map((u) => {
+    const unitTitleTokens = extractSubstantiveTokens(u.title || '');
+    const materialTitleTokens = (u.materials || []).flatMap((m) => extractSubstantiveTokens(m.title || ''));
     return {
       unit: u,
-      titleTokens,
-      matTokens,
-      linkedTpTokens,
-      allTokens: Array.from(new Set([...titleTokens, ...matTokens, ...linkedTpTokens])),
+      unitTitleTokens,
+      materialTitleTokens,
+      manualTokens: Array.from(new Set([...unitTitleTokens, ...materialTitleTokens])),
     };
   });
 
@@ -474,42 +469,97 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
       const t = tpMap.get(id);
       return extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''} ${t?.competence || ''}`);
     });
+    const itemScopeCodes = rawLinked
+      .map((id) => tpMap.get(id)?.scopeCode)
+      .filter((sc): sc is string => typeof sc === 'string' && sc.trim().length > 0);
+
     const allItemTokens = Array.from(new Set([...itemFocusTokens, ...itemTpTokens]));
 
     const isMapped = assignedAtpSet.has(item.id);
     const currentUnitId = atpToUnitMap.get(item.id);
 
-    // Compute semantic match score against each unit
-    const scores = unitProfiles.map((prof) => {
-      let score = 0;
-      allItemTokens.forEach((token) => {
-        if (prof.titleTokens.includes(token)) score += 3.0;
-        else if (prof.matTokens.includes(token)) score += 2.5;
-        else if (prof.linkedTpTokens.includes(token)) score += 1.5;
+    // Compute match score against each unit while strictly EXCLUDING current ATP from unit context
+    const scores = unitManualProfiles.map((prof) => {
+      const u = prof.unit;
+
+      // Primary Match: Bab title and Material titles (Manual Authority)
+      let primaryScore = 0;
+      const matchingTitleTokens = prof.unitTitleTokens.filter((t) => allItemTokens.includes(t));
+      const matchingMatTokens = prof.materialTitleTokens.filter((t) => allItemTokens.includes(t));
+      primaryScore += matchingTitleTokens.length * 3.0;
+      primaryScore += matchingMatTokens.length * 3.0;
+
+      // Secondary Match: Context from OTHER ATPs in this Bab (exclude current item)
+      const otherAtpIds = (u.linkedAtpItemIds || []).filter((id) => id !== item.id);
+      const otherAtpItems = atpItems.filter((it) => otherAtpIds.includes(it.id));
+
+      const otherAtpFocusTokens = otherAtpItems.flatMap((a) => extractSubstantiveTokens(a.focus || ''));
+      const otherTpTokens = otherAtpItems.flatMap((a) => {
+        const ids = Array.isArray(a.linkedTpIds) && a.linkedTpIds.length > 0
+          ? a.linkedTpIds
+          : a.tpId
+          ? [a.tpId]
+          : [];
+        return ids.flatMap((id) => {
+          const t = tpMap.get(id);
+          return extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''} ${t?.competence || ''}`);
+        });
       });
+      const otherTpScopeCodes = otherAtpItems.flatMap((a) => {
+        const ids = Array.isArray(a.linkedTpIds) && a.linkedTpIds.length > 0
+          ? a.linkedTpIds
+          : a.tpId
+          ? [a.tpId]
+          : [];
+        return ids
+          .map((id) => tpMap.get(id)?.scopeCode)
+          .filter((sc): sc is string => typeof sc === 'string' && sc.trim().length > 0);
+      });
+
+      let secondaryScore = 0;
+      const matchingOtherFocus = otherAtpFocusTokens.filter((t) => allItemTokens.includes(t));
+      const matchingOtherTp = otherTpTokens.filter((t) => allItemTokens.includes(t));
+      const hasMatchingScopeCode =
+        itemScopeCodes.length > 0 && otherTpScopeCodes.some((sc) => itemScopeCodes.includes(sc));
+
+      secondaryScore += matchingOtherFocus.length * 1.5;
+      secondaryScore += matchingOtherTp.length * 1.5;
+      if (hasMatchingScopeCode) {
+        secondaryScore += 2.0;
+      }
+
+      const totalScore = primaryScore + secondaryScore;
+
       return {
-        unit: prof.unit,
-        score,
+        unit: u,
+        primaryScore,
+        secondaryScore,
+        totalScore,
       };
     });
 
-    scores.sort((a, b) => b.score - a.score);
+    scores.sort((a, b) => b.totalScore - a.totalScore);
     const best = scores[0];
     const second = scores[1];
 
     if (isMapped) {
-      // EVALUATE EXISTING MAPPED ATP CONSERVATIVELY
+      // EVALUATE EXISTING MAPPED ATP CONSERVATIVELY (NON-CIRCULAR)
       const currentUnit = units.find((u) => u.id === currentUnitId);
-      const currentScore = scores.find((s) => s.unit.id === currentUnitId)?.score || 0;
+      const currentScoreInfo = scores.find((s) => s.unit.id === currentUnitId);
+      const currentPrimaryScore = currentScoreInfo?.primaryScore || 0;
+      const currentTotalScore = currentScoreInfo?.totalScore || 0;
 
-      if (currentScore >= 2.0) {
+      // Must have substantive evidence from manual authority or strong combination with other ATPs
+      const isAligned = currentPrimaryScore >= 3.0 || (currentPrimaryScore >= 2.0 && currentTotalScore >= 4.0);
+
+      if (isAligned) {
         atpFindings.push({
           id: `atp-find-${idx + 1}`,
           atpItemId: item.id,
           status: 'ALIGNED',
           currentUnitId,
           supportingTpIds: rawLinked,
-          strength: currentScore >= 4.0 ? 'STRONG' : 'MODERATE',
+          strength: currentPrimaryScore >= 5.0 ? 'STRONG' : 'MODERATE',
           reason: `Langkah ATP dan rumusan TP tertaut selaras dengan fokus Bab ${currentUnit?.order || ''}: '${currentUnit?.title || ''}'.`,
         });
       } else {
@@ -525,7 +575,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
       }
     } else {
       // EVALUATE UNMAPPED ATP CONSERVATIVELY
-      if (!best || best.score < 2.0) {
+      if (!best || best.totalScore < 3.0 || (best.primaryScore === 0 && best.totalScore < 4.0)) {
         // No evidence or score too low -> REVIEW, NO action
         atpFindings.push({
           id: `atp-find-${idx + 1}`,
@@ -535,7 +585,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
           strength: 'LOW',
           reason: 'Belum ditemukan bukti keselarasan yang cukup kuat dengan Bab yang ada sehingga perlu penentuan guru.',
         });
-      } else if (second && second.score > 0 && best.score - second.score < 1.0 && best.score < 5.0) {
+      } else if (second && second.totalScore > 0 && best.totalScore - second.totalScore < 1.5 && best.totalScore < 6.0) {
         // Ambiguous match between top 2 units -> REVIEW, NO action
         atpFindings.push({
           id: `atp-find-${idx + 1}`,
@@ -547,12 +597,17 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
         });
       } else {
         // Clear winning candidate
-        const isStrong = best.score >= 5.0;
+        const matchingMat = (best.unit.materials || []).find((m) =>
+          extractSubstantiveTokens(m.title || '').some((t) => allItemTokens.includes(t))
+        );
+
+        const isStrong = best.totalScore >= 6.0;
         atpFindings.push({
           id: `atp-find-${idx + 1}`,
           atpItemId: item.id,
           status: 'UNMAPPED',
           suggestedUnitId: best.unit.id,
+          suggestedMaterialId: matchingMat?.id,
           supportingTpIds: rawLinked,
           strength: isStrong ? 'STRONG' : 'MODERATE',
           reason: `Topik langkah ATP memiliki keterkaitan substantif dengan tema Bab ${best.unit.order}: '${best.unit.title}'.`,
@@ -560,6 +615,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
             type: 'ASSIGN_ATP_TO_UNIT',
             atpItemId: item.id,
             targetUnitId: best.unit.id,
+            targetMaterialId: matchingMat?.id,
           },
         });
       }
