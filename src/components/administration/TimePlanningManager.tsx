@@ -2950,6 +2950,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
           )
         )}
       </div>
+      </div>
       )}
     </div>
   );
