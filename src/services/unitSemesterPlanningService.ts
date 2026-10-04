@@ -125,6 +125,15 @@ export function suggestSemesterBoundary(
   s1AvailableJP: number | null,
   s2AvailableJP: number | null
 ): string | null | undefined {
+  if (
+    s1AvailableJP === null ||
+    s2AvailableJP === null ||
+    s1AvailableJP <= 0 ||
+    s2AvailableJP <= 0
+  ) {
+    return undefined;
+  }
+
   const sortedUnits = [...(mapping.units || [])].sort((a, b) => a.order - b.order);
   if (sortedUnits.length <= 1) {
     return undefined; // 1 unit -> manual choice
@@ -139,26 +148,22 @@ export function suggestSemesterBoundary(
   });
 
   const totalWeight = unitWeights.reduce((sum, w) => sum + w, 0);
+  if (totalWeight <= 0) return undefined;
 
-  if (s1AvailableJP !== null && s2AvailableJP !== null && s1AvailableJP > 0 && s2AvailableJP > 0 && totalWeight > 0) {
-    const targetS1Share = s1AvailableJP / (s1AvailableJP + s2AvailableJP);
-    let cumulativeWeight = 0;
-    let bestBoundaryIndex = 0;
-    let minDiff = Infinity;
+  const targetS1Share = s1AvailableJP / (s1AvailableJP + s2AvailableJP);
+  let cumulativeWeight = 0;
+  let bestBoundaryIndex = 0;
+  let minDiff = Infinity;
 
-    for (let i = 0; i < sortedUnits.length - 1; i++) {
-      cumulativeWeight += unitWeights[i];
-      const currentShare = cumulativeWeight / totalWeight;
-      const diff = Math.abs(currentShare - targetS1Share);
-      if (diff < minDiff) {
-        minDiff = diff;
-        bestBoundaryIndex = i;
-      }
+  for (let i = 0; i < sortedUnits.length - 1; i++) {
+    cumulativeWeight += unitWeights[i];
+    const currentShare = cumulativeWeight / totalWeight;
+    const diff = Math.abs(currentShare - targetS1Share);
+    if (diff < minDiff) {
+      minDiff = diff;
+      bestBoundaryIndex = i;
     }
-
-    return sortedUnits[bestBoundaryIndex].id;
   }
 
-  const midIndex = Math.floor((sortedUnits.length - 1) / 2);
-  return sortedUnits[midIndex].id;
+  return sortedUnits[bestBoundaryIndex].id;
 }

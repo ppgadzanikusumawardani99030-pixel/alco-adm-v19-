@@ -35,16 +35,12 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
   s2AvailableJP,
   onSave,
 }) => {
-  // Local draft state for semesterPlacement
-  const [placementDraft, setPlacementDraft] = useState<UnitSemesterPlacement>(() => {
+  // Local draft state for semesterPlacement (can be undefined if not yet set)
+  const [placementDraft, setPlacementDraft] = useState<UnitSemesterPlacement | undefined>(() => {
     if (unitExecutionPlan.semesterPlacement) {
       return JSON.parse(JSON.stringify(unitExecutionPlan.semesterPlacement));
     }
-    return {
-      mode: 'CONTIGUOUS_BOUNDARY',
-      semester1LastUnitId: null,
-      updatedAt: new Date().toISOString(),
-    };
+    return undefined;
   });
 
   const [saveNotice, setSaveNotice] = useState<{
@@ -52,19 +48,24 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
     message: string;
   } | null>(null);
 
-  // Sync draft if prop updates and matches
+  // Sync draft only when persisted placement genuinely changes (stable scalar dependency)
   useEffect(() => {
     if (unitExecutionPlan.semesterPlacement) {
       setPlacementDraft(JSON.parse(JSON.stringify(unitExecutionPlan.semesterPlacement)));
+    } else {
+      setPlacementDraft(undefined);
     }
-  }, [unitExecutionPlan.semesterPlacement]);
+  }, [unitExecutionPlan?.id, unitExecutionPlan?.semesterPlacement?.updatedAt]);
 
-  // Temporary draft plan combining parent unitExecutionPlan with local placementDraft for validation & preview
+  // Temporary draft plan combining parent unitExecutionPlan with local placementDraft
   const draftPlan: UnitExecutionPlanData = useMemo(() => {
-    return {
-      ...unitExecutionPlan,
-      semesterPlacement: placementDraft,
-    };
+    const plan: UnitExecutionPlanData = { ...unitExecutionPlan };
+    if (placementDraft !== undefined) {
+      plan.semesterPlacement = placementDraft;
+    } else {
+      delete plan.semesterPlacement;
+    }
+    return plan;
   }, [unitExecutionPlan, placementDraft]);
 
   // Validation
@@ -72,9 +73,16 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
     return resolveUnitSemesterPlacement(draftPlan, mapping);
   }, [draftPlan, mapping]);
 
-  // Dirty state calculation based purely on semesterPlacement comparison
+  // Substantive Dirty state comparison (ignoring updatedAt)
   const isDirty = useMemo(() => {
-    return JSON.stringify(placementDraft) !== JSON.stringify(unitExecutionPlan.semesterPlacement || null);
+    const persisted = unitExecutionPlan.semesterPlacement;
+    const draft = placementDraft;
+    if (!persisted && !draft) return false;
+    if (!persisted || !draft) return true;
+    return (
+      persisted.mode !== draft.mode ||
+      persisted.semester1LastUnitId !== draft.semester1LastUnitId
+    );
   }, [placementDraft, unitExecutionPlan.semesterPlacement]);
 
   const sortedUnits = useMemo(() => {
@@ -91,15 +99,31 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
   }, [unitExecutionPlan]);
 
   const handleBoundaryChange = (val: string) => {
-    const lastId = val === '__NONE__' ? null : val;
-    setPlacementDraft({
-      mode: 'CONTIGUOUS_BOUNDARY',
-      semester1LastUnitId: lastId,
-      updatedAt: new Date().toISOString(),
-    });
+    if (val === '__UNSET__') {
+      setPlacementDraft(undefined);
+    } else if (val === '__NONE__') {
+      setPlacementDraft({
+        mode: 'CONTIGUOUS_BOUNDARY',
+        semester1LastUnitId: null,
+        updatedAt: new Date().toISOString(),
+      });
+    } else {
+      setPlacementDraft({
+        mode: 'CONTIGUOUS_BOUNDARY',
+        semester1LastUnitId: val,
+        updatedAt: new Date().toISOString(),
+      });
+    }
   };
 
+  const hasValidCapacity =
+    s1AvailableJP !== null &&
+    s2AvailableJP !== null &&
+    s1AvailableJP > 0 &&
+    s2AvailableJP > 0;
+
   const handleSuggest = () => {
+    if (!hasValidCapacity) return;
     const suggestedId = suggestSemesterBoundary(unitExecutionPlan, mapping, s1AvailableJP, s2AvailableJP);
     if (suggestedId !== undefined) {
       setPlacementDraft({
@@ -117,6 +141,8 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
   };
 
   const handleSave = () => {
+    if (!placementDraft) return;
+
     if (!validation.isValid) {
       setSaveNotice({
         type: 'error',
@@ -152,18 +178,25 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
     }
   };
 
-  // Separate units into S1 and S2 based on validation resolvedUnits
+  // Separate units into S1 and S2 based on validation resolvedUnits if placementDraft is set
   const sem1Units = useMemo(() => {
+    if (!placementDraft) return [];
     const s1Ids = new Set(validation.semester1UnitIds);
     return sortedUnits.filter((u) => s1Ids.has(u.id));
-  }, [sortedUnits, validation.semester1UnitIds]);
+  }, [sortedUnits, validation.semester1UnitIds, placementDraft]);
 
   const sem2Units = useMemo(() => {
+    if (!placementDraft) return sortedUnits; // If unset, preview shows all units as unassigned / default
     const s2Ids = new Set(validation.semester2UnitIds);
     return sortedUnits.filter((u) => s2Ids.has(u.id));
-  }, [sortedUnits, validation.semester2UnitIds]);
+  }, [sortedUnits, validation.semester2UnitIds, placementDraft]);
 
-  const selectValue = placementDraft.semester1LastUnitId === null ? '__NONE__' : placementDraft.semester1LastUnitId;
+  const selectValue =
+    placementDraft === undefined
+      ? '__UNSET__'
+      : placementDraft.semester1LastUnitId === null
+      ? '__NONE__'
+      : placementDraft.semester1LastUnitId;
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden mb-8">
@@ -196,9 +229,9 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
           <button
             type="button"
             onClick={handleSave}
-            disabled={!isDirty || !validation.isValid || validation.isStale}
+            disabled={!placementDraft || !isDirty || !validation.isValid || validation.isStale}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
-              !isDirty || !validation.isValid || validation.isStale
+              !placementDraft || !isDirty || !validation.isValid || validation.isStale
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
                 : 'bg-blue-600 text-white hover:bg-blue-500 shadow-md shadow-blue-600/20'
             }`}
@@ -272,6 +305,7 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
             onChange={(e) => handleBoundaryChange(e.target.value)}
             className="text-xs font-semibold bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-900 focus:outline-hidden focus:ring-2 focus:ring-blue-600 max-w-sm"
           >
+            <option value="__UNSET__">Belum ditetapkan</option>
             <option value="__NONE__">Tidak ada Unit di Semester 1 (Semua masuk Semester 2)</option>
             {sortedUnits.map((u) => (
               <option key={u.id} value={u.id}>
@@ -281,15 +315,22 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
           </select>
         </div>
 
-        <button
-          type="button"
-          onClick={handleSuggest}
-          disabled={s1AvailableJP === null || s2AvailableJP === null}
-          className="px-4 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs border border-indigo-200 flex items-center gap-1.5 shadow-2xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-        >
-          <Sparkles className="w-3.5 h-3.5" />
-          <span>Sarankan Pembagian</span>
-        </button>
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          <button
+            type="button"
+            onClick={handleSuggest}
+            disabled={!hasValidCapacity}
+            className="px-4 py-2 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold text-xs border border-indigo-200 flex items-center gap-1.5 shadow-2xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Sarankan Pembagian</span>
+          </button>
+          {!hasValidCapacity && (
+            <span className="text-[11px] text-amber-700 font-medium">
+              Lengkapi kapasitas Kalender/JP Semester 1 dan Semester 2 untuk mendapatkan saran otomatis.
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="px-5 py-2 text-[11px] text-slate-500 bg-white border-b border-slate-100">
@@ -310,7 +351,11 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
             </span>
           </div>
 
-          {sem1Units.length === 0 ? (
+          {placementDraft === undefined ? (
+            <div className="p-6 text-center rounded-xl border border-dashed border-blue-200 bg-white/50 text-xs text-slate-500">
+              Belum ditetapkan — pilih Batas Akhir Semester 1 di atas.
+            </div>
+          ) : sem1Units.length === 0 ? (
             <div className="p-6 text-center rounded-xl border border-dashed border-blue-200 bg-white/50 text-xs text-slate-500">
               Tidak ada Unit di Semester 1
             </div>
@@ -346,7 +391,11 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
             </span>
           </div>
 
-          {sem2Units.length === 0 ? (
+          {placementDraft === undefined ? (
+            <div className="p-6 text-center rounded-xl border border-dashed border-indigo-200 bg-white/50 text-xs text-slate-500">
+              Belum ditetapkan (pratinjau default semua unit).
+            </div>
+          ) : sem2Units.length === 0 ? (
             <div className="p-6 text-center rounded-xl border border-dashed border-indigo-200 bg-white/50 text-xs text-slate-500">
               Tidak ada Unit di Semester 2
             </div>
