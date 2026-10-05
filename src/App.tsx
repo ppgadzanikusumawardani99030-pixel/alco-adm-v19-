@@ -1274,13 +1274,13 @@ export function App() {
 
   const handleSaveK13Analysis = (analysis: any) => {};
   const handleSaveK13KKM = (kkm: any) => {};
-  const handleSaveLearningPlan = (plan: LearningPlan) => {
+  const handleSaveLearningPlan = (plan: LearningPlan): boolean => {
     if (!activeSemesterPlan) {
       setAppNotice({
         type: 'error',
         message: 'Pilih Semester aktif terlebih dahulu sebelum menyimpan modul ajar / rencana pembelajaran.',
       });
-      return;
+      return false;
     }
 
     try {
@@ -1300,11 +1300,13 @@ export function App() {
 
       saveLearningPlansV5(activeSemesterPlan.id, nextPlans);
       refreshV5();
+      return true;
     } catch (err: any) {
       setAppNotice({
         type: 'error',
         message: err instanceof Error ? err.message : 'Gagal menyimpan modul ajar.',
       });
+      return false;
     }
   };
 

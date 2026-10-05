@@ -100,7 +100,7 @@ interface LearningPlanManagerProps {
   assessmentCriteria?: AssessmentCriterion[];
   assessmentPlans?: AssessmentPlan[];
   learningPlans: LearningPlan[];
-  onSavePlan: (plan: LearningPlan) => void;
+  onSavePlan: (plan: LearningPlan) => boolean;
   onSaveBulkPlans?: (plans: LearningPlan[]) => void;
   onDeletePlan: (planId: string) => void;
 }
@@ -581,6 +581,12 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
         sourceType: 'AI_DRAFT',
       };
 
+      const saved = onSavePlan(replacement);
+
+      if (!saved) {
+        throw new Error('Draf AI berhasil dibuat tetapi gagal disimpan.');
+      }
+
       recordDiagnosticEvent({
         scope: 'LEARNING_PLAN',
         action: 'LEARNING_PLAN_AI_REGENERATE',
@@ -593,7 +599,6 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
         },
       });
 
-      onSavePlan(replacement);
       showNotification('success', 'Draf AI Modul Ajar berhasil diregenerasi (Status: DRAFT).');
     } catch (err: any) {
       console.error('Failed to regenerate AI Learning Plan:', err);
