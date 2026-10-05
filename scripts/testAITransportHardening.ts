@@ -99,6 +99,7 @@ async function runTests() {
         },
         json: async () => ({
           success: true,
+          engine: 'gemini',
           items: [
             {
               code: 'TP 4.1',
@@ -114,7 +115,8 @@ async function runTests() {
     };
 
     try {
-      const items = await generateTPWithAI(dummyParams);
+      const res = await generateTPWithAI(dummyParams);
+      const items = res.items;
       assert(items.length === 1, 'Correctly parsed valid JSON items array');
       assert(items[0].statement === 'Murid mampu mengidentifikasi perkalian sebagai penjumlahan berulang.', 'Maps statement correctly');
       assert(lastBody && lastBody.cpAnalysisItems !== undefined, 'cpAnalysisItems was transmitted to the backend');

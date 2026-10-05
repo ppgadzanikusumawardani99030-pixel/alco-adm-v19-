@@ -510,6 +510,109 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     }
   };
 
+  const resolveCanonicalScopeOfActivePlan = (): LearningPlanScopeUnit | null => {
+    if (!activePlan) return null;
+
+    if (activePlan.unitId) {
+      const matched = semesterScopes.find((scope) => scope.unitId === activePlan.unitId);
+      if (matched) return matched;
+    }
+
+    const planMeetings = activePlan.learningMeetingIds || [];
+    if (planMeetings.length > 0) {
+      const exactMatch = semesterScopes.find((scope) => {
+        const scopeMeetings = scope.learningMeetingIds || [];
+        if (scopeMeetings.length === planMeetings.length) {
+          return scopeMeetings.every((id) => planMeetings.includes(id));
+        }
+        return false;
+      });
+      if (exactMatch) return exactMatch;
+
+      const overlapMatch = semesterScopes.find((scope) => {
+        const scopeMeetings = scope.learningMeetingIds || [];
+        return scopeMeetings.some((id) => planMeetings.includes(id));
+      });
+      if (overlapMatch) return overlapMatch;
+    }
+
+    return null;
+  };
+
+  const handleRegenerateAI = async () => {
+    if (!activePlan) return;
+
+    const scope = resolveCanonicalScopeOfActivePlan();
+    if (!scope) {
+      showNotification('error', 'Scope aktif untuk modul ajar ini tidak ditemukan.');
+      return;
+    }
+
+    const confirmed = window.confirm('Regenerate akan mengganti isi draf Modul Ajar ini dengan hasil AI baru. Lanjutkan?');
+    if (!confirmed) {
+      return;
+    }
+
+    recordDiagnosticEvent({
+      scope: 'LEARNING_PLAN',
+      action: 'LEARNING_PLAN_AI_REGENERATE',
+      status: 'STARTED',
+      metadata: {
+        planId: activePlan.id,
+        unitId: scope.unitId || '-',
+        learningMeetingCount: scope.learningMeetingIds?.length || 0,
+        allocatedJP: scope.jp || 0,
+      },
+    });
+
+    setIsGeneratingAI(true);
+    showNotification('info', `Sedang meregenerasi Draf AI Modul Ajar untuk unit '${scope.title || scope.unitTitle || ''}'...`);
+
+    try {
+      const regenerated = await generateAIDraftPlanForScope(scope);
+
+      const replacement: LearningPlan = {
+        ...regenerated,
+        id: activePlan.id,
+        createdAt: activePlan.createdAt,
+        updatedAt: new Date().toISOString(),
+        confirmedAt: undefined,
+        status: 'DRAFT',
+        sourceType: 'AI_DRAFT',
+      };
+
+      recordDiagnosticEvent({
+        scope: 'LEARNING_PLAN',
+        action: 'LEARNING_PLAN_AI_REGENERATE',
+        status: 'SUCCESS',
+        metadata: {
+          planId: activePlan.id,
+          unitId: scope.unitId || '-',
+          learningMeetingCount: scope.learningMeetingIds?.length || 0,
+          allocatedJP: scope.jp || 0,
+        },
+      });
+
+      onSavePlan(replacement);
+      showNotification('success', 'Draf AI Modul Ajar berhasil diregenerasi (Status: DRAFT).');
+    } catch (err: any) {
+      console.error('Failed to regenerate AI Learning Plan:', err);
+      showNotification('error', `Gagal meregenerasi draf AI: ${err.message || 'Terjadi kesalahan'}`);
+      recordDiagnosticEvent({
+        scope: 'LEARNING_PLAN',
+        action: 'LEARNING_PLAN_AI_REGENERATE',
+        status: 'FAILED',
+        metadata: {
+          planId: activePlan.id,
+          unitId: scope.unitId || '-',
+          error: err.message || 'Unknown error',
+        },
+      });
+    } finally {
+      setIsGeneratingAI(false);
+    }
+  };
+
   const handleBulkCreateAIDrafts = async () => {
     if (curriculumType === 'K13') {
       recordLearningPlanBlocked('CURRICULUM_UNRESOLVED');
@@ -1084,6 +1187,17 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2 pb-2">
+                  {!isK13Curriculum && activePlan.sourceType === 'AI_DRAFT' && (
+                    <button
+                      onClick={handleRegenerateAI}
+                      disabled={isGeneratingAI}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg shadow-sm disabled:opacity-50 cursor-pointer"
+                      title="Regenerate draf modul ajar ini dengan hasil AI baru"
+                    >
+                      <RotateCcw className={`w-3.5 h-3.5 ${isGeneratingAI ? 'animate-spin' : ''}`} />
+                      <span>{isGeneratingAI ? 'Regenerate...' : 'Regenerate AI'}</span>
+                    </button>
+                  )}
                   <button
                     onClick={handleExportDocx}
                     disabled={isExporting !== null}
