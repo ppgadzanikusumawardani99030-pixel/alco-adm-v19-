@@ -6,6 +6,7 @@ import {
   TPData,
   UnitExecutionPlanData,
 } from '../types';
+import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 
 export interface ScheduledLearningMeetingProjection {
   meetingId: string;
@@ -49,9 +50,25 @@ export function resolveScheduledLearningMeetings(params: {
   const errors: string[] = [];
   const rows: ScheduledLearningMeetingProjection[] = [];
 
+  // 1. Canonical UnitExecutionPlan validation
+  const planValidation = validateUnitExecutionPlan(
+    unitExecutionPlan,
+    mapping,
+    atp || null,
+    tp || null
+  );
+
+  if (planValidation.isStale) {
+    errors.push('Struktur Pertemuan stale relatif terhadap Pemetaan Unit/Bab.');
+  }
+  if (!planValidation.isValid) {
+    errors.push(...planValidation.errors);
+  }
+  if (!planValidation.isComplete) {
+    errors.push('Struktur Pertemuan belum lengkap (coverage atau pertemuan masih kurang).');
+  }
+
   const mappingUnitMap = new Map((mapping.units || []).map((unit) => [unit.id, unit]));
-  const tpIdSet = new Set((tp?.items || []).map((item) => item.id));
-  const atpItemIdSet = new Set((atp?.items || []).map((item) => item.id));
   const meetingMap = new Map<string, {
     unitId: string;
     meetingTitle: string;
@@ -63,16 +80,10 @@ export function resolveScheduledLearningMeetings(params: {
 
   for (const unitPlan of unitExecutionPlan.units || []) {
     if (!mappingUnitMap.has(unitPlan.unitId)) {
-      errors.push(`UnitExecutionPlan unit "${unitPlan.unitId}" tidak ditemukan pada ATPUnitMapping.`);
       continue;
     }
 
     for (const meeting of unitPlan.meetings || []) {
-      if (meetingMap.has(meeting.id)) {
-        errors.push(`Duplicate meetingId pada UnitExecutionPlan: "${meeting.id}".`);
-        continue;
-      }
-
       meetingMap.set(meeting.id, {
         unitId: unitPlan.unitId,
         meetingTitle: meeting.title,
@@ -84,27 +95,31 @@ export function resolveScheduledLearningMeetings(params: {
     }
   }
 
-  for (const meeting of meetingMap.values()) {
-    for (const tpId of meeting.linkedTpIds) {
-      if (tp && !tpIdSet.has(tpId)) {
-        errors.push(`Meeting "${meeting.meetingTitle}" memiliki linkedTpId dangling: "${tpId}".`);
-      }
-    }
-    for (const atpItemId of meeting.linkedAtpItemIds) {
-      if (atp && !atpItemIdSet.has(atpItemId)) {
-        errors.push(`Meeting "${meeting.meetingTitle}" memiliki linkedAtpItemId dangling: "${atpItemId}".`);
-      }
-    }
-  }
-
+  // 2. Validate schedules and semester bundle integrity
   const scheduleSemesterPlanIds = new Set<string>();
+  const scheduleSemesters = new Set<number>();
   const projectedMeetingIds = new Set<string>();
+
   for (const scheduleInput of schedules || []) {
     const { semesterPlanId, semester, schedule } = scheduleInput;
+
+    if (semester !== 1 && semester !== 2) {
+      errors.push(`Nilai semester "${semester}" tidak valid (harus 1 atau 2).`);
+    }
+    if (scheduleSemesters.has(semester)) {
+      errors.push(`Duplicate schedule untuk semester ${semester}.`);
+    }
+    scheduleSemesters.add(semester);
+
     if (scheduleSemesterPlanIds.has(semesterPlanId)) {
       errors.push(`Duplicate schedule untuk semesterPlanId "${semesterPlanId}".`);
     }
     scheduleSemesterPlanIds.add(semesterPlanId);
+
+    if (!schedule) {
+      errors.push(`Schedule untuk semester ${semester} tidak ada.`);
+      continue;
+    }
 
     if (schedule.semesterPlanId !== semesterPlanId) {
       errors.push(`LearningMeetingScheduleData semesterPlanId "${schedule.semesterPlanId}" tidak cocok dengan input "${semesterPlanId}".`);
@@ -152,11 +167,27 @@ export function resolveScheduledLearningMeetings(params: {
         continue;
       }
 
-      const materialIdSet = new Set(meeting.materialIds);
-      const materials = (mappingUnit.materials || [])
-        .filter((material) => materialIdSet.size === 0 || materialIdSet.has(material.id))
-        .sort((a, b) => a.order - b.order)
-        .map((material) => ({ id: material.id, title: material.title }));
+      // 3. Resolve materials strictly without fallback
+      const unitMaterialsMap = new Map((mappingUnit.materials || []).map((m) => [m.id, m]));
+      const materialList: { id: string; title: string; order: number }[] = [];
+      let hasOrphanMaterial = false;
+
+      for (const matId of meeting.materialIds || []) {
+        const mat = unitMaterialsMap.get(matId);
+        if (!mat) {
+          hasOrphanMaterial = true;
+          errors.push(`Meeting "${entry.meetingId}" merujuk materialId "${matId}" yang tidak ditemukan pada unit "${meeting.unitId}".`);
+        } else {
+          materialList.push({ id: mat.id, title: mat.title, order: mat.order });
+        }
+      }
+
+      if (hasOrphanMaterial) {
+        continue;
+      }
+
+      materialList.sort((a, b) => a.order - b.order);
+      const materials = materialList.map((m) => ({ id: m.id, title: m.title }));
 
       rows.push({
         meetingId: entry.meetingId,
