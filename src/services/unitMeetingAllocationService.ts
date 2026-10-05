@@ -111,15 +111,8 @@ export function allocateUnitMeetings(params: AllocateUnitMeetingsParams): UnitMe
       const hasMissingCoverage =
         missingMaterialCount > 0 || missingAtpCount > 0 || missingTpCount > 0;
 
-      // Calculate weight
-      const weight = hasMissingCoverage
-        ? Math.max(1, missingMaterialCount, missingAtpCount, missingTpCount)
-        : Math.max(
-            1,
-            (unit.materials || []).length,
-            (unit.linkedAtpItemIds || []).length,
-            (unit.linkedTpIds || []).length
-          );
+      // Weight is strictly based on missing coverage
+      const weight = Math.max(1, missingMaterialCount, missingAtpCount, missingTpCount);
 
       return {
         unit,

@@ -946,9 +946,9 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                   unitExecutionPlan={unitExecutionPlan}
                   atp={atp}
                   tp={tp}
-                  subject={academicSetting?.subject || tp?.subject || atp?.subject}
-                  grade={academicSetting?.grade || tp?.grade || atp?.grade}
-                  phase={academicSetting?.phase || tp?.phase || atp?.phase}
+                  subject={academicSetting.subject}
+                  grade={academicSetting.grade}
+                  phase={academicSetting.phase}
                   onSave={onSaveUnitExecutionPlan}
                   meetingCapacity={{
                     semester1: {

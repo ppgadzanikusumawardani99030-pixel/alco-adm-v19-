@@ -213,9 +213,9 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
         newTargetCount: u.newTargetCount,
       }));
 
-      const resolvedSubject = subject || tp?.subject || atp?.subject || 'Mata Pelajaran';
-      const resolvedGrade = grade || tp?.grade || atp?.grade || '';
-      const resolvedPhase = phase || tp?.phase || atp?.phase || '';
+      const resolvedSubject = subject || 'Mata Pelajaran';
+      const resolvedGrade = grade || '';
+      const resolvedPhase = phase || '';
 
       const result = await generateUnitMeetingsWithAI({
         subject: resolvedSubject,

@@ -1749,9 +1749,18 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
   const sortedMappingUnits = [...(mapping.units || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
   const validUnitIdsSet = new Set(sortedMappingUnits.map((u) => u.id));
 
-  const semester1LastUnitId = capacityContext?.semester1LastUnitId !== undefined
-    ? capacityContext.semester1LastUnitId
-    : (currentPlan?.semesterPlacement?.semester1LastUnitId ?? null);
+  let semester1LastUnitId: string | null | undefined;
+  if (capacityContext && capacityContext.semester1LastUnitId !== undefined) {
+    semester1LastUnitId = capacityContext.semester1LastUnitId;
+  } else if (
+    currentPlan?.semesterPlacement &&
+    currentPlan.semesterPlacement.mode === 'CONTIGUOUS_BOUNDARY' &&
+    currentPlan.semesterPlacement.semester1LastUnitId !== undefined
+  ) {
+    semester1LastUnitId = currentPlan.semesterPlacement.semester1LastUnitId;
+  } else {
+    semester1LastUnitId = undefined;
+  }
   const semester1UnitIds: string[] = [];
   const semester2UnitIds: string[] = [];
 
@@ -1794,7 +1803,7 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
     }
   }
 
-  if (currentPlan?.semesterPlacement && capacityContext) {
+  if (currentPlan?.semesterPlacement && capacityContext && capacityContext.semester1LastUnitId !== undefined) {
     if (currentPlan.semesterPlacement.semester1LastUnitId !== capacityContext.semester1LastUnitId) {
       return res.status(400).json({
         success: false,
