@@ -1,10 +1,14 @@
-import { DocumentGenerationContext, ProtaSemesterAllocationBundle } from './types';
-import { TimeAllocation, ATPItem, K13AnalysisItem } from '../../types';
+import { DocumentGenerationContext } from './types';
+import { TimeAllocation } from '../../types';
+import { resolveMerdekaCanonicalTimeProjection } from './meetingTimeProjection';
 
 export interface ProtaProjectionRow {
   id: string;
-  sourceType: 'ATP_ITEM' | 'ASSESSMENT' | 'RESERVE';
+  sourceType: 'ATP_ITEM' | 'ASSESSMENT' | 'RESERVE' | 'UNIT';
   atpItemId?: string;
+  unitId?: string;
+  unitTitle?: string;
+  unitOrder?: number;
   tpCode: string;
   tpStatement: string;
   materialScope: string;
@@ -78,14 +82,16 @@ export function buildProtaProjection(context: DocumentGenerationContext): ProtaP
     };
   }
 
-  const atpItems = context.atp?.items || [];
-  const bundles = context.protaSemesterAllocations || [];
+  // Pure Canonical Projection for Kurikulum Merdeka
+  const canonical = resolveMerdekaCanonicalTimeProjection(context);
 
-  // Check for missing prerequisites
-  if (!context.atp || atpItems.length === 0 || bundles.length === 0) {
+  if (!canonical.isReady) {
     return {
       isReady: false,
-      unreadyReason: 'Program Tahunan belum dapat dibuat karena alur tujuan pembelajaran atau data distribusi semester belum tersedia.',
+      unreadyReason:
+        canonical.errors.length > 0
+          ? `Program Tahunan belum dapat dibuat karena: ${canonical.errors.join(' ')}`
+          : 'Program Tahunan belum dapat dibuat karena Jadwal Aktual Semester 1 dan Semester 2 belum lengkap.',
       academicYear,
       rows: [],
       assessmentRows: [],
@@ -101,37 +107,15 @@ export function buildProtaProjection(context: DocumentGenerationContext): ProtaP
     };
   }
 
-  // 1. Bundle validations
-  const s1Bundles = bundles.filter((b) => b.semester === 1);
-  const s2Bundles = bundles.filter((b) => b.semester === 2);
+  // Check that canonical schedule rows exist for BOTH Semester 1 and Semester 2
+  const hasS1 = canonical.rows.some((r) => r.semester === 1);
+  const hasS2 = canonical.rows.some((r) => r.semester === 2);
 
-  const hasBundleConflict = s1Bundles.length > 1 || s2Bundles.length > 1;
-  const hasS1Bundle = s1Bundles.length > 0;
-  const hasS2Bundle = s2Bundles.length > 0;
-
-  if (hasBundleConflict) {
+  if (!hasS1 || !hasS2) {
     return {
       isReady: false,
-      unreadyReason: 'Terdapat konflik alokasi: Duplikasi data distribusi Semester 1 atau Semester 2.',
-      academicYear,
-      rows: [],
-      assessmentRows: [],
-      reserveRows: [],
-      semester1AllocatedJP: 0,
-      semester2AllocatedJP: 0,
-      totalAllocatedJP: 0,
-      officialAnnualJP,
-      referenceWeeklyEquivalentJP,
-      regulationReference,
-      remainingAnnualJP: null,
-      validationStatus: 'CONFLICT',
-    };
-  }
-
-  if (!hasS1Bundle || !hasS2Bundle) {
-    return {
-      isReady: false,
-      unreadyReason: 'Program Tahunan belum dapat dibuat karena data distribusi Semester 1 dan Semester 2 belum lengkap.',
+      unreadyReason:
+        'Program Tahunan belum dapat dibuat karena Jadwal Aktual Semester 1 dan Semester 2 belum lengkap.',
       academicYear,
       rows: [],
       assessmentRows: [],
@@ -147,135 +131,121 @@ export function buildProtaProjection(context: DocumentGenerationContext): ProtaP
     };
   }
 
-  const rows: ProtaProjectionRow[] = [];
-  const assessmentRows: ProtaProjectionRow[] = [];
-  const reserveRows: ProtaProjectionRow[] = [];
+  // Aggregate canonical meeting rows by (unitId, semester) -> 1 PROTA row per Unit/Bab per semester
+  const unitGroupMap = new Map<
+    string,
+    {
+      unitId: string;
+      unitTitle: string;
+      unitOrder: number;
+      semester: 1 | 2;
+      allocatedJP: number;
+      linkedTpIds: string[];
+      linkedAtpItemIds: string[];
+      materialTitlesSet: Set<string>;
+    }
+  >();
 
-  let hasConflict = false;
-  let hasIncomplete = false;
+  for (const row of canonical.rows) {
+    const key = `${row.unitId}_s${row.semester}`;
+    if (!unitGroupMap.has(key)) {
+      unitGroupMap.set(key, {
+        unitId: row.unitId,
+        unitTitle: row.unitTitle,
+        unitOrder: row.unitOrder,
+        semester: row.semester,
+        allocatedJP: 0,
+        linkedTpIds: [],
+        linkedAtpItemIds: [],
+        materialTitlesSet: new Set(),
+      });
+    }
 
-  // Track allocation per ATP Item ID
-  for (const item of atpItems) {
-    const s1Matches: TimeAllocation[] = [];
-    const s2Matches: TimeAllocation[] = [];
+    const group = unitGroupMap.get(key)!;
+    group.allocatedJP += row.jp;
 
-    for (const bundle of bundles) {
-      const matches = bundle.allocations.filter(
-        (alloc) =>
-          alloc.sourceType === 'ATP_ITEM' &&
-          (alloc.sourceId === item.id || alloc.atpItemId === item.id)
-      );
-      if (bundle.semester === 1) {
-        s1Matches.push(...matches);
-      } else if (bundle.semester === 2) {
-        s2Matches.push(...matches);
+    for (const tpId of row.linkedTpIds || []) {
+      if (!group.linkedTpIds.includes(tpId)) {
+        group.linkedTpIds.push(tpId);
       }
     }
-
-    const totalMatches = s1Matches.length + s2Matches.length;
-
-    if (totalMatches === 0) {
-      hasIncomplete = true;
-      continue;
-    } else if (totalMatches > 1) {
-      hasConflict = true;
-      continue;
+    for (const atpId of row.linkedAtpItemIds || []) {
+      if (!group.linkedAtpItemIds.includes(atpId)) {
+        group.linkedAtpItemIds.push(atpId);
+      }
     }
+    for (const mat of row.materials || []) {
+      if (mat.title) {
+        group.materialTitlesSet.add(mat.title);
+      }
+    }
+  }
 
-    const match = s1Matches.length === 1 ? s1Matches[0] : s2Matches[0];
-    const sem = s1Matches.length === 1 ? 1 : 2;
+  const tpItems = context.tp?.items || [];
+  const rows: ProtaProjectionRow[] = [];
+
+  const sortedGroups = Array.from(unitGroupMap.values()).sort((a, b) => {
+    if (a.semester !== b.semester) return a.semester - b.semester;
+    return a.unitOrder - b.unitOrder;
+  });
+
+  for (const group of sortedGroups) {
+    const materialScope = Array.from(group.materialTitlesSet).join(', ') || '-';
+
+    // Resolve TP statements from context.tp if available
+    const matchedTps = tpItems.filter((t) => group.linkedTpIds.includes(t.id));
+    const tpStatements = matchedTps.map((t) => t.statement).filter(Boolean);
+    const tpCodes = matchedTps.map((t) => t.code).filter(Boolean);
+
+    const tpCodeDisplay =
+      tpCodes.length > 0 ? tpCodes.join(', ') : `Bab ${group.unitOrder}`;
+    const tpStatementDisplay =
+      tpStatements.length > 0
+        ? `${group.unitTitle}\n• ${tpStatements.join('\n• ')}`
+        : group.unitTitle;
 
     rows.push({
-      id: match.id,
-      sourceType: 'ATP_ITEM',
-      atpItemId: item.id,
-      tpCode: item.tpCode || '-',
-      tpStatement: item.tpStatement || '-',
-      materialScope: item.materialScope || '-',
-      semester: sem,
-      allocatedJP: match.allocatedJP ?? match.jp ?? 0,
+      id: `${group.unitId}_s${group.semester}`,
+      sourceType: 'UNIT',
+      unitId: group.unitId,
+      unitTitle: group.unitTitle,
+      unitOrder: group.unitOrder,
+      tpCode: tpCodeDisplay,
+      tpStatement: tpStatementDisplay,
+      materialScope,
+      semester: group.semester,
+      allocatedJP: group.allocatedJP,
     });
   }
 
-  // Gather non-ATP allocations (ASSESSMENT & RESERVE)
-  for (const bundle of bundles) {
-    for (const alloc of bundle.allocations) {
-      if (alloc.sourceType === 'ASSESSMENT') {
-        assessmentRows.push({
-          id: alloc.id,
-          sourceType: 'ASSESSMENT',
-          tpCode: 'ASESMEN',
-          tpStatement: alloc.notes || 'Asesmen Sumatif',
-          materialScope: '-',
-          semester: bundle.semester as 1 | 2,
-          allocatedJP: alloc.allocatedJP ?? alloc.jp ?? 0,
-        });
-      } else if (alloc.sourceType === 'RESERVE') {
-        reserveRows.push({
-          id: alloc.id,
-          sourceType: 'RESERVE',
-          tpCode: 'CADANGAN',
-          tpStatement: alloc.notes || 'Cadangan / Pekan Sunyi',
-          materialScope: '-',
-          semester: bundle.semester as 1 | 2,
-          allocatedJP: alloc.allocatedJP ?? alloc.jp ?? 0,
-        });
-      }
-    }
-  }
-
-  // Calculate allocated JP sums
-  const getSum = (arr: ProtaProjectionRow[]) => arr.reduce((sum, r) => sum + r.allocatedJP, 0);
-
-  const s1AtpSum = getSum(rows.filter((r) => r.semester === 1));
-  const s2AtpSum = getSum(rows.filter((r) => r.semester === 2));
-
-  const s1AssessSum = getSum(assessmentRows.filter((r) => r.semester === 1));
-  const s2AssessSum = getSum(assessmentRows.filter((r) => r.semester === 2));
-
-  const s1ReserveSum = getSum(reserveRows.filter((r) => r.semester === 1));
-  const s2ReserveSum = getSum(reserveRows.filter((r) => r.semester === 2));
-
-  const semester1AllocatedJP = s1AtpSum + s1AssessSum + s1ReserveSum;
-  const semester2AllocatedJP = s2AtpSum + s2AssessSum + s2ReserveSum;
+  const semester1AllocatedJP = rows
+    .filter((r) => r.semester === 1)
+    .reduce((sum, r) => sum + r.allocatedJP, 0);
+  const semester2AllocatedJP = rows
+    .filter((r) => r.semester === 2)
+    .reduce((sum, r) => sum + r.allocatedJP, 0);
   const totalAllocatedJP = semester1AllocatedJP + semester2AllocatedJP;
 
-  const remainingAnnualJP = officialAnnualJP !== null ? officialAnnualJP - totalAllocatedJP : null;
+  const remainingAnnualJP =
+    officialAnnualJP !== null ? officialAnnualJP - totalAllocatedJP : null;
 
-  // Validation Status Priority
   let validationStatus: ProtaProjection['validationStatus'] = 'BALANCED';
-  let isReady = true;
-  let unreadyReason: string | undefined;
-
-  if (hasConflict) {
-    validationStatus = 'CONFLICT';
-    isReady = false;
-    unreadyReason = 'Terdapat konflik alokasi: Tujuan Pembelajaran dialokasikan di Semester 1 sekaligus Semester 2.';
-  } else if (hasIncomplete) {
-    validationStatus = 'INCOMPLETE';
-    isReady = false;
-    unreadyReason = 'Distribusi ATP belum lengkap: Terdapat Tujuan Pembelajaran yang belum memiliki alokasi waktu.';
-  } else if (officialAnnualJP === null) {
+  if (officialAnnualJP === null) {
     validationStatus = 'UNVERIFIED_CAPACITY';
-    isReady = true;
+  } else if (totalAllocatedJP < officialAnnualJP) {
+    validationStatus = 'UNDER_ALLOCATED';
+  } else if (totalAllocatedJP === officialAnnualJP) {
+    validationStatus = 'BALANCED';
   } else {
-    if (totalAllocatedJP < officialAnnualJP) {
-      validationStatus = 'UNDER_ALLOCATED';
-    } else if (totalAllocatedJP === officialAnnualJP) {
-      validationStatus = 'BALANCED';
-    } else {
-      validationStatus = 'OVER_ALLOCATED';
-    }
-    isReady = true;
+    validationStatus = 'OVER_ALLOCATED';
   }
 
   return {
-    isReady,
-    unreadyReason,
+    isReady: true,
     academicYear,
     rows,
-    assessmentRows,
-    reserveRows,
+    assessmentRows: [],
+    reserveRows: [],
     semester1AllocatedJP,
     semester2AllocatedJP,
     totalAllocatedJP,

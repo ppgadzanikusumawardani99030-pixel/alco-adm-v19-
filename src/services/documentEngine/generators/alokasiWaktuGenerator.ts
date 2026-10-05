@@ -19,8 +19,34 @@ import {
   createDocxSectionProperties,
 } from '../docxStyles';
 import { getSubjectJP } from '../../jpEngine';
-import { buildAlokasiWaktuProjection } from '../promesProjection';
+import { buildPromesProjection } from '../promesProjection';
 import { buildK13AlokasiWaktuRows } from '../k13AlokasiWaktuHelper';
+import { resolveMerdekaCanonicalTimeProjection } from '../meetingTimeProjection';
+
+function formatDateIndonesian(dateStr: string): string {
+  if (!dateStr) return '-';
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const year = parts[0];
+  const monthNum = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  const monthNames = [
+    '',
+    'Januari',
+    'Februari',
+    'Maret',
+    'April',
+    'Mei',
+    'Juni',
+    'Juli',
+    'Agustus',
+    'September',
+    'Oktober',
+    'November',
+    'Desember',
+  ];
+  return `${day} ${monthNames[monthNum] || parts[1]} ${year}`;
+}
 
 export async function generateAlokasiWaktu(context: DocumentGenerationContext): Promise<GeneratedDocumentResult> {
   const { school, profile, academicSetting, calendar, timeAllocations, k13Analysis } = context;
@@ -37,14 +63,24 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
     subject: academicSetting.subject,
   });
 
-  // Projection for Kurikulum Merdeka
-  const projection = buildAlokasiWaktuProjection(context);
+  const activeSemesterNum =
+    academicSetting?.semester?.includes('1') ||
+    academicSetting?.semester?.toLowerCase().includes('ganjil')
+      ? 1
+      : 2;
 
-  if (!isK13Curriculum && context.documentMode !== 'blank' && !projection.isReady) {
-    throw new Error(
-      projection.unreadyReason ||
-        'Distribusi Alokasi Waktu belum dapat dibuat karena prasyarat semester aktif belum lengkap.'
-    );
+  // Projection / Canonical setup for Kurikulum Merdeka
+  const projection = buildPromesProjection(context);
+  const merdekaCanonical = !isK13Curriculum ? resolveMerdekaCanonicalTimeProjection(context) : null;
+
+  if (!isK13Curriculum && context.documentMode !== 'blank') {
+    if (!merdekaCanonical?.isReady) {
+      throw new Error(
+        merdekaCanonical?.errors.length
+          ? `Distribusi Alokasi Waktu belum dapat dibuat karena: ${merdekaCanonical.errors.join(' ')}`
+          : 'Distribusi Alokasi Waktu belum dapat dibuat karena prasyarat semester aktif belum lengkap.'
+      );
+    }
   }
 
   const weeklyJP = isK13Curriculum
@@ -54,12 +90,24 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
   // Resolved rows for K13
   const k13Rows = isK13Curriculum ? buildK13AlokasiWaktuRows(k13Analysis?.items || [], timeAllocations) : [];
 
-  // Compute total planned JP from recorded allocations or explicit unit JP
+  // Resolved rows for Merdeka (exact canonical meetings for active semester)
+  const merdekaMeetings =
+    !isK13Curriculum && merdekaCanonical?.rows
+      ? merdekaCanonical.rows
+          .filter((r) => r.semester === activeSemesterNum)
+          .sort((a, b) => {
+            if (a.date !== b.date) return a.date.localeCompare(b.date);
+            if (a.unitOrder !== b.unitOrder) return a.unitOrder - b.unitOrder;
+            return a.meetingOrder - b.meetingOrder;
+          })
+      : [];
+
+  // Compute total planned JP
   let totalAllocatedJP = 0;
   if (isK13Curriculum) {
     totalAllocatedJP = k13Rows.reduce((sum, r) => sum + r.allocatedJP, 0);
   } else {
-    totalAllocatedJP = projection.totalAllocatedJP;
+    totalAllocatedJP = merdekaMeetings.reduce((sum, m) => sum + m.jp, 0);
   }
 
   // Header
@@ -86,7 +134,7 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
         ['Tahun Ajaran / Semester', `: ${academicSetting.academicYear || '-'} / ${academicSetting.semester || '-'}`],
         ['Beban JP Intrakurikuler per Minggu', `: ${weeklyJP !== null ? `${weeklyJP} JP / Minggu` : 'Input Manual Diperlukan'}`],
         ['Kapasitas JP Semester', `: ${projection.availableJP !== null ? `${projection.availableJP} Jam Pelajaran` : 'Belum Ditentukan'}`],
-        ['Total Alokasi Pembelajaran Terdata', `: ${projection.totalAllocatedJP} Jam Pelajaran (JP)`],
+        ['Total Alokasi Pembelajaran Terdata', `: ${totalAllocatedJP} Jam Pelajaran (JP)`],
         ['Sisa & Status Alokasi', `: ${projection.remainingJP !== null ? `${projection.remainingJP} JP` : '-'} (${projection.validationStatus})`],
         ['Dasar Regulasi Struktur', `: ${officialRule.regulation || 'Struktur Kustom Guru'}`],
       ])
@@ -99,7 +147,7 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
     createSectionHeading(
       isK13Curriculum
         ? 'A. Pemetaan Waktu Berdasarkan Analisis Kompetensi Dasar (KD)'
-        : 'A. Pemetaan Waktu Berdasarkan Alur Tujuan Pembelajaran (ATP)',
+        : 'A. Pemetaan Waktu Berdasarkan Jadwal Aktual Pertemuan Pembelajaran',
       1
     )
   );
@@ -109,10 +157,10 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
       tableHeader: true,
       children: [
         createTableHeaderCell('No', 8, AlignmentType.CENTER),
-        createTableHeaderCell(isK13Curriculum ? 'Kompetensi Dasar (KD)' : 'Kode / Jenis', 16, AlignmentType.CENTER),
-        createTableHeaderCell(isK13Curriculum ? 'Materi Pokok & Kegiatan' : 'Tujuan Pembelajaran (TP) / Kegiatan', 48, AlignmentType.LEFT),
+        createTableHeaderCell(isK13Curriculum ? 'Kompetensi Dasar (KD)' : 'Unit/Bab / Pertemuan', 26, AlignmentType.CENTER),
+        createTableHeaderCell(isK13Curriculum ? 'Materi Pokok & Kegiatan' : 'Materi Pembelajaran', 38, AlignmentType.LEFT),
         createTableHeaderCell('Alokasi JP', 14, AlignmentType.CENTER),
-        createTableHeaderCell('Distribusi Pekan Ke-', 14, AlignmentType.CENTER),
+        createTableHeaderCell(isK13Curriculum ? 'Distribusi Pekan Ke-' : 'Tanggal / Pekan', 14, AlignmentType.CENTER),
       ],
     }),
   ];
@@ -123,8 +171,8 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
         new TableRow({
           children: [
             createTableDataCell('1', 8, AlignmentType.CENTER),
-            createTableDataCell('KD -', 16, AlignmentType.CENTER),
-            createTableDataCell('Belum ada butir analisis KD yang disusun.', 48),
+            createTableDataCell('KD -', 26, AlignmentType.CENTER),
+            createTableDataCell('Belum ada butir analisis KD yang disusun.', 38),
             createTableDataCell('-', 14, AlignmentType.CENTER),
             createTableDataCell('-', 14, AlignmentType.CENTER),
           ],
@@ -136,8 +184,8 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
           new TableRow({
             children: [
               createTableDataCell((index + 1).toString(), 8, AlignmentType.CENTER),
-              createTableDataCell(item.kdCode, 16, AlignmentType.LEFT, true),
-              createTableDataCell(`${item.materi || '-'}${item.kegiatan ? `\n• Kegiatan: ${item.kegiatan}` : ''}`, 48),
+              createTableDataCell(item.kdCode, 26, AlignmentType.LEFT, true),
+              createTableDataCell(`${item.materi || '-'}${item.kegiatan ? `\n• Kegiatan: ${item.kegiatan}` : ''}`, 38),
               createTableDataCell(`${item.allocatedJP} JP`, 14, AlignmentType.CENTER, true),
               createTableDataCell(item.weekDisplay, 14, AlignmentType.CENTER),
             ],
@@ -146,42 +194,32 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
       });
     }
   } else {
-    const allMerdekaRows = [
-      ...projection.rows,
-      ...projection.assessmentRows,
-      ...projection.reserveRows,
-    ];
-
-    if (allMerdekaRows.length === 0) {
+    if (merdekaMeetings.length === 0) {
       rows.push(
         new TableRow({
           children: [
             createTableDataCell('1', 8, AlignmentType.CENTER),
-            createTableDataCell('TP -', 16, AlignmentType.CENTER),
-            createTableDataCell('Belum ada alokasi waktu yang disusun pada semester ini.', 48),
+            createTableDataCell('Pertemuan -', 26, AlignmentType.CENTER),
+            createTableDataCell('Belum ada jadwal aktual pertemuan yang disusun pada semester ini.', 38),
             createTableDataCell('-', 14, AlignmentType.CENTER),
             createTableDataCell('-', 14, AlignmentType.CENTER),
           ],
         })
       );
     } else {
-      allMerdekaRows.forEach((item, index) => {
-        const weekDisplay =
-          item.startWeek === item.endWeek
-            ? `Pekan ${item.startWeek}`
-            : `Pekan ${item.startWeek}–${item.endWeek}`;
+      merdekaMeetings.forEach((item, index) => {
+        const materialText =
+          item.materials.map((m) => m.title).filter(Boolean).join(', ') || '-';
+        const dateWeekText = `${formatDateIndonesian(item.date)} • Pekan ${item.weekIndex}`;
 
         rows.push(
           new TableRow({
             children: [
               createTableDataCell((index + 1).toString(), 8, AlignmentType.CENTER),
-              createTableDataCell(item.tpCode || `TP.${index + 1}`, 16, AlignmentType.CENTER),
-              createTableDataCell(
-                `${item.tpStatement || '-'}\n• Ruang Lingkup Materi: ${item.materialScope || '-'}`,
-                48
-              ),
-              createTableDataCell(`${item.allocatedJP} JP`, 14, AlignmentType.CENTER, true),
-              createTableDataCell(weekDisplay, 14, AlignmentType.CENTER),
+              createTableDataCell(`${item.unitTitle} — ${item.meetingTitle}`, 26, AlignmentType.LEFT, true),
+              createTableDataCell(materialText, 38, AlignmentType.LEFT),
+              createTableDataCell(`${item.jp} JP`, 14, AlignmentType.CENTER, true),
+              createTableDataCell(dateWeekText, 14, AlignmentType.CENTER),
             ],
           })
         );
@@ -194,8 +232,8 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
     new TableRow({
       children: [
         createTableHeaderCell('', 8, AlignmentType.CENTER),
-        createTableHeaderCell('TOTAL', 16, AlignmentType.CENTER),
-        createTableHeaderCell('Total Alokasi Waktu Pembelajaran Terjadwal', 48, AlignmentType.LEFT),
+        createTableHeaderCell('TOTAL', 26, AlignmentType.CENTER),
+        createTableHeaderCell('Total Alokasi Waktu Pembelajaran Terjadwal', 38, AlignmentType.LEFT),
         createTableHeaderCell(`${totalAllocatedJP} JP`, 14, AlignmentType.CENTER),
         createTableHeaderCell(isK13Curriculum ? '-' : projection.validationStatus, 14, AlignmentType.CENTER),
       ],

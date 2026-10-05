@@ -8,6 +8,8 @@ import {
   validateTimeAllocations,
 } from '../jpEngine';
 import { isK13 as isK13Check } from '../curriculumRouter';
+import { resolveSemesterJPFromValues } from '../semesterJPResolver';
+import { resolveMerdekaCanonicalTimeProjection } from './meetingTimeProjection';
 
 export interface PromesMonthHeader {
   monthKey: string;
@@ -23,8 +25,9 @@ export interface PromesMonthHeader {
 
 export interface PromesRow {
   id: string;
+  unitId?: string;
   atpItemId?: string;
-  sourceType: 'ATP_ITEM' | 'ASSESSMENT' | 'RESERVE' | 'KD' | 'OTHER';
+  sourceType: 'ATP_ITEM' | 'ASSESSMENT' | 'RESERVE' | 'KD' | 'UNIT' | 'OTHER';
   tpCode: string;
   tpStatement: string;
   materialScope: string;
@@ -56,6 +59,15 @@ export interface PromesProjection {
 }
 
 const INDONESIAN_MONTH_NAMES: Record<number, string> = {
+  1: 'Juli', // Fallback or mapping will map date month numbers
+  2: 'Agustus',
+  3: 'September',
+  4: 'Oktober',
+  5: 'November',
+  6: 'Desember',
+};
+
+const MONTH_NAMES_BY_NUMBER: Record<number, string> = {
   1: 'Januari',
   2: 'Februari',
   3: 'Maret',
@@ -78,7 +90,7 @@ export function buildAlokasiWaktuProjection(context: DocumentGenerationContext):
 }
 
 export function buildPromesProjection(context: DocumentGenerationContext): PromesProjection {
-  const { academicSetting, calendar, calendarDays = [], timeAllocations = [], atp, k13Analysis, semesterJPSetting, documentMode } = context;
+  const { academicSetting, calendar, calendarDays = [], timeAllocations = [], atp, k13Analysis, semesterJPSetting, annualJPReference, documentMode } = context;
 
   const isK13 = isK13Check(academicSetting);
   const curriculumType: 'KURIKULUM_MERDEKA' | 'K13' = isK13 ? 'K13' : 'KURIKULUM_MERDEKA';
@@ -87,6 +99,7 @@ export function buildPromesProjection(context: DocumentGenerationContext): Prome
     academicSetting?.semester?.includes('1') ||
     academicSetting?.semester?.toLowerCase().includes('ganjil');
   const semester: '1' | '2' = isSemesterGanjil ? '1' : '2';
+  const activeSemesterNum = isSemesterGanjil ? 1 : 2;
 
   const defaultMonthNames = isSemesterGanjil
     ? ['Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember']
@@ -94,22 +107,15 @@ export function buildPromesProjection(context: DocumentGenerationContext): Prome
 
   const activeSettingPlanId = academicSetting?.id;
 
-  // Defensive Semester Isolation for TimeAllocations
+  // Defensive Semester Isolation for TimeAllocations (used for K13)
   const scopedTimeAllocations = activeSettingPlanId
     ? timeAllocations.filter((a) => !a.academicSettingId || a.academicSettingId === activeSettingPlanId)
     : timeAllocations;
 
-  // Actual Weekly JP Source with SemesterJPSetting Scope Validation
-  let actualScheduledWeeklyJP: number | null = null;
-  const isJpSettingScopeValid =
-    Boolean(semesterJPSetting) &&
-    (!semesterJPSetting?.semesterPlanId ||
-      !activeSettingPlanId ||
-      semesterJPSetting.semesterPlanId === activeSettingPlanId);
-
-  if (isJpSettingScopeValid && semesterJPSetting?.actualScheduledWeeklyJP && semesterJPSetting.actualScheduledWeeklyJP > 0) {
-    actualScheduledWeeklyJP = semesterJPSetting.actualScheduledWeeklyJP;
-  } else if (isK13) {
+  // Actual Weekly JP Source using shared canonical resolver
+  const resolvedSemesterJP = resolveSemesterJPFromValues(semesterJPSetting, annualJPReference);
+  let actualScheduledWeeklyJP: number | null = resolvedSemesterJP.weeklyJP;
+  if (isK13 && !actualScheduledWeeklyJP) {
     actualScheduledWeeklyJP = academicSetting?.subjectWeeklyJP || academicSetting?.totalHoursPerWeek || null;
   }
 
@@ -167,19 +173,6 @@ export function buildPromesProjection(context: DocumentGenerationContext): Prome
     } else if (!actualScheduledWeeklyJP || actualScheduledWeeklyJP <= 0) {
       isReady = false;
       unreadyReason = 'Program Semester belum dapat dibuat karena Jam Pelajaran (JP) aktual semester aktif belum ditetapkan.';
-    } else if (!isK13) {
-      const hasAtpItems = Boolean(atp?.items && atp.items.length > 0);
-      const atpAllocs = scopedTimeAllocations.filter(
-        (a) => a.sourceType === 'ATP_ITEM' || Boolean(a.atpItemId)
-      );
-
-      if (!hasAtpItems) {
-        isReady = false;
-        unreadyReason = 'Program Semester belum dapat dibuat karena tidak ada item ATP.';
-      } else if (atpAllocs.length === 0) {
-        isReady = false;
-        unreadyReason = 'Program Semester belum dapat dibuat karena alokasi ATP semester aktif belum disusun.';
-      }
     }
   }
 
@@ -191,7 +184,7 @@ export function buildPromesProjection(context: DocumentGenerationContext): Prome
     const monthGroupMap = new Map<string, { monthKey: string; monthName: string; monthNumber: number; year?: number; weeks: Array<{ weekIndex: number; startDate?: string; endDate?: string }> }>();
 
     for (const info of effectiveWeeksList) {
-      const mName = INDONESIAN_MONTH_NAMES[info.month] || `Bulan ${info.month}`;
+      const mName = MONTH_NAMES_BY_NUMBER[info.month] || `Bulan ${info.month}`;
       const mKey = `${mName}`;
 
       if (!monthGroupMap.has(mKey)) {
@@ -260,7 +253,167 @@ export function buildPromesProjection(context: DocumentGenerationContext): Prome
     });
   });
 
-  // Helper for Row Distribution
+  const rows: PromesRow[] = [];
+  const assessmentRows: PromesRow[] = [];
+  const reserveRows: PromesRow[] = [];
+
+  if (!isK13) {
+    // KURIKULUM MERDEKA: Pure Canonical Scheduled Learning Meetings
+    if (documentMode !== 'blank') {
+      const canonical = resolveMerdekaCanonicalTimeProjection(context);
+
+      if (!canonical.isReady) {
+        isReady = false;
+        unreadyReason = canonical.errors.length > 0
+          ? `Program Semester belum dapat dibuat karena: ${canonical.errors.join(' ')}`
+          : 'Program Semester belum dapat dibuat karena Jadwal Aktual semester aktif belum lengkap.';
+      } else {
+        const activeRows = canonical.rows.filter((r) => r.semester === activeSemesterNum);
+
+        if (activeRows.length === 0) {
+          isReady = false;
+          unreadyReason = `Program Semester belum dapat dibuat karena Jadwal Aktual Semester ${activeSemesterNum} belum lengkap.`;
+        } else {
+          // Aggregate active semester canonical meetings by Unit/Bab
+          const unitPromesMap = new Map<
+            string,
+            {
+              unitId: string;
+              unitTitle: string;
+              unitOrder: number;
+              allocatedJP: number;
+              minWeek: number;
+              maxWeek: number;
+              weekAllocations: Record<number, number>;
+              monthlyJP: Record<string, number>;
+              linkedTpIds: string[];
+              linkedAtpItemIds: string[];
+              materialTitlesSet: Set<string>;
+            }
+          >();
+
+          for (const row of activeRows) {
+            if (!unitPromesMap.has(row.unitId)) {
+              const monthlyInit: Record<string, number> = {};
+              monthHeaders.forEach((mh) => {
+                monthlyInit[mh.monthName] = 0;
+              });
+
+              unitPromesMap.set(row.unitId, {
+                unitId: row.unitId,
+                unitTitle: row.unitTitle,
+                unitOrder: row.unitOrder,
+                allocatedJP: 0,
+                minWeek: row.weekIndex,
+                maxWeek: row.weekIndex,
+                weekAllocations: {},
+                monthlyJP: monthlyInit,
+                linkedTpIds: [],
+                linkedAtpItemIds: [],
+                materialTitlesSet: new Set(),
+              });
+            }
+
+            const u = unitPromesMap.get(row.unitId)!;
+            u.allocatedJP += row.jp;
+            if (row.weekIndex < u.minWeek) u.minWeek = row.weekIndex;
+            if (row.weekIndex > u.maxWeek) u.maxWeek = row.weekIndex;
+
+            // Exact week allocation from exact schedule
+            u.weekAllocations[row.weekIndex] = (u.weekAllocations[row.weekIndex] || 0) + row.jp;
+
+            // Exact month allocation based on row.date
+            const dateParts = row.date ? row.date.split('-') : [];
+            let monthName = '';
+            if (dateParts.length >= 2) {
+              const mNum = parseInt(dateParts[1], 10);
+              monthName = MONTH_NAMES_BY_NUMBER[mNum] || '';
+            }
+            if (!monthName) {
+              monthName = weekToMonthNameMap.get(row.weekIndex) || defaultMonthNames[0];
+            }
+
+            u.monthlyJP[monthName] = (u.monthlyJP[monthName] || 0) + row.jp;
+
+            for (const tpId of row.linkedTpIds || []) {
+              if (!u.linkedTpIds.includes(tpId)) u.linkedTpIds.push(tpId);
+            }
+            for (const atpId of row.linkedAtpItemIds || []) {
+              if (!u.linkedAtpItemIds.includes(atpId)) u.linkedAtpItemIds.push(atpId);
+            }
+            for (const mat of row.materials || []) {
+              if (mat.title) u.materialTitlesSet.add(mat.title);
+            }
+          }
+
+          const sortedUnits = Array.from(unitPromesMap.values()).sort((a, b) => a.unitOrder - b.unitOrder);
+          const tpItems = context.tp?.items || [];
+
+          for (const u of sortedUnits) {
+            const matchedTps = tpItems.filter((t) => u.linkedTpIds.includes(t.id));
+            const tpStatements = matchedTps.map((t) => t.statement).filter(Boolean);
+            const tpCodes = matchedTps.map((t) => t.code).filter(Boolean);
+
+            const tpCodeDisplay = tpCodes.length > 0 ? tpCodes.join(', ') : `Bab ${u.unitOrder}`;
+            const tpStatementDisplay =
+              tpStatements.length > 0
+                ? `${u.unitTitle}\n• ${tpStatements.join('\n• ')}`
+                : u.unitTitle;
+            const materialScope = Array.from(u.materialTitlesSet).join(', ') || '-';
+
+            rows.push({
+              id: u.unitId,
+              unitId: u.unitId,
+              sourceType: 'UNIT',
+              tpCode: tpCodeDisplay,
+              tpStatement: tpStatementDisplay,
+              materialScope,
+              allocatedJP: u.allocatedJP,
+              startWeek: u.minWeek,
+              endWeek: u.maxWeek,
+              monthlyJP: u.monthlyJP,
+              weekAllocations: u.weekAllocations,
+            });
+          }
+        }
+      }
+    }
+
+    const totalAllocatedJP = rows.reduce((sum, r) => sum + r.allocatedJP, 0);
+    const avail = availableJP;
+    const remainingJP = avail !== null ? avail - totalAllocatedJP : 0;
+    let validationStatus: PromesProjection['validationStatus'] = 'BALANCED';
+    if (avail !== null) {
+      if (totalAllocatedJP < avail) {
+        validationStatus = 'UNDER_ALLOCATED';
+      } else if (totalAllocatedJP === avail) {
+        validationStatus = 'BALANCED';
+      } else {
+        validationStatus = 'OVER_ALLOCATED';
+      }
+    }
+
+    return {
+      semester,
+      curriculumType,
+      actualScheduledWeeklyJP,
+      effectiveLearningDays,
+      effectiveWeeksEquivalent,
+      effectiveWeekSlots,
+      availableJP,
+      monthHeaders,
+      rows,
+      assessmentRows: [],
+      reserveRows: [],
+      totalAllocatedJP,
+      remainingJP,
+      validationStatus,
+      isReady,
+      unreadyReason,
+    };
+  }
+
+  // KURIKULUM 2013 (K13) Legacy logic
   const buildRowFromAllocation = (
     id: string,
     sourceType: PromesRow['sourceType'],
@@ -288,7 +441,6 @@ export function buildPromesProjection(context: DocumentGenerationContext): Prome
     const weekAllocations: Record<number, number> = {};
     const monthlyJP: Record<string, number> = {};
 
-    // Initialize all month headers with 0
     monthHeaders.forEach((mh) => {
       monthlyJP[mh.monthName] = 0;
     });
@@ -318,52 +470,23 @@ export function buildPromesProjection(context: DocumentGenerationContext): Prome
     };
   };
 
-  const rows: PromesRow[] = [];
-  const assessmentRows: PromesRow[] = [];
-  const reserveRows: PromesRow[] = [];
+  const k13Items = k13Analysis?.items || [];
 
-  if (!isK13) {
-    // KURIKULUM MERDEKA
-    const atpItems = atp?.items || [];
-    const atpItemMap = new Map(atpItems.map((item) => [item.id, item]));
-
+  if (scopedTimeAllocations.length > 0) {
     for (const alloc of scopedTimeAllocations) {
-      const isAtp = alloc.sourceType === 'ATP_ITEM' || Boolean(alloc.atpItemId);
-      const isAssessment = alloc.sourceType === 'ASSESSMENT';
-      const isReserve = alloc.sourceType === 'RESERVE';
-
       const jp = Number(alloc.allocatedJP ?? alloc.jp ?? 0);
       const startW = alloc.startWeek || alloc.weekNumber || 1;
       const endW = alloc.endWeek || startW;
 
-      if (isAtp) {
-        const atpId = alloc.atpItemId || alloc.sourceId;
-        const matchingItem = atpItemMap.get(atpId) || atpItems.find((i) => i.id === atpId || i.tpCode === atpId);
-
-        if (matchingItem) {
-          rows.push(
-            buildRowFromAllocation(
-              alloc.id,
-              'ATP_ITEM',
-              matchingItem.tpCode || `TP.${rows.length + 1}`,
-              matchingItem.tpStatement || '-',
-              matchingItem.materialScope || '-',
-              jp,
-              startW,
-              endW,
-              matchingItem.id,
-              alloc.notes
-            )
-          );
-        }
-      } else if (isAssessment) {
-        assessmentRows.push(
+      if (alloc.sourceType === 'KD' || alloc.sourceId) {
+        const k13Match = k13Items.find((i) => i.id === alloc.sourceId || i.kd === alloc.sourceId);
+        rows.push(
           buildRowFromAllocation(
             alloc.id,
-            'ASSESSMENT',
-            'ASESMEN',
-            alloc.notes || 'Asesmen Sumatif / Evaluasi Pembelajaran',
-            'Evaluasi Pembelajaran',
+            'KD',
+            k13Match?.kd || alloc.sourceId || `KD.${rows.length + 1}`,
+            k13Match?.indikator || k13Match?.tujuanPembelajaran || alloc.notes || '-',
+            k13Match?.materi || '-',
             jp,
             startW,
             endW,
@@ -371,13 +494,28 @@ export function buildPromesProjection(context: DocumentGenerationContext): Prome
             alloc.notes
           )
         );
-      } else if (isReserve) {
+      } else if (alloc.sourceType === 'ASSESSMENT') {
+        assessmentRows.push(
+          buildRowFromAllocation(
+            alloc.id,
+            'ASSESSMENT',
+            'ASESMEN',
+            alloc.notes || 'Asesmen Sumatif / UH / PTS / PAS',
+            'Asesmen K13',
+            jp,
+            startW,
+            endW,
+            undefined,
+            alloc.notes
+          )
+        );
+      } else if (alloc.sourceType === 'RESERVE') {
         reserveRows.push(
           buildRowFromAllocation(
             alloc.id,
             'RESERVE',
             'CADANGAN',
-            alloc.notes || 'Pekan Cadangan / Penguatan Pembelajaran',
+            alloc.notes || 'Alokasi Cadangan K13',
             'Cadangan',
             jp,
             startW,
@@ -389,87 +527,26 @@ export function buildPromesProjection(context: DocumentGenerationContext): Prome
       }
     }
   } else {
-    // KURIKULUM 2013 (K13)
-    const k13Items = k13Analysis?.items || [];
-
-    if (scopedTimeAllocations.length > 0) {
-      for (const alloc of scopedTimeAllocations) {
-        const jp = Number(alloc.allocatedJP ?? alloc.jp ?? 0);
-        const startW = alloc.startWeek || alloc.weekNumber || 1;
-        const endW = alloc.endWeek || startW;
-
-        if (alloc.sourceType === 'KD' || alloc.sourceId) {
-          const k13Match = k13Items.find((i) => i.id === alloc.sourceId || i.kd === alloc.sourceId);
-          rows.push(
-            buildRowFromAllocation(
-              alloc.id,
-              'KD',
-              k13Match?.kd || alloc.sourceId || `KD.${rows.length + 1}`,
-              k13Match?.indikator || k13Match?.tujuanPembelajaran || alloc.notes || '-',
-              k13Match?.materi || '-',
-              jp,
-              startW,
-              endW,
-              undefined,
-              alloc.notes
-            )
-          );
-        } else if (alloc.sourceType === 'ASSESSMENT') {
-          assessmentRows.push(
-            buildRowFromAllocation(
-              alloc.id,
-              'ASSESSMENT',
-              'ASESMEN',
-              alloc.notes || 'Asesmen Sumatif / UH / PTS / PAS',
-              'Asesmen K13',
-              jp,
-              startW,
-              endW,
-              undefined,
-              alloc.notes
-            )
-          );
-        } else if (alloc.sourceType === 'RESERVE') {
-          reserveRows.push(
-            buildRowFromAllocation(
-              alloc.id,
-              'RESERVE',
-              'CADANGAN',
-              alloc.notes || 'Alokasi Cadangan K13',
-              'Cadangan',
-              jp,
-              startW,
-              endW,
-              undefined,
-              alloc.notes
-            )
-          );
-        }
-      }
-    } else {
-      // Fallback K13 directly from analysis items if timeAllocations not set
-      k13Items.forEach((item, idx) => {
-        const jp = Number(item.alokasiJp || 4);
-        const startW = Math.min(idx + 1, totalSlots);
-        rows.push(
-          buildRowFromAllocation(
-            item.id || `k13-${idx}`,
-            'KD',
-            item.kd || `KD.${idx + 1}`,
-            item.indikator || item.tujuanPembelajaran || '-',
-            item.materi || '-',
-            jp,
-            startW,
-            startW,
-            undefined,
-            undefined
-          )
-        );
-      });
-    }
+    k13Items.forEach((item, idx) => {
+      const jp = Number(item.alokasiJp || 4);
+      const startW = Math.min(idx + 1, totalSlots);
+      rows.push(
+        buildRowFromAllocation(
+          item.id || `k13-${idx}`,
+          'KD',
+          item.kd || `KD.${idx + 1}`,
+          item.indikator || item.tujuanPembelajaran || '-',
+          item.materi || '-',
+          jp,
+          startW,
+          startW,
+          undefined,
+          undefined
+        )
+      );
+    });
   }
 
-  // Calculate Totals & Validation Status via validateTimeAllocations
   const avail = availableJP ?? 0;
   const validationRes = validateTimeAllocations(scopedTimeAllocations, avail);
 
