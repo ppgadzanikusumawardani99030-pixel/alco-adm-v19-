@@ -18,6 +18,32 @@ import { buildProtaProjection, buildK13ProtaProjection } from '../../protaProjec
 import { buildModulAjarProjection } from '../../modulAjarProjection';
 import { buildK13AlokasiWaktuRows } from '../../k13AlokasiWaktuHelper';
 import { resolveAtpItemAnnualJP } from '../../../learningPlanService';
+import { resolveMerdekaCanonicalTimeProjection } from '../../meetingTimeProjection';
+
+function formatDateIndonesian(dateStr: string): string {
+  if (!dateStr) return '-';
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const year = parts[0];
+  const monthNum = parseInt(parts[1], 10);
+  const day = parseInt(parts[2], 10);
+  const monthNames = [
+    '',
+    'Januari',
+    'Februari',
+    'Maret',
+    'April',
+    'Mei',
+    'Juni',
+    'Juli',
+    'Agustus',
+    'September',
+    'Oktober',
+    'November',
+    'Desember',
+  ];
+  return `${day} ${monthNames[monthNum] || parts[1]} ${year}`;
+}
 
 function resolveAllocationForAtpPdf(
   atpItem: ATPItem,
@@ -1123,54 +1149,71 @@ export async function generatePdfDocument(
         break;
       }
 
-      const projection = buildAlokasiWaktuProjection(context);
+      const canonical = resolveMerdekaCanonicalTimeProjection(context);
 
-      if (!isBlankMode && !projection.isReady) {
+      if (!isBlankMode && !canonical.isReady) {
         throw new Error(
-          projection.unreadyReason ||
-            'Distribusi Alokasi Waktu belum dapat dibuat karena prasyarat semester aktif belum lengkap.'
+          canonical.errors.length
+            ? `Distribusi Alokasi Waktu belum dapat dibuat karena: ${canonical.errors.join(' ')}`
+            : 'Distribusi Alokasi Waktu belum dapat dibuat karena prasyarat semester aktif belum lengkap.'
         );
       }
 
-      title = 'Distribusi Alokasi Waktu Pembelajaran';
-      subTitle = `${subject} — ${grade} — Semester ${projection.semester || semester} | Total ${projection.totalAllocatedJP} / ${projection.availableJP ?? 0} JP (${projection.validationStatus})`;
-      fileName = `Alokasi_Waktu_${cleanSubject}_${cleanGrade}.pdf`;
+      const activeSemesterNum =
+        academicSetting?.semester?.includes('1') ||
+        academicSetting?.semester?.toLowerCase().includes('ganjil')
+          ? 1
+          : 2;
 
-      const allRows = [
-        ...projection.rows,
-        ...projection.assessmentRows,
-        ...projection.reserveRows,
-      ];
+      const merdekaMeetings = canonical.rows
+        .filter((r) => r.semester === activeSemesterNum)
+        .sort((a, b) => {
+          if (a.date !== b.date) return a.date.localeCompare(b.date);
+          if (a.unitOrder !== b.unitOrder) return a.unitOrder - b.unitOrder;
+          return a.meetingOrder - b.meetingOrder;
+        });
+
+      const totalAllocatedJP = merdekaMeetings.reduce(
+        (sum, row) => sum + row.jp,
+        0
+      );
+
+      title = 'Distribusi Alokasi Waktu Pembelajaran';
+      subTitle = `${subject} — ${grade} — Semester ${activeSemesterNum} | Total ${totalAllocatedJP} JP`;
+      fileName = `Alokasi_Waktu_${cleanSubject}_${cleanGrade}.pdf`;
 
       const rows = isBlankMode
         ? Array.from({ length: 15 }, (_, idx) => [
             idx + 1,
-            `TP ${idx + 1}`,
+            `Pertemuan ${idx + 1}`,
             '..........................................................................................',
-            '...............',
             '..... JP',
             '....................',
           ])
-        : allRows.length > 0
-        ? allRows.map((r, idx) => [
-            idx + 1,
-            r.tpCode,
-            r.tpStatement,
-            r.materialScope || '—',
-            `${r.allocatedJP} JP`,
-            r.startWeek === r.endWeek ? `Pekan ${r.startWeek}` : `Pekan ${r.startWeek}–${r.endWeek}`,
-          ])
-        : [[1, '—', 'Belum ada alokasi waktu yang disusun.', '—', '—', '—']];
+        : merdekaMeetings.length > 0
+        ? merdekaMeetings.map((r, idx) => {
+            const materialText =
+              r.materials.map((m) => m.title).filter(Boolean).join(', ') || '—';
+            const dateWeekText = `${formatDateIndonesian(r.date)} • Pekan ${r.weekIndex}`;
+
+            return [
+              idx + 1,
+              `${r.unitTitle} — ${r.meetingTitle}`,
+              materialText,
+              `${r.jp} JP`,
+              dateWeekText,
+            ];
+          })
+        : [[1, '—', 'Belum ada alokasi waktu yang disusun.', '—', '—']];
 
       sections.push({
         type: 'table',
         columns: [
           { header: 'No', dataKey: 'no', width: 10, align: 'center' },
-          { header: 'Kode / Jenis', dataKey: 'code', width: 22, align: 'center' },
-          { header: 'Tujuan Pembelajaran / Kegiatan', dataKey: 'tp', width: 65 },
-          { header: 'Lingkup Materi', dataKey: 'mat', width: 45 },
+          { header: 'Unit/Bab / Pertemuan', dataKey: 'meeting', width: 45 },
+          { header: 'Materi Pembelajaran', dataKey: 'mat', width: 65 },
           { header: 'Alokasi JP', dataKey: 'jp', width: 18, align: 'center' },
-          { header: 'Distribusi Pekan', dataKey: 'wks', width: 22, align: 'center' },
+          { header: 'Tanggal / Pekan', dataKey: 'dateWeek', width: 35, align: 'center' },
         ],
         rows,
       });

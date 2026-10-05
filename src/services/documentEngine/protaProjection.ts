@@ -142,7 +142,8 @@ export function buildProtaProjection(context: DocumentGenerationContext): ProtaP
       allocatedJP: number;
       linkedTpIds: string[];
       linkedAtpItemIds: string[];
-      materialTitlesSet: Set<string>;
+      scheduledMaterialIds: Set<string>;
+      scheduledMaterialTitles: Set<string>;
     }
   >();
 
@@ -157,7 +158,8 @@ export function buildProtaProjection(context: DocumentGenerationContext): ProtaP
         allocatedJP: 0,
         linkedTpIds: [],
         linkedAtpItemIds: [],
-        materialTitlesSet: new Set(),
+        scheduledMaterialIds: new Set(),
+        scheduledMaterialTitles: new Set(),
       });
     }
 
@@ -175,8 +177,11 @@ export function buildProtaProjection(context: DocumentGenerationContext): ProtaP
       }
     }
     for (const mat of row.materials || []) {
+      if (mat.id) {
+        group.scheduledMaterialIds.add(mat.id);
+      }
       if (mat.title) {
-        group.materialTitlesSet.add(mat.title);
+        group.scheduledMaterialTitles.add(mat.title);
       }
     }
   }
@@ -190,7 +195,31 @@ export function buildProtaProjection(context: DocumentGenerationContext): ProtaP
   });
 
   for (const group of sortedGroups) {
-    const materialScope = Array.from(group.materialTitlesSet).join(', ') || '-';
+    // Resolve canonical material order from ATPUnitMapping
+    const mappingUnit = context.atpUnitMapping?.units?.find(
+      (u) => u.id === group.unitId
+    );
+
+    let orderedMaterialTitles: string[] = [];
+
+    if (mappingUnit?.materials && mappingUnit.materials.length > 0) {
+      // Intersection of scheduled materials and mapping unit materials, sorted by material.order
+      const matched = mappingUnit.materials
+        .filter(
+          (m) =>
+            group.scheduledMaterialIds.has(m.id) ||
+            group.scheduledMaterialTitles.has(m.title)
+        )
+        .sort((a, b) => a.order - b.order);
+
+      orderedMaterialTitles = matched.map((m) => m.title);
+    }
+
+    if (orderedMaterialTitles.length === 0) {
+      orderedMaterialTitles = Array.from(group.scheduledMaterialTitles);
+    }
+
+    const materialScope = orderedMaterialTitles.join(', ') || '-';
 
     // Resolve TP statements from context.tp if available
     const matchedTps = tpItems.filter((t) => group.linkedTpIds.includes(t.id));

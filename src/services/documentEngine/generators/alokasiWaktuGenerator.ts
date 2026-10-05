@@ -152,18 +152,29 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
     )
   );
 
-  const rows: TableRow[] = [
-    new TableRow({
-      tableHeader: true,
-      children: [
-        createTableHeaderCell('No', 8, AlignmentType.CENTER),
-        createTableHeaderCell(isK13Curriculum ? 'Kompetensi Dasar (KD)' : 'Unit/Bab / Pertemuan', 26, AlignmentType.CENTER),
-        createTableHeaderCell(isK13Curriculum ? 'Materi Pokok & Kegiatan' : 'Materi Pembelajaran', 38, AlignmentType.LEFT),
-        createTableHeaderCell('Alokasi JP', 14, AlignmentType.CENTER),
-        createTableHeaderCell(isK13Curriculum ? 'Distribusi Pekan Ke-' : 'Tanggal / Pekan', 14, AlignmentType.CENTER),
-      ],
-    }),
-  ];
+  const tableHeaderRow = isK13Curriculum
+    ? new TableRow({
+        tableHeader: true,
+        children: [
+          createTableHeaderCell('No', 8, AlignmentType.CENTER),
+          createTableHeaderCell('Kompetensi Dasar (KD)', 16, AlignmentType.CENTER),
+          createTableHeaderCell('Materi Pokok & Kegiatan Pembelajaran', 48, AlignmentType.LEFT),
+          createTableHeaderCell('Alokasi JP', 14, AlignmentType.CENTER),
+          createTableHeaderCell('Distribusi Pekan Ke-', 14, AlignmentType.CENTER),
+        ],
+      })
+    : new TableRow({
+        tableHeader: true,
+        children: [
+          createTableHeaderCell('No', 8, AlignmentType.CENTER),
+          createTableHeaderCell('Unit/Bab / Pertemuan', 26, AlignmentType.CENTER),
+          createTableHeaderCell('Materi Pembelajaran', 38, AlignmentType.LEFT),
+          createTableHeaderCell('Alokasi JP', 14, AlignmentType.CENTER),
+          createTableHeaderCell('Tanggal / Pekan', 14, AlignmentType.CENTER),
+        ],
+      });
+
+  const rows: TableRow[] = [tableHeaderRow];
 
   if (isK13Curriculum) {
     if (k13Rows.length === 0) {
@@ -171,8 +182,8 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
         new TableRow({
           children: [
             createTableDataCell('1', 8, AlignmentType.CENTER),
-            createTableDataCell('KD -', 26, AlignmentType.CENTER),
-            createTableDataCell('Belum ada butir analisis KD yang disusun.', 38),
+            createTableDataCell('KD -', 16, AlignmentType.CENTER),
+            createTableDataCell('Belum ada butir analisis KD yang disusun.', 48),
             createTableDataCell('-', 14, AlignmentType.CENTER),
             createTableDataCell('-', 14, AlignmentType.CENTER),
           ],
@@ -184,8 +195,8 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
           new TableRow({
             children: [
               createTableDataCell((index + 1).toString(), 8, AlignmentType.CENTER),
-              createTableDataCell(item.kdCode, 26, AlignmentType.LEFT, true),
-              createTableDataCell(`${item.materi || '-'}${item.kegiatan ? `\n• Kegiatan: ${item.kegiatan}` : ''}`, 38),
+              createTableDataCell(item.kdCode, 16, AlignmentType.LEFT, true),
+              createTableDataCell(`${item.materi || '-'}${item.kegiatan ? `\n• Kegiatan: ${item.kegiatan}` : ''}`, 48),
               createTableDataCell(`${item.allocatedJP} JP`, 14, AlignmentType.CENTER, true),
               createTableDataCell(item.weekDisplay, 14, AlignmentType.CENTER),
             ],
@@ -228,17 +239,27 @@ export async function generateAlokasiWaktu(context: DocumentGenerationContext): 
   }
 
   // Summary row
-  rows.push(
-    new TableRow({
-      children: [
-        createTableHeaderCell('', 8, AlignmentType.CENTER),
-        createTableHeaderCell('TOTAL', 26, AlignmentType.CENTER),
-        createTableHeaderCell('Total Alokasi Waktu Pembelajaran Terjadwal', 38, AlignmentType.LEFT),
-        createTableHeaderCell(`${totalAllocatedJP} JP`, 14, AlignmentType.CENTER),
-        createTableHeaderCell(isK13Curriculum ? '-' : projection.validationStatus, 14, AlignmentType.CENTER),
-      ],
-    })
-  );
+  const summaryRow = isK13Curriculum
+    ? new TableRow({
+        children: [
+          createTableHeaderCell('', 8, AlignmentType.CENTER),
+          createTableHeaderCell('TOTAL', 16, AlignmentType.CENTER),
+          createTableHeaderCell('Total Alokasi Waktu Pembelajaran Terjadwal', 48, AlignmentType.LEFT),
+          createTableHeaderCell(`${totalAllocatedJP} JP`, 14, AlignmentType.CENTER),
+          createTableHeaderCell('-', 14, AlignmentType.CENTER),
+        ],
+      })
+    : new TableRow({
+        children: [
+          createTableHeaderCell('', 8, AlignmentType.CENTER),
+          createTableHeaderCell('TOTAL', 26, AlignmentType.CENTER),
+          createTableHeaderCell('Total Alokasi Waktu Pembelajaran Terjadwal', 38, AlignmentType.LEFT),
+          createTableHeaderCell(`${totalAllocatedJP} JP`, 14, AlignmentType.CENTER),
+          createTableHeaderCell(projection.validationStatus, 14, AlignmentType.CENTER),
+        ],
+      });
+
+  rows.push(summaryRow);
 
   docChildren.push(new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows }));
   docChildren.push(new Paragraph({ spacing: { after: 240 } }));
