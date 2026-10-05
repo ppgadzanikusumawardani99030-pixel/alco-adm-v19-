@@ -200,8 +200,8 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
 
       // 3. No-work condition
       const isCoverageComplete = validation.isComplete && !isStale;
-      if (additionalS1 === 0 && additionalS2 === 0 && isCoverageComplete) {
-        setGenerationNotice('Struktur Pertemuan sudah sesuai kapasitas perencanaan semester dan seluruh coverage telah tercakup.');
+      if (isCoverageComplete && additionalS1 <= 0 && additionalS2 <= 0) {
+        setGenerationNotice('Struktur Pertemuan sudah mencakup seluruh materi, ATP, dan TP secara lengkap dalam kapasitas semester.');
         setIsGeneratingMeetings(false);
         return;
       }
@@ -312,7 +312,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
         else if (resS2Set.has(u.unitId)) finalS2Count += count;
       });
 
-      const isCountMatch = finalS1Count === targetS1 && finalS2Count === targetS2;
+      const isCountMatch = finalS1Count <= targetS1 && finalS2Count <= targetS2;
 
       if (!resVal.isValid || !resPlac.isValid || !isCountMatch) {
         throw new Error('Draf hasil AI tidak sesuai dengan kapasitas perencanaan atau pembagian semester tidak valid.');
@@ -486,7 +486,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     });
 
     const isCoverageComplete = validation.isComplete && !isStale;
-    return s1Existing === targetS1 && s2Existing === targetS2 && isCoverageComplete;
+    return s1Existing <= targetS1 && s2Existing <= targetS2 && s1Existing > 0 && isCoverageComplete;
   }, [isCapacityReady, meetingCapacity, draft, mapping, validation.isComplete, isStale]);
 
   // Fast lookup maps for ATP & TP items for display (Canonical ATPItem fields: stepNumber, focus)

@@ -795,6 +795,41 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   ) => {
     if (!unitExecutionPlan || !mapping) return;
 
+    // Re-validate AI recommendation against live safe options
+    const candidates = candidatesByMeetingId[mId] || [];
+    const analysis = analyzeMeetingReconciliation({
+      unresolvedMeetingId: mId,
+      unitExecutionPlan,
+      mapping,
+      atpData: atp,
+      tpData: tp,
+      replacementCandidates: candidates,
+    });
+
+    let isStillSafe = false;
+    if (rec.action === 'RESCHEDULE') {
+      isStillSafe = analysis.safeOptions.some(
+        (opt) =>
+          opt.action === 'RESCHEDULE' &&
+          opt.candidateDate === rec.candidateDate &&
+          opt.candidateSessionId === rec.candidateSessionId
+      );
+    } else if (rec.action === 'MERGE') {
+      isStillSafe = analysis.safeOptions.some(
+        (opt) => opt.action === 'MERGE' && opt.targetMeetingId === rec.targetMeetingId
+      );
+    } else if (rec.action === 'REDUCE') {
+      isStillSafe = analysis.safeOptions.some((opt) => opt.action === 'REDUCE');
+    }
+
+    if (!isStillSafe) {
+      setReconciliationNotice({
+        type: 'error',
+        message: 'Rekomendasi AI tidak lagi valid atau aman berdasarkan kondisi data terbaru. Silakan pilih dari opsi aman yang tersedia.',
+      });
+      return;
+    }
+
     const res = applyReconciliationAction({
       action: rec.action,
       unresolvedMeetingId: mId,

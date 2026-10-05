@@ -895,10 +895,10 @@ export function validateWorkflowDependencies(
             const s1Target = s1PlannedCapacity.totalMeetingCapacity;
             const s2Target = s2PlannedCapacity.totalMeetingCapacity;
 
-            if (s1Count === s1Target && s2Count === s2Target) {
+            if (s1Count <= s1Target && s2Count <= s2Target) {
               isMeetingComplete = true;
             } else {
-              meetingReason = `Lengkapi Struktur Pertemuan sesuai kapasitas perencanaan (S1 ${s1Count}/${s1Target}, S2 ${s2Count}/${s2Target}).`;
+              meetingReason = `Jumlah Pertemuan melebihi kapasitas perencanaan (S1 ${s1Count}/${s1Target}, S2 ${s2Count}/${s2Target}).`;
             }
           } else {
             isMeetingComplete = true;

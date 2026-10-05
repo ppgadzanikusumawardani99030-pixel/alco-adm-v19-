@@ -317,16 +317,16 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
   const s1TargetMeetings = s1PlannedCapacity.totalMeetingCapacity;
   const s2TargetMeetings = s2PlannedCapacity.totalMeetingCapacity;
 
-  const s1MeetingCountMatches = meetingCounts.semester1 === s1TargetMeetings;
-  const s2MeetingCountMatches = meetingCounts.semester2 === s2TargetMeetings;
-  const meetingCountDetail = `S1 ${meetingCounts.semester1}/${s1TargetMeetings} • S2 ${meetingCounts.semester2}/${s2TargetMeetings} Pertemuan`;
+  const s1MeetingCountWithinCapacity = meetingCounts.semester1 <= s1TargetMeetings;
+  const s2MeetingCountWithinCapacity = meetingCounts.semester2 <= s2TargetMeetings;
+  const meetingCountDetail = `S1 ${meetingCounts.semester1} digunakan (kapasitas ${s1TargetMeetings}) • S2 ${meetingCounts.semester2} digunakan (kapasitas ${s2TargetMeetings})`;
   const meetingCoverageComplete = Boolean(placementReady && meetingValidation?.isComplete);
   const meetingExactReady = Boolean(
     meetingCoverageComplete &&
     s1PlannedCapacity.isReady &&
     s2PlannedCapacity.isReady &&
-    s1MeetingCountMatches &&
-    s2MeetingCountMatches
+    s1MeetingCountWithinCapacity &&
+    s2MeetingCountWithinCapacity
   );
 
   const annualTasks: AnnualPlanningTaskRailItem[] = useMemo(() => {
@@ -392,7 +392,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
         title: 'Alokasi Waktu',
         status: t5Complete ? 'COMPLETE' : 'PENDING',
         isLocked: t5Locked,
-        lockReason: 'Lengkapi Struktur Pertemuan sesuai kapasitas perencanaan terlebih dahulu',
+        lockReason: 'Lengkapi Struktur Pertemuan terlebih dahulu',
       },
     ];
   }, [

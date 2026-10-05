@@ -61,7 +61,7 @@ export interface SemesterDataV5Result {
   academicCalendar: SemesterCalendarEntry | undefined;
   timeAllocation: TimeAllocation[] | undefined;
   subjectWeeklySchedule: SubjectWeeklySchedule | undefined;
-  learningMeetingSchedule: LearningMeetingScheduleData | undefined;
+  learningMeetingSchedule?: LearningMeetingScheduleData | undefined;
   learningPlan: LearningPlan[] | undefined;
   assessmentCriteria: AssessmentCriterion[] | undefined;
   assessmentPlan: AssessmentPlan[] | undefined;

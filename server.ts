@@ -2632,20 +2632,10 @@ app.post('/api/ai/recommend-meeting-reconciliation', async (req, res) => {
 
   const apiKey = resolveApiKey(req);
   if (!apiKey) {
-    // Rule-based fallback using first available safe option
-    const firstOpt = safeOptions[0];
-    return res.json({
-      success: true,
-      recommendation: {
-        action: firstOpt.action,
-        candidateDate: firstOpt.candidateDate,
-        candidateSessionId: firstOpt.candidateSessionId,
-        targetMeetingId: firstOpt.targetMeetingId,
-        suggestedTitle: firstOpt.targetMeetingTitle
-          ? `${firstOpt.targetMeetingTitle} & ${unresolvedMeetingTitle}`
-          : unresolvedMeetingTitle,
-        reason: 'Rekomendasi otomatis berbasis ketersediaan opsi aman (tanpa AI).',
-      },
+    return res.status(503).json({
+      success: false,
+      code: 'AI_NOT_CONFIGURED',
+      error: 'Layanan AI belum dikonfigurasi pada server.',
     });
   }
 
