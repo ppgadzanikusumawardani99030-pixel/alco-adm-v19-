@@ -18,8 +18,15 @@ import {
   LearningObjectiveReference,
   AssessmentPlanItem,
   LearningResource,
+  ATPUnitMappingData,
+  UnitExecutionPlanData,
+  LearningMeetingScheduleData,
 } from '../types';
 import { validateATPReferences } from './cpWorkflowService';
+import {
+  resolveScheduledLearningMeetings,
+  ScheduledLearningMeetingProjection,
+} from './scheduledLearningMeetingProjectionService';
 import {
   CANONICAL_GRADUATE_PROFILE_DIMENSIONS,
   isCanonicalGraduateProfileDimension,
@@ -78,16 +85,21 @@ export interface LearningPlanObjectiveResolution {
 
 export interface LearningPlanScopeUnit {
   id: string;
-  type: 'ATP_STEP' | 'SINGLE_TP';
+  type: 'CANONICAL_UNIT' | 'ATP_STEP' | 'SINGLE_TP';
   title: string;
+  unitId?: string;
+  learningMeetingIds?: string[];
   stepNumber?: number;
   tpCode?: string;
-  tpItem: TPItem;
+  tpItem?: TPItem;
+  tpItems?: TPItem[];
   atpItem?: ATPItem;
+  atpItems?: ATPItem[];
   linkedTpIds: string[];
   linkedAtpItemIds: string[];
   unitTitle?: string;
   materialScope?: string;
+  materials?: { id: string; title: string }[];
   jp?: number | null;
 }
 
@@ -295,7 +307,187 @@ export function resolveSemesterLearningScopes(
 }
 
 export const resolveAvailableScopes = resolveSemesterLearningScopes;
-export const buildLearningPlanScopeUnits = resolveSemesterLearningScopes;
+
+export interface BuildLearningPlanScopeUnitsParams {
+  academicSetting?: AcademicSetting | null;
+  atpUnitMapping?: ATPUnitMappingData | null;
+  unitExecutionPlan?: UnitExecutionPlanData | null;
+  learningMeetingSchedules?: Array<{
+    semesterPlanId: string;
+    semester: 1 | 2;
+    schedule: LearningMeetingScheduleData;
+  }> | null;
+  tp?: TPData | null;
+  atp?: ATPData | null;
+  timeAllocations?: TimeAllocation[] | null;
+}
+
+/**
+ * Builds canonical LearningPlan scopes per Unit/Bab from ScheduledLearningMeetingProjection.
+ * 1 scope = 1 Unit/Bab.
+ * Sums exact row.jp, groups all meetings, and unions linkedTpIds & linkedAtpItemIds.
+ */
+export function buildLearningPlanScopeUnits(
+  paramsOrTp?: BuildLearningPlanScopeUnitsParams | TPData | null,
+  legacyAtp?: ATPData | null,
+  legacyTimeAllocations?: TimeAllocation[] | null
+): LearningPlanScopeUnit[] {
+  let params: BuildLearningPlanScopeUnitsParams;
+
+  if (
+    paramsOrTp &&
+    typeof paramsOrTp === 'object' &&
+    ('atpUnitMapping' in paramsOrTp ||
+      'unitExecutionPlan' in paramsOrTp ||
+      'learningMeetingSchedules' in paramsOrTp ||
+      'academicSetting' in paramsOrTp)
+  ) {
+    params = paramsOrTp as BuildLearningPlanScopeUnitsParams;
+  } else {
+    params = {
+      tp: paramsOrTp as TPData | null,
+      atp: legacyAtp,
+      timeAllocations: legacyTimeAllocations,
+    };
+  }
+
+  const {
+    academicSetting,
+    atpUnitMapping,
+    unitExecutionPlan,
+    learningMeetingSchedules,
+    tp,
+    atp,
+    timeAllocations,
+  } = params;
+
+  // 1. Canonical authority: ScheduledLearningMeetingProjection
+  if (
+    atpUnitMapping &&
+    unitExecutionPlan &&
+    learningMeetingSchedules &&
+    learningMeetingSchedules.length > 0
+  ) {
+    const projectionResult = resolveScheduledLearningMeetings({
+      mapping: atpUnitMapping,
+      unitExecutionPlan,
+      schedules: learningMeetingSchedules,
+      tp: tp || undefined,
+      atp: atp || undefined,
+    });
+
+    if (!projectionResult.isValid || projectionResult.rows.length === 0) {
+      return [];
+    }
+
+    const activeSettingId = academicSetting?.id;
+    const semesterRows = activeSettingId
+      ? projectionResult.rows.filter((r) => r.semesterPlanId === activeSettingId)
+      : projectionResult.rows;
+
+    if (semesterRows.length === 0) {
+      return [];
+    }
+
+    // Group rows per unitId
+    const unitMap = new Map<string, typeof semesterRows>();
+    const unitOrderMap = new Map<string, number>();
+
+    for (const row of semesterRows) {
+      if (!unitMap.has(row.unitId)) {
+        unitMap.set(row.unitId, []);
+        unitOrderMap.set(row.unitId, row.unitOrder);
+      }
+      unitMap.get(row.unitId)!.push(row);
+    }
+
+    const availableTps = tp?.items || [];
+    const availableAtps = atp?.items || [];
+    const unitScopes: LearningPlanScopeUnit[] = [];
+
+    for (const [unitId, rowsForUnit] of unitMap.entries()) {
+      const firstRow = rowsForUnit[0];
+      const unitTitle = firstRow.unitTitle;
+      const learningMeetingIds = rowsForUnit.map((r) => r.meetingId);
+
+      // Deterministic union of linkedTpIds
+      const linkedTpIdSet = new Set<string>();
+      const linkedTpIds: string[] = [];
+      for (const r of rowsForUnit) {
+        for (const tpId of r.linkedTpIds || []) {
+          if (!linkedTpIdSet.has(tpId)) {
+            linkedTpIdSet.add(tpId);
+            linkedTpIds.push(tpId);
+          }
+        }
+      }
+
+      // Deterministic union of linkedAtpItemIds
+      const linkedAtpIdSet = new Set<string>();
+      const linkedAtpItemIds: string[] = [];
+      for (const r of rowsForUnit) {
+        for (const atpId of r.linkedAtpItemIds || []) {
+          if (!linkedAtpIdSet.has(atpId)) {
+            linkedAtpIdSet.add(atpId);
+            linkedAtpItemIds.push(atpId);
+          }
+        }
+      }
+
+      // Exact sum of JP across all meetings
+      const totalJP = rowsForUnit.reduce((sum, r) => sum + (Number(r.jp) || 0), 0);
+
+      // Deduplicated materials from projection
+      const seenMatId = new Set<string>();
+      const materials: { id: string; title: string }[] = [];
+      for (const r of rowsForUnit) {
+        for (const mat of r.materials || []) {
+          if (!seenMatId.has(mat.id)) {
+            seenMatId.add(mat.id);
+            materials.push(mat);
+          }
+        }
+      }
+
+      const materialScope = materials.map((m) => m.title).join(', ');
+      const matchedTps = availableTps.filter((t) => linkedTpIdSet.has(t.id));
+      const matchedAtps = availableAtps.filter((a) => linkedAtpIdSet.has(a.id));
+
+      unitScopes.push({
+        id: unitId,
+        type: 'CANONICAL_UNIT',
+        title: unitTitle,
+        unitId,
+        unitTitle,
+        learningMeetingIds,
+        linkedTpIds,
+        linkedAtpItemIds,
+        materials,
+        materialScope,
+        jp: totalJP > 0 ? totalJP : null,
+        tpItems: matchedTps,
+        tpItem: matchedTps[0],
+        atpItems: matchedAtps,
+        atpItem: matchedAtps[0],
+      });
+    }
+
+    unitScopes.sort((a, b) => {
+      const orderA = unitOrderMap.get(a.unitId || '') ?? 999;
+      const orderB = unitOrderMap.get(b.unitId || '') ?? 999;
+      return orderA - orderB;
+    });
+
+    return unitScopes;
+  }
+
+  // 2. Legacy fallback for non-canonical / K13 workspaces
+  if (academicSetting?.curriculumType === 'K13') {
+    return resolveSemesterLearningScopes(tp, atp, timeAllocations);
+  }
+
+  return [];
+}
 
 export function resolveLearningPlanObjectives(params: {
   tpIds?: string[];
@@ -342,32 +534,96 @@ export function resolveLearningPlanObjectives(params: {
 
 export interface LearningPlanJPResolution {
   allocatedJP?: number;
-  source: 'EXPLICIT_PLAN' | 'CANONICAL_ATP' | 'LINKED_TIME_ALLOCATION' | 'UNRESOLVED';
+  source:
+    | 'CANONICAL_MEETINGS'
+    | 'EXPLICIT_PLAN'
+    | 'CANONICAL_ATP'
+    | 'LINKED_TIME_ALLOCATION'
+    | 'UNRESOLVED';
   timeAllocationIds?: string[];
   issues?: string[];
 }
 
 /**
  * Resolves allocated JP strictly from real data hierarchy:
- * 1. explicit LearningPlan.allocatedJP
- * 2. linked TimeAllocation
- * 3. UNRESOLVED
- * Never guesses or falls back to synthetic numbers or annual ATP totals.
+ * 1. canonical scheduled meetings (CANONICAL_MEETINGS) - Wins over stored allocatedJP and TimeAllocation!
+ * 2. explicit LearningPlan.allocatedJP
+ * 3. linked TimeAllocation (legacy fallback)
+ * 4. UNRESOLVED
  */
 export function resolveLearningPlanAllocatedJP(
   plan: LearningPlan,
   context: {
     atp?: ATPData | null;
     timeAllocations?: TimeAllocation[] | null;
+    academicSetting?: AcademicSetting | null;
+    atpUnitMapping?: ATPUnitMappingData | null;
+    unitExecutionPlan?: UnitExecutionPlanData | null;
+    learningMeetingSchedules?: Array<{
+      semesterPlanId: string;
+      semester: 1 | 2;
+      schedule: LearningMeetingScheduleData;
+    }> | null;
+    scheduledMeetings?: ScheduledLearningMeetingProjection[] | null;
   }
 ): LearningPlanJPResolution {
   const issues: string[] = [];
-  // 1. Explicit LearningPlan.allocatedJP
+
+  // 1. CANONICAL AUTHORITY: scheduled meetings projection wins over stored allocatedJP and TimeAllocation
+  if (plan.unitId || (plan.learningMeetingIds && plan.learningMeetingIds.length > 0)) {
+    let rows: ScheduledLearningMeetingProjection[] = [];
+
+    if (context.scheduledMeetings) {
+      rows = context.scheduledMeetings;
+    } else if (
+      context.atpUnitMapping &&
+      context.unitExecutionPlan &&
+      context.learningMeetingSchedules
+    ) {
+      const proj = resolveScheduledLearningMeetings({
+        mapping: context.atpUnitMapping,
+        unitExecutionPlan: context.unitExecutionPlan,
+        schedules: context.learningMeetingSchedules,
+      });
+      if (proj.isValid) {
+        rows = proj.rows;
+      }
+    }
+
+    const activeSettingId = context.academicSetting?.id || plan.academicSettingId;
+    const semesterRows = activeSettingId
+      ? rows.filter((r) => r.semesterPlanId === activeSettingId)
+      : rows;
+
+    if (semesterRows.length > 0) {
+      let matchedRows: ScheduledLearningMeetingProjection[] = [];
+
+      if (plan.learningMeetingIds && plan.learningMeetingIds.length > 0) {
+        const meetingIdSet = new Set(plan.learningMeetingIds);
+        matchedRows = semesterRows.filter((r) => meetingIdSet.has(r.meetingId));
+      } else if (plan.unitId) {
+        matchedRows = semesterRows.filter((r) => r.unitId === plan.unitId);
+      }
+
+      if (matchedRows.length > 0) {
+        const totalJP = matchedRows.reduce((sum, r) => sum + (Number(r.jp) || 0), 0);
+        if (totalJP > 0) {
+          return {
+            allocatedJP: totalJP,
+            source: 'CANONICAL_MEETINGS',
+            issues,
+          };
+        }
+      }
+    }
+  }
+
+  // 2. Explicit LearningPlan.allocatedJP (fallback if no canonical meetings)
   if (typeof plan.allocatedJP === 'number' && !isNaN(plan.allocatedJP) && plan.allocatedJP > 0) {
     return { allocatedJP: plan.allocatedJP, source: 'EXPLICIT_PLAN' };
   }
 
-  // 2. Linked TimeAllocation actual value, by explicit allocation IDs or exact canonical relationships
+  // 3. Linked TimeAllocation (legacy fallback)
   if (context.timeAllocations && context.timeAllocations.length > 0) {
     const scopedAllocations = context.timeAllocations.filter(
       (ta) => !ta.academicSettingId || ta.academicSettingId === plan.academicSettingId
@@ -436,7 +692,7 @@ export function resolveLearningPlanAllocatedJP(
     }
   }
 
-  // 3. UNRESOLVED (Never guess, never fallback to synthetic numbers or ATPItem annual totals)
+  // 4. UNRESOLVED
   return { allocatedJP: undefined, source: 'UNRESOLVED', issues };
 }
 
@@ -579,7 +835,12 @@ export interface LearningPlanValidationResult {
   resolvedTPs: Array<{ id: string; code?: string; statement: string; materialScope?: string }>;
   resolvedATPs: Array<{ id: string; stepNumber?: number; materialScope?: string; jp?: number }>;
   resolvedAllocatedJP?: number;
-  jpResolutionSource?: 'EXPLICIT_PLAN' | 'CANONICAL_ATP' | 'LINKED_TIME_ALLOCATION' | 'UNRESOLVED';
+  jpResolutionSource?:
+    | 'CANONICAL_MEETINGS'
+    | 'EXPLICIT_PLAN'
+    | 'CANONICAL_ATP'
+    | 'LINKED_TIME_ALLOCATION'
+    | 'UNRESOLVED';
 }
 
 /**
@@ -598,6 +859,14 @@ export function validateLearningPlan(
     academicSetting?: AcademicSetting | null;
     tp?: TPData | null;
     atp?: ATPData | null;
+    atpUnitMapping?: ATPUnitMappingData | null;
+    unitExecutionPlan?: UnitExecutionPlanData | null;
+    learningMeetingSchedules?: Array<{
+      semesterPlanId: string;
+      semester: 1 | 2;
+      schedule: LearningMeetingScheduleData;
+    }> | null;
+    scheduledMeetings?: ScheduledLearningMeetingProjection[] | null;
     k13Analysis?: K13Analysis | null;
     timeAllocations?: TimeAllocation[] | null;
     assessmentCriteria?: AssessmentCriterion[] | null;
@@ -695,8 +964,63 @@ export function validateLearningPlan(
     }
   }
 
-  // 3b. Validate Active Semester TimeAllocation Scope (Fail-closed on cross-semester or unallocated items)
-  if (context.timeAllocations && context.timeAllocations.length > 0) {
+  // 3b. Canonical lineage validation (unitId & learningMeetingIds)
+  const isCanonicalPlan = Boolean(
+    plan.unitId || (plan.learningMeetingIds && plan.learningMeetingIds.length > 0)
+  );
+
+  if (isCanonicalPlan) {
+    let projectionRows: ScheduledLearningMeetingProjection[] = [];
+
+    if (context.scheduledMeetings) {
+      projectionRows = context.scheduledMeetings;
+    } else if (
+      context.atpUnitMapping &&
+      context.unitExecutionPlan &&
+      context.learningMeetingSchedules
+    ) {
+      const proj = resolveScheduledLearningMeetings({
+        mapping: context.atpUnitMapping,
+        unitExecutionPlan: context.unitExecutionPlan,
+        schedules: context.learningMeetingSchedules,
+        tp: context.tp || undefined,
+        atp: context.atp || undefined,
+      });
+      if (proj.isValid) {
+        projectionRows = proj.rows;
+      } else {
+        errors.push(...proj.errors);
+      }
+    }
+
+    const activeSettingId = context.academicSetting?.id || plan.academicSettingId;
+    const semesterRows = activeSettingId
+      ? projectionRows.filter((r) => r.semesterPlanId === activeSettingId)
+      : projectionRows;
+
+    const semesterMeetingMap = new Map(semesterRows.map((r) => [r.meetingId, r]));
+
+    if (plan.learningMeetingIds && plan.learningMeetingIds.length > 0) {
+      for (const mId of plan.learningMeetingIds) {
+        const meetingRow = semesterMeetingMap.get(mId);
+        if (!meetingRow) {
+          errors.push(`Pertemuan dengan ID '${mId}' tidak ditemukan pada jadwal pertemuan semester aktif.`);
+        } else if (plan.unitId && meetingRow.unitId !== plan.unitId) {
+          errors.push(`Pertemuan '${mId}' berasal dari unit '${meetingRow.unitId}', berbeda dengan unitId rancangan '${plan.unitId}'.`);
+        }
+      }
+    }
+
+    if (plan.unitId && context.atpUnitMapping) {
+      const unitExists = (context.atpUnitMapping.units || []).some((u) => u.id === plan.unitId);
+      if (!unitExists) {
+        errors.push(`Unit ID '${plan.unitId}' tidak ditemukan pada Pemetaan Unit/Bab.`);
+      }
+    }
+  }
+
+  // 3c. Validate Active Semester TimeAllocation Scope (ONLY for legacy non-canonical Kurikulum Merdeka plans)
+  if (!isCanonicalPlan && context.timeAllocations && context.timeAllocations.length > 0) {
     if (plan.atpItemIds && plan.atpItemIds.length > 0) {
       for (const atpItemId of plan.atpItemIds) {
         const isAtpAllocated = context.timeAllocations.some((ta) => {
@@ -936,6 +1260,11 @@ export function validateLearningPlan(
   const jpResolution = resolveLearningPlanAllocatedJP(plan, {
     atp: context.atp,
     timeAllocations: context.timeAllocations,
+    academicSetting: context.academicSetting,
+    atpUnitMapping: context.atpUnitMapping,
+    unitExecutionPlan: context.unitExecutionPlan,
+    learningMeetingSchedules: context.learningMeetingSchedules,
+    scheduledMeetings: context.scheduledMeetings,
   });
   const resolvedAllocatedJP = jpResolution.allocatedJP;
 
@@ -1022,11 +1351,27 @@ export function validateLearningPlan(
 export function createEmptyLearningPlan(params: {
   academicSetting: AcademicSetting;
   curriculumType?: CurriculumType;
+  unitId?: string;
+  learningMeetingIds?: string[];
   tpIds?: string[];
   atpItemIds?: string[];
+  allocatedJP?: number;
+  title?: string;
+  topic?: string;
   context?: { tp?: TPData | null; atp?: ATPData | null };
 }): LearningPlan {
-  const { academicSetting, curriculumType, tpIds = [], atpItemIds = [], context } = params;
+  const {
+    academicSetting,
+    curriculumType,
+    unitId,
+    learningMeetingIds,
+    tpIds = [],
+    atpItemIds = [],
+    allocatedJP,
+    title,
+    topic,
+    context,
+  } = params;
   const now = new Date().toISOString();
 
   const objectives = resolveLearningPlanObjectives({ tpIds, tp: context?.tp, curriculumType }).objectives;
@@ -1037,10 +1382,13 @@ export function createEmptyLearningPlan(params: {
     curriculumType,
     sourceType: 'MANUAL',
     status: 'DRAFT',
+    unitId,
+    learningMeetingIds,
     tpIds,
     atpItemIds,
-    title: objectives.length > 0 ? `Modul Ajar: ${objectives[0].materialScope || objectives[0].code || 'Topik Pembelajaran'}` : '',
-    topic: objectives.length > 0 ? (objectives[0].materialScope || '') : '',
+    allocatedJP: typeof allocatedJP === 'number' && allocatedJP > 0 ? allocatedJP : undefined,
+    title: title || (objectives.length > 0 ? `Modul Ajar: ${objectives[0].materialScope || objectives[0].code || 'Topik Pembelajaran'}` : ''),
+    topic: topic || (objectives.length > 0 ? (objectives[0].materialScope || '') : ''),
     objectives,
     learningExperiences: [],
     learningSteps: {
@@ -1066,13 +1414,25 @@ export function createEmptyLearningPlan(params: {
 export function createAIDraftLearningPlan(params: {
   academicSetting: AcademicSetting;
   curriculumType?: CurriculumType;
+  unitId?: string;
+  learningMeetingIds?: string[];
   tpIds: string[];
   atpItemIds?: string[];
   allocatedJP?: number;
   aiDraft: Partial<LearningPlan>;
   context?: { tp?: TPData | null; atp?: ATPData | null };
 }): LearningPlan {
-  const { academicSetting, curriculumType, tpIds, atpItemIds = [], allocatedJP, aiDraft, context } = params;
+  const {
+    academicSetting,
+    curriculumType,
+    unitId,
+    learningMeetingIds,
+    tpIds,
+    atpItemIds = [],
+    allocatedJP,
+    aiDraft,
+    context,
+  } = params;
   const now = new Date().toISOString();
 
   const canonicalAllocatedJP =
@@ -1093,6 +1453,8 @@ export function createAIDraftLearningPlan(params: {
     curriculumType,
     sourceType: 'AI_DRAFT',
     status: 'DRAFT',
+    unitId,
+    learningMeetingIds,
     tpIds,
     atpItemIds,
     title: aiDraft.title || (objectives.length > 0 ? `Draf Modul Ajar: ${objectives[0].materialScope || objectives[0].code || 'Topik'}` : 'Draf Modul Ajar'),

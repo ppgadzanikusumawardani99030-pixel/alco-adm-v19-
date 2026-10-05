@@ -17,6 +17,7 @@ export interface ModulAjarProjection {
   resolvedAllocatedJP?: number;
 
   jpResolutionSource:
+    | 'CANONICAL_MEETINGS'
     | 'EXPLICIT_PLAN'
     | 'LINKED_TIME_ALLOCATION'
     | 'UNRESOLVED';

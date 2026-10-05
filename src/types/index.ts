@@ -972,6 +972,8 @@ export interface LearningPlan {
   atpItemIds: string[];
   kktpCriterionIds?: string[];
   timeAllocationIds?: string[];
+  unitId?: string;
+  learningMeetingIds?: string[];
 
   title?: string;
   topic?: string;
