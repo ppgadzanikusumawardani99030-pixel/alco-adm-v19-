@@ -486,7 +486,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     });
 
     const isCoverageComplete = validation.isComplete && !isStale;
-    return s1Existing <= targetS1 && s2Existing <= targetS2 && s1Existing > 0 && isCoverageComplete;
+    return s1Existing <= targetS1 && s2Existing <= targetS2 && isCoverageComplete;
   }, [isCapacityReady, meetingCapacity, draft, mapping, validation.isComplete, isStale]);
 
   // Fast lookup maps for ATP & TP items for display (Canonical ATPItem fields: stepNumber, focus)

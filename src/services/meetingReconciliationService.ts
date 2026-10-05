@@ -219,6 +219,44 @@ export function analyzeMeetingReconciliation(params: {
 }
 
 /**
+ * Checks if a reconciliation action is still safe against current safe options.
+ */
+export function isReconciliationOptionStillSafe(
+  recommendation: {
+    action: MeetingReconciliationAction;
+    candidateDate?: string;
+    candidateSessionId?: string;
+    targetMeetingId?: string;
+  },
+  safeOptions: MeetingReconciliationSafeOption[]
+): boolean {
+  if (!Array.isArray(safeOptions) || safeOptions.length === 0) return false;
+
+  if (recommendation.action === 'RESCHEDULE') {
+    return safeOptions.some(
+      (opt) =>
+        opt.action === 'RESCHEDULE' &&
+        opt.candidateDate === recommendation.candidateDate &&
+        opt.candidateSessionId === recommendation.candidateSessionId
+    );
+  }
+
+  if (recommendation.action === 'MERGE') {
+    return safeOptions.some(
+      (opt) =>
+        opt.action === 'MERGE' &&
+        opt.targetMeetingId === recommendation.targetMeetingId
+    );
+  }
+
+  if (recommendation.action === 'REDUCE') {
+    return safeOptions.some((opt) => opt.action === 'REDUCE');
+  }
+
+  return false;
+}
+
+/**
  * Applies a chosen reconciliation action on UnitExecutionPlanData with strict re-validation before saving.
  */
 export function applyReconciliationAction(params: {
@@ -232,6 +270,7 @@ export function applyReconciliationAction(params: {
   candidateSessionId?: string;
   targetMeetingId?: string;
   suggestedTitle?: string;
+  safeOptions: MeetingReconciliationSafeOption[];
 }): {
   updatedPlan?: UnitExecutionPlanData;
   manualSelection?: { date: string; sessionId: string };
@@ -249,7 +288,26 @@ export function applyReconciliationAction(params: {
     candidateSessionId,
     targetMeetingId,
     suggestedTitle,
+    safeOptions,
   } = params;
+
+  const stillSafe = isReconciliationOptionStillSafe(
+    {
+      action,
+      candidateDate,
+      candidateSessionId,
+      targetMeetingId,
+    },
+    safeOptions
+  );
+
+  if (!stillSafe) {
+    return {
+      success: false,
+      error:
+        'Rekomendasi sudah tidak sesuai dengan kondisi jadwal terbaru. Silakan optimalkan ulang.',
+    };
+  }
 
   if (action === 'RESCHEDULE') {
     if (!candidateDate || !candidateSessionId) {

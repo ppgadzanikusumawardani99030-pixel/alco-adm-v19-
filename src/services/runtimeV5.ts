@@ -131,7 +131,6 @@ export function getRuntimeContextV5(): RuntimeContextV5 {
       subjectWeeklySchedule: state.semesterData.subjectWeeklySchedules?.find(
         (e) => e.semesterPlanId === semesterPlanId
       )?.value,
-      learningMeetingSchedule: undefined,
       learningPlan: state.semesterData.learningPlan.find(
         (e) => e.semesterPlanId === semesterPlanId
       )?.value,

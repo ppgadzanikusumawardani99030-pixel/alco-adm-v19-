@@ -795,40 +795,15 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   ) => {
     if (!unitExecutionPlan || !mapping) return;
 
-    // Re-validate AI recommendation against live safe options
-    const candidates = candidatesByMeetingId[mId] || [];
-    const analysis = analyzeMeetingReconciliation({
+    const currentCandidates = candidatesByMeetingId.get(mId) || [];
+    const currentAnalysis = analyzeMeetingReconciliation({
       unresolvedMeetingId: mId,
       unitExecutionPlan,
       mapping,
       atpData: atp,
       tpData: tp,
-      replacementCandidates: candidates,
+      replacementCandidates: currentCandidates,
     });
-
-    let isStillSafe = false;
-    if (rec.action === 'RESCHEDULE') {
-      isStillSafe = analysis.safeOptions.some(
-        (opt) =>
-          opt.action === 'RESCHEDULE' &&
-          opt.candidateDate === rec.candidateDate &&
-          opt.candidateSessionId === rec.candidateSessionId
-      );
-    } else if (rec.action === 'MERGE') {
-      isStillSafe = analysis.safeOptions.some(
-        (opt) => opt.action === 'MERGE' && opt.targetMeetingId === rec.targetMeetingId
-      );
-    } else if (rec.action === 'REDUCE') {
-      isStillSafe = analysis.safeOptions.some((opt) => opt.action === 'REDUCE');
-    }
-
-    if (!isStillSafe) {
-      setReconciliationNotice({
-        type: 'error',
-        message: 'Rekomendasi AI tidak lagi valid atau aman berdasarkan kondisi data terbaru. Silakan pilih dari opsi aman yang tersedia.',
-      });
-      return;
-    }
 
     const res = applyReconciliationAction({
       action: rec.action,
@@ -841,6 +816,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
       candidateSessionId: rec.candidateSessionId,
       targetMeetingId: rec.targetMeetingId,
       suggestedTitle: rec.suggestedTitle,
+      safeOptions: currentAnalysis.safeOptions,
     });
 
     if (res.success) {
@@ -878,9 +854,17 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
         }
       }
     } else {
+      setAiRecommendations((prev) => ({
+        ...prev,
+        [mId]: {
+          loading: false,
+          recommendation: undefined,
+          error: undefined,
+        },
+      }));
       setReconciliationNotice({
         type: 'error',
-        message: res.error || 'Gagal menerapkan rekomendasi.',
+        message: 'Kondisi jadwal telah berubah. AI perlu menghitung ulang rekomendasi.',
       });
     }
   };
@@ -892,6 +876,16 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   ) => {
     if (!unitExecutionPlan || !mapping) return;
 
+    const currentCandidates = candidatesByMeetingId.get(mId) || [];
+    const currentAnalysis = analyzeMeetingReconciliation({
+      unresolvedMeetingId: mId,
+      unitExecutionPlan,
+      mapping,
+      atpData: atp,
+      tpData: tp,
+      replacementCandidates: currentCandidates,
+    });
+
     const res = applyReconciliationAction({
       action,
       unresolvedMeetingId: mId,
@@ -900,6 +894,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
       atpData: atp,
       tpData: tp,
       targetMeetingId: extraParams?.targetMeetingId,
+      safeOptions: currentAnalysis.safeOptions,
     });
 
     if (res.success) {
@@ -925,7 +920,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
     } else {
       setReconciliationNotice({
         type: 'error',
-        message: res.error || 'Gagal menerapkan aksi rekonsiliasi.',
+        message: 'Kondisi data telah berubah. Silakan pilih kembali opsi yang tersedia.',
       });
     }
   };
