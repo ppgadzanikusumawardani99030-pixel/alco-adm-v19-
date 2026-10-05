@@ -558,17 +558,11 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   }
 
   // 7. When scheduleResult is valid and ready
-  const sessionOrderMap = useMemo(() => {
-    const map = new Map<string, number>();
-    availableSessions.forEach((s) => map.set(s.id, s.order));
-    return map;
-  }, [availableSessions]);
+  const sessionOrderMap = new Map<string, number>();
+  availableSessions.forEach((s) => sessionOrderMap.set(s.id, s.order));
 
-  const canonicalOrderMap = useMemo(() => {
-    const map = new Map<string, number>();
-    semesterMeetings.forEach((m, idx) => map.set(m.meetingId, idx));
-    return map;
-  }, [semesterMeetings]);
+  const canonicalOrderMap = new Map<string, number>();
+  semesterMeetings.forEach((m, idx) => canonicalOrderMap.set(m.meetingId, idx));
 
   // Compute resolved manual entries
   const manualEntries: LearningMeetingScheduleEntry[] = [];
@@ -878,6 +872,14 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
                         const currentVal = sel.date && sel.sessionId ? `${sel.date}|${sel.sessionId}` : '';
                         const isCurrentInCandidates = candidates.some((c) => c.value === currentVal);
 
+                        if (candidates.length === 0) {
+                          return (
+                            <div className="p-2.5 bg-amber-50/70 border border-amber-200 rounded text-amber-900 text-[11px] leading-relaxed">
+                              Tidak tersedia slot pengganti yang valid dalam rentang semester ini. Tinjau Kalender Pendidikan atau Hari Mengajar.
+                            </div>
+                          );
+                        }
+
                         return (
                           <select
                             value={currentVal}
@@ -887,9 +889,7 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
                             }`}
                           >
                             <option value="">
-                              {candidates.length > 0
-                                ? `-- Pilih Slot Jadwal Pengganti (${candidates.length} slot valid tersedia) --`
-                                : '-- Tidak ada slot jadwal valid yang tersedia dalam rentang tanggal ini --'}
+                              {`-- Pilih Slot Jadwal Pengganti (${candidates.length} slot valid tersedia) --`}
                             </option>
                             {currentVal && !isCurrentInCandidates && (
                               <option value={currentVal} disabled>
