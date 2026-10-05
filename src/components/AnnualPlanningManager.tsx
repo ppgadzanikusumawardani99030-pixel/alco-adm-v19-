@@ -865,6 +865,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                       semester: activeSelectedPlan.semester === 1 ? '1 (Ganjil)' : '2 (Genap)',
                     }}
                     atp={atp}
+                    tp={tp}
                     k13Analysis={k13Analysis}
                     calendar={activeSelectedData?.academicCalendar?.calendar}
                     calendarDays={activeSelectedData?.academicCalendar?.days || []}
@@ -886,6 +887,7 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
                     onSaveSubjectWeeklySchedule={onSaveSubjectWeeklySchedule}
                     persistedSchedule={activeSelectedData?.learningMeetingSchedule}
                     onSaveLearningMeetingSchedule={onSaveLearningMeetingSchedule}
+                    onSaveUnitExecutionPlan={onSaveUnitExecutionPlan}
                     afterTimeSetup={activeTaskId === 'time-allocation' ? (
                       /* Dalam Task 5 boleh tampil sub-selector kecil */
                       <div className="flex items-center gap-2 mb-4 bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">

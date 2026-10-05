@@ -7,6 +7,8 @@ import {
   CalendarDay,
   LearningMeetingScheduleData,
   LearningMeetingScheduleEntry,
+  ATPData,
+  TPData,
 } from '../types';
 import { resolveEffectiveSubjectSlots } from '../services/subjectScheduleService';
 import {
@@ -17,6 +19,16 @@ import {
 import { resolveUnitSemesterPlacement } from '../services/unitSemesterPlanningService';
 import { getEffectiveWeeksList, normalizeCalendarDayStatus } from '../services/jpEngine';
 import {
+  analyzeMeetingReconciliation,
+  applyReconciliationAction,
+  MeetingReconciliationAction,
+  MeetingReconciliationAnalysis,
+} from '../services/meetingReconciliationService';
+import {
+  requestMeetingReconciliationAI,
+  AIMeetingReconciliationRecommendation,
+} from '../services/aiService';
+import {
   Calendar,
   AlertTriangle,
   Info,
@@ -26,6 +38,10 @@ import {
   Save,
   Wrench,
   AlertCircle,
+  Sparkles,
+  ChevronDown,
+  ChevronUp,
+  RefreshCw,
 } from 'lucide-react';
 
 interface LearningMeetingSchedulePreviewProps {
@@ -39,10 +55,16 @@ interface LearningMeetingSchedulePreviewProps {
   calendarDays?: CalendarDay[];
   schoolDaysPerWeek?: number | null;
   persistedSchedule?: LearningMeetingScheduleData;
+  atp?: ATPData | null;
+  tp?: TPData | null;
+  subject?: string;
+  grade?: string;
+  phase?: string;
   onSaveLearningMeetingSchedule?: (
     data: LearningMeetingScheduleData,
     semesterPlanId: string
   ) => boolean;
+  onSaveUnitExecutionPlan?: (data: UnitExecutionPlanData) => boolean;
 }
 
 const DAY_NAMES = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
@@ -108,12 +130,36 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   calendarDays = [],
   schoolDaysPerWeek,
   persistedSchedule,
+  atp,
+  tp,
+  subject,
+  grade,
+  phase,
   onSaveLearningMeetingSchedule,
+  onSaveUnitExecutionPlan,
 }) => {
   // Manual reconciliation draft selections: meetingId -> { date, sessionId }
   const [manualSelections, setManualSelections] = useState<Record<string, ManualSelection>>({});
   const [saveStatus, setSaveStatus] = useState<'idle' | 'success' | 'error'>('idle');
   const [saveMessage, setSaveMessage] = useState<string>('');
+
+  // AI & Reconciliation states
+  const [aiRecommendations, setAiRecommendations] = useState<
+    Record<
+      string,
+      {
+        loading: boolean;
+        recommendation?: AIMeetingReconciliationRecommendation;
+        error?: string;
+      }
+    >
+  >({});
+  const [showSecondaryOptions, setShowSecondaryOptions] = useState<Record<string, boolean>>({});
+  const [selectedMergeTarget, setSelectedMergeTarget] = useState<Record<string, string>>({});
+  const [reconciliationNotice, setReconciliationNotice] = useState<{
+    type: 'success' | 'error' | 'info';
+    message: string;
+  } | null>(null);
 
   // 1. Resolve exact subject slots using existing resolver
   const subjectSlotResult = useMemo(() => {
@@ -674,6 +720,181 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
     setSaveMessage('');
   };
 
+  const handleRequestAIRecommendation = async (
+    mId: string,
+    analysis: MeetingReconciliationAnalysis
+  ) => {
+    setAiRecommendations((prev) => ({
+      ...prev,
+      [mId]: { loading: true },
+    }));
+
+    const sourceMeetingInfo = semesterMeetings.find((m) => m.meetingId === mId);
+    const sourceUnit = unitExecutionPlan?.units?.find((u) => u.unitId === analysis.unitId);
+    const sourceM = sourceUnit?.meetings?.find((m) => m.id === mId);
+
+    const mappingUnit = mapping?.units?.find((u) => u.id === analysis.unitId);
+    const sourceMaterials = (sourceM?.materialIds || []).map(
+      (matId) => mappingUnit?.materials?.find((m) => m.id === matId)?.title || matId
+    );
+
+    const sourceAtpSummary = sourceM?.linkedAtpItemIds || [];
+    const sourceTpSummary = sourceM?.linkedTpIds || [];
+
+    const adjacentMeetings = analysis.mergeTargetMeetingIds.map((targetId) => {
+      const targetM = sourceUnit?.meetings?.find((m) => m.id === targetId);
+      const matTitles = (targetM?.materialIds || []).map(
+        (matId) => mappingUnit?.materials?.find((m) => m.id === matId)?.title || matId
+      );
+      const sourceIdx = sourceUnit?.meetings?.findIndex((m) => m.id === mId) ?? 0;
+      const targetIdx = sourceUnit?.meetings?.findIndex((m) => m.id === targetId) ?? 0;
+      return {
+        meetingId: targetId,
+        title: targetM?.title || targetId,
+        materials: matTitles,
+        isPrevious: targetIdx < sourceIdx,
+      };
+    });
+
+    const res = await requestMeetingReconciliationAI({
+      subject: subject || 'Mata Pelajaran',
+      grade: grade || '',
+      phase: phase || '',
+      unitTitle: analysis.unitTitle,
+      unresolvedMeetingTitle: sourceMeetingInfo?.meetingTitle || 'Pertemuan',
+      sourceMaterials,
+      sourceAtpSummary,
+      sourceTpSummary,
+      adjacentMeetings,
+      safeOptions: analysis.safeOptions,
+    });
+
+    if (res.success && res.recommendation) {
+      setAiRecommendations((prev) => ({
+        ...prev,
+        [mId]: {
+          loading: false,
+          recommendation: res.recommendation,
+        },
+      }));
+    } else {
+      setAiRecommendations((prev) => ({
+        ...prev,
+        [mId]: {
+          loading: false,
+          error: res.error || 'AI belum dapat memberikan rekomendasi.',
+        },
+      }));
+      setShowSecondaryOptions((prev) => ({ ...prev, [mId]: true }));
+    }
+  };
+
+  const handleApplyRecommendation = (
+    mId: string,
+    rec: AIMeetingReconciliationRecommendation
+  ) => {
+    if (!unitExecutionPlan || !mapping) return;
+
+    const res = applyReconciliationAction({
+      action: rec.action,
+      unresolvedMeetingId: mId,
+      unitExecutionPlan,
+      mapping,
+      atpData: atp,
+      tpData: tp,
+      candidateDate: rec.candidateDate,
+      candidateSessionId: rec.candidateSessionId,
+      targetMeetingId: rec.targetMeetingId,
+      suggestedTitle: rec.suggestedTitle,
+    });
+
+    if (res.success) {
+      if (res.manualSelection) {
+        setManualSelections((prev) => ({
+          ...prev,
+          [mId]: res.manualSelection!,
+        }));
+        setReconciliationNotice({
+          type: 'success',
+          message: 'Slot tanggal pengganti berhasil diterapkan.',
+        });
+      } else if (res.updatedPlan) {
+        if (onSaveUnitExecutionPlan) {
+          const saved = onSaveUnitExecutionPlan(res.updatedPlan);
+          if (saved) {
+            setReconciliationNotice({
+              type: 'success',
+              message:
+                rec.action === 'MERGE'
+                  ? 'Pertemuan berhasil digabungkan dan Rencana Pelaksanaan diperbarui.'
+                  : 'Pertemuan berhasil dipadatkan dan Rencana Pelaksanaan diperbarui.',
+            });
+          } else {
+            setReconciliationNotice({
+              type: 'error',
+              message: 'Gagal menyimpan perubahan Rencana Pelaksanaan Pertemuan.',
+            });
+          }
+        } else {
+          setReconciliationNotice({
+            type: 'error',
+            message: 'Authority simpan Rencana Pelaksanaan belum tersedia.',
+          });
+        }
+      }
+    } else {
+      setReconciliationNotice({
+        type: 'error',
+        message: res.error || 'Gagal menerapkan rekomendasi.',
+      });
+    }
+  };
+
+  const handleApplyManualAction = (
+    action: MeetingReconciliationAction,
+    mId: string,
+    extraParams?: { targetMeetingId?: string }
+  ) => {
+    if (!unitExecutionPlan || !mapping) return;
+
+    const res = applyReconciliationAction({
+      action,
+      unresolvedMeetingId: mId,
+      unitExecutionPlan,
+      mapping,
+      atpData: atp,
+      tpData: tp,
+      targetMeetingId: extraParams?.targetMeetingId,
+    });
+
+    if (res.success) {
+      if (res.updatedPlan) {
+        if (onSaveUnitExecutionPlan) {
+          const saved = onSaveUnitExecutionPlan(res.updatedPlan);
+          if (saved) {
+            setReconciliationNotice({
+              type: 'success',
+              message:
+                action === 'MERGE'
+                  ? 'Pertemuan berhasil digabungkan dan Rencana Pelaksanaan diperbarui.'
+                  : 'Pertemuan berhasil dipadatkan dan Rencana Pelaksanaan diperbarui.',
+            });
+          } else {
+            setReconciliationNotice({
+              type: 'error',
+              message: 'Gagal menyimpan perubahan Rencana Pelaksanaan Pertemuan.',
+            });
+          }
+        }
+      }
+    } else {
+      setReconciliationNotice({
+        type: 'error',
+        message: res.error || 'Gagal menerapkan aksi rekonsiliasi.',
+      });
+    }
+  };
+
   const handleSave = () => {
     if (
       !onSaveLearningMeetingSchedule ||
@@ -824,97 +1045,306 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
         </div>
       )}
 
-      {/* Manual Reconciliation Section */}
+      {/* Smart Meeting Reconciliation Section */}
       {scheduleResult.totalUnscheduledMeetings > 0 && (
-        <div className="space-y-3 p-4 bg-amber-50/40 rounded-xl border border-amber-200">
-          <div className="flex items-center gap-2">
-            <Wrench className="w-4 h-4 text-amber-700" />
-            <h4 className="font-bold text-slate-800 text-xs tracking-wide uppercase">
-              Rekonsiliasi Jadwal ({scheduleResult.totalUnscheduledMeetings} Pertemuan Belum Terjadwal)
-            </h4>
+        <div className="space-y-4 p-5 bg-amber-50/50 rounded-2xl border border-amber-200/90 shadow-2xs font-sans">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-amber-200/60 pb-3">
+            <div className="flex items-center gap-2">
+              <Wrench className="w-5 h-5 text-amber-700 shrink-0" />
+              <div>
+                <h4 className="font-extrabold text-slate-900 text-sm tracking-wide">
+                  {scheduleResult.totalUnscheduledMeetings} Pertemuan Perlu Disesuaikan
+                </h4>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Pertemuan belum memperoleh slot jadwal otomatis. Gunakan rekomendasi AI atau pilihan manual aman di bawah.
+                </p>
+              </div>
+            </div>
+            <span className="px-2.5 py-1 bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold shrink-0">
+              Penyesuaian Jadwal
+            </span>
           </div>
-          <p className="text-xs text-slate-600">
-            Pilih tanggal efektif dan sesi mengajar pengganti untuk pertemuan yang belum memperoleh slot otomatis.
-          </p>
 
-          <div className="space-y-2.5">
+          {reconciliationNotice && (
+            <div
+              className={`p-3 rounded-xl text-xs font-semibold flex items-center justify-between gap-2 ${
+                reconciliationNotice.type === 'success'
+                  ? 'bg-emerald-50 text-emerald-900 border border-emerald-200'
+                  : reconciliationNotice.type === 'error'
+                  ? 'bg-rose-50 text-rose-900 border border-rose-200'
+                  : 'bg-blue-50 text-blue-900 border border-blue-200'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                {reconciliationNotice.type === 'success' ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                )}
+                <span>{reconciliationNotice.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReconciliationNotice(null)}
+                className="text-[10px] font-bold text-slate-500 hover:text-slate-800 cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          )}
+
+          <div className="space-y-3.5">
             {scheduleResult.unscheduledMeetingIds.map((mId) => {
               const mInfo = semesterMeetings.find((m) => m.meetingId === mId);
               const sel = manualSelections[mId] || { date: '', sessionId: '' };
-              const selectedSess = availableSessions.find((s) => s.id === sel.sessionId);
               const err = manualErrors[mId];
+              const candidates = candidatesByMeetingId.get(mId) || [];
+
+              const analysis = analyzeMeetingReconciliation({
+                unresolvedMeetingId: mId,
+                unitExecutionPlan,
+                mapping,
+                atpData: atp,
+                tpData: tp,
+                replacementCandidates: candidates,
+              });
+
+              const aiState = aiRecommendations[mId];
+              const isSecondaryOpen = showSecondaryOptions[mId] || Boolean(aiState?.error);
 
               return (
                 <div
                   key={mId}
-                  className={`p-3 bg-white rounded-lg border text-xs space-y-2 transition-all ${
-                    err ? 'border-rose-300 ring-1 ring-rose-200' : 'border-slate-200 shadow-2xs'
+                  className={`p-4 bg-white rounded-xl border space-y-3 transition-all ${
+                    err ? 'border-rose-300 ring-1 ring-rose-200 shadow-2xs' : 'border-slate-200/90 shadow-2xs'
                   }`}
                 >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
                     <div>
-                      <span className="font-bold text-slate-800">{mInfo?.unitTitle}</span>
-                      <span className="text-slate-500 mx-1.5">•</span>
-                      <span className="font-semibold text-indigo-700">{mInfo?.meetingTitle}</span>
+                      <span className="font-extrabold text-slate-900 text-xs">{mInfo?.unitTitle}</span>
+                      <span className="text-slate-400 mx-2">•</span>
+                      <span className="font-bold text-indigo-700 text-xs">{mInfo?.meetingTitle}</span>
                     </div>
-                    <span className="text-[11px] text-amber-800 bg-amber-100/70 px-2 py-0.5 rounded font-medium">
-                      Slot jadwal aktual otomatis belum tersedia
+                    <span className="text-[11px] text-amber-800 bg-amber-100/80 px-2.5 py-0.5 rounded-md font-semibold">
+                      Slot otomatis terkena kalender non-pembelajaran
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 pt-1 items-center">
-                    <div className="sm:col-span-9">
-                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                        Pilih Slot Jadwal Pengganti (Hari Efektif & Sesi Valid):
-                      </label>
-                      {(() => {
-                        const candidates = candidatesByMeetingId.get(mId) || [];
-                        const currentVal = sel.date && sel.sessionId ? `${sel.date}|${sel.sessionId}` : '';
-                        const isCurrentInCandidates = candidates.some((c) => c.value === currentVal);
-
-                        if (candidates.length === 0) {
-                          return (
-                            <div className="p-2.5 bg-amber-50/70 border border-amber-200 rounded text-amber-900 text-[11px] leading-relaxed">
-                              Tidak tersedia slot pengganti yang valid dalam rentang semester ini. Tinjau Kalender Pendidikan atau Hari Mengajar.
-                            </div>
-                          );
-                        }
-
-                        return (
-                          <select
-                            value={currentVal}
-                            onChange={(e) => handleCandidateSelect(mId, e.target.value)}
-                            className={`w-full text-xs px-2.5 py-2 border rounded bg-white font-medium focus:ring-1 focus:outline-none transition ${
-                              err ? 'border-rose-400 focus:ring-rose-400 text-rose-900' : 'border-slate-300 focus:ring-indigo-500 text-slate-800'
-                            }`}
-                          >
-                            <option value="">
-                              {`-- Pilih Slot Jadwal Pengganti (${candidates.length} slot valid tersedia) --`}
-                            </option>
-                            {currentVal && !isCurrentInCandidates && (
-                              <option value={currentVal} disabled>
-                                {formatIndonesianDate(sel.date)} (Pilihan saat ini tidak valid / bentrok)
-                              </option>
-                            )}
-                            {candidates.map((c) => (
-                              <option key={c.value} value={c.value}>
-                                {c.label}
-                              </option>
-                            ))}
-                          </select>
-                        );
-                      })()}
+                  {/* AI Recommendation Section */}
+                  {!aiState?.recommendation && !aiState?.loading && (
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 bg-indigo-50/50 rounded-xl border border-indigo-100/80">
+                      <div className="text-xs text-indigo-950 font-medium">
+                        <p className="font-bold text-indigo-900 flex items-center gap-1.5 mb-0.5">
+                          <Sparkles className="w-4 h-4 text-indigo-600" />
+                          <span>Optimasi Pedagogis AI</span>
+                        </p>
+                        <span className="text-slate-600">AI dapat merekomendasikan solusi paling efisien (gabung, padatkan, atau jadwal ulang) sesuai opsi aman aplikasi.</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleRequestAIRecommendation(mId, analysis)}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs shadow-xs transition flex items-center gap-1.5 shrink-0 cursor-pointer"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>Optimalkan dengan AI</span>
+                      </button>
                     </div>
+                  )}
 
-                    <div className="sm:col-span-3">
-                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                        Alokasi JP:
-                      </label>
-                      <div className="px-2.5 py-2 bg-slate-100 border border-slate-200 rounded text-center font-bold text-slate-700 text-xs">
-                        {selectedSess ? `${selectedSess.jp} JP` : '-'}
+                  {aiState?.loading && (
+                    <div className="p-3.5 bg-indigo-50/50 rounded-xl border border-indigo-100 text-xs text-indigo-900 font-semibold flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 text-indigo-600 animate-spin shrink-0" />
+                      <span>AI sedang menghitung rekomendasi pedagogis terbaik...</span>
+                    </div>
+                  )}
+
+                  {aiState?.error && (
+                    <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 font-medium flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold">AI belum dapat memberikan rekomendasi.</p>
+                        <p className="mt-0.5 text-amber-800">Anda tetap dapat memilih solusi manual yang aman di bawah ini.</p>
                       </div>
                     </div>
-                  </div>
+                  )}
+
+                  {aiState?.recommendation && (
+                    <div className="p-3.5 bg-indigo-50/80 rounded-xl border border-indigo-200 text-xs space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <div className="font-bold text-indigo-950 flex items-center gap-1.5">
+                          <Sparkles className="w-4 h-4 text-indigo-600" />
+                          <span>Rekomendasi AI</span>
+                        </div>
+                        <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-indigo-200 text-indigo-900 uppercase">
+                          {aiState.recommendation.action === 'MERGE'
+                            ? 'Gabungkan Pertemuan'
+                            : aiState.recommendation.action === 'REDUCE'
+                            ? 'Padatkan Pertemuan'
+                            : 'Jadwalkan Ulang'}
+                        </span>
+                      </div>
+
+                      <div className="font-bold text-slate-800 text-sm">
+                        {aiState.recommendation.action === 'MERGE' && (
+                          <>
+                            Gabungkan dengan "
+                            {
+                              semesterMeetings.find(
+                                (m) => m.meetingId === aiState.recommendation!.targetMeetingId
+                              )?.meetingTitle || 'Pertemuan Berdampingan'
+                            }
+                            "
+                          </>
+                        )}
+                        {aiState.recommendation.action === 'REDUCE' && (
+                          <>Padatkan Pertemuan (Cakupan materi tetap 100% lengkap)</>
+                        )}
+                        {aiState.recommendation.action === 'RESCHEDULE' && (
+                          <>
+                            Jadwalkan Ulang ke{' '}
+                            {formatIndonesianDate(aiState.recommendation.candidateDate!)}
+                          </>
+                        )}
+                      </div>
+
+                      <p className="text-slate-600 leading-relaxed text-xs">
+                        {aiState.recommendation.reason}
+                      </p>
+
+                      <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2 border-t border-indigo-100">
+                        <button
+                          type="button"
+                          onClick={() => handleApplyRecommendation(mId, aiState.recommendation!)}
+                          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold text-xs shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <CheckCircle2 className="w-4 h-4" />
+                          <span>Terapkan Rekomendasi</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setShowSecondaryOptions((prev) => ({
+                              ...prev,
+                              [mId]: !prev[mId],
+                            }))
+                          }
+                          className="text-xs font-bold text-indigo-700 hover:text-indigo-900 flex items-center justify-center gap-1 cursor-pointer py-1"
+                        >
+                          <span>{isSecondaryOpen ? 'Sembunyikan Pilihan Lain' : 'Pilihan Lain'}</span>
+                          {isSecondaryOpen ? (
+                            <ChevronUp className="w-3.5 h-3.5" />
+                          ) : (
+                            <ChevronDown className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Secondary Safe Options */}
+                  {isSecondaryOpen && (
+                    <div className="pt-3 border-t border-slate-100 space-y-3 font-sans">
+                      <p className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                        Pilihan Manual Aman
+                      </p>
+
+                      <div className="space-y-3">
+                        {/* 1. RESCHEDULE Option */}
+                        <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 space-y-2">
+                          <label className="block text-[11px] font-bold text-slate-700">
+                            1. Cari Slot Pengganti (Hari Efektif Valid):
+                          </label>
+                          {candidates.length > 0 ? (
+                            <select
+                              value={sel.date && sel.sessionId ? `${sel.date}|${sel.sessionId}` : ''}
+                              onChange={(e) => handleCandidateSelect(mId, e.target.value)}
+                              className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-lg bg-white font-medium focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                            >
+                              <option value="">-- Pilih Slot Jadwal Pengganti --</option>
+                              {candidates.map((c) => (
+                                <option key={c.value} value={c.value}>
+                                  {c.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : (
+                            <div className="text-[11px] text-slate-500 italic">
+                              Tidak ada slot pengganti yang valid dalam rentang tanggal ini.
+                            </div>
+                          )}
+                        </div>
+
+                        {/* 2. MERGE Option */}
+                        {analysis.mergeTargetMeetingIds.length > 0 && (
+                          <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 space-y-2">
+                            <label className="block text-[11px] font-bold text-slate-700">
+                              2. Gabungkan dengan Pertemuan Berdampingan:
+                            </label>
+                            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                              <select
+                                value={selectedMergeTarget[mId] || ''}
+                                onChange={(e) =>
+                                  setSelectedMergeTarget((prev) => ({
+                                    ...prev,
+                                    [mId]: e.target.value,
+                                  }))
+                                }
+                                className="w-full text-xs px-2.5 py-2 border border-slate-300 rounded-lg bg-white font-medium focus:ring-1 focus:ring-indigo-500 focus:outline-none"
+                              >
+                                <option value="">-- Pilih Pertemuan Target --</option>
+                                {analysis.mergeTargetMeetingIds.map((targetId) => {
+                                  const targetM = semesterMeetings.find(
+                                    (m) => m.meetingId === targetId
+                                  );
+                                  return (
+                                    <option key={targetId} value={targetId}>
+                                      {targetM?.meetingTitle || targetId}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              <button
+                                type="button"
+                                disabled={!selectedMergeTarget[mId]}
+                                onClick={() =>
+                                  handleApplyManualAction('MERGE', mId, {
+                                    targetMeetingId: selectedMergeTarget[mId],
+                                  })
+                                }
+                                className={`px-4 py-2 rounded-lg font-bold text-xs transition shrink-0 cursor-pointer ${
+                                  selectedMergeTarget[mId]
+                                    ? 'bg-blue-900 hover:bg-blue-950 text-white shadow-xs'
+                                    : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed'
+                                }`}
+                              >
+                                Gabungkan Pertemuan
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* 3. REDUCE Option ("Padatkan Pertemuan") */}
+                        {analysis.canReduce && (
+                          <div className="p-3 bg-slate-50/80 rounded-xl border border-slate-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                            <div>
+                              <p className="font-bold text-slate-800 text-xs">3. Padatkan Pertemuan</p>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                Hapus pertemuan ini dari rencana. Seluruh cakupan materi & TP/ATP tetap 100% lengkap pada pertemuan lain.
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleApplyManualAction('REDUCE', mId)}
+                              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs shadow-xs transition shrink-0 cursor-pointer"
+                            >
+                              Padatkan Pertemuan
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {err && (
                     <div className="text-[11px] text-rose-700 flex items-center gap-1.5 pt-0.5">

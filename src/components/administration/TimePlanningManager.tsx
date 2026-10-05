@@ -8,6 +8,7 @@ import {
   TimeAllocation,
   SemesterJPSetting,
   ATPData,
+  TPData,
   K13Analysis,
   CalendarSourceType,
   CalendarWorkflowStatus,
@@ -99,6 +100,7 @@ export interface TimePlanningManagerProps {
   profile: TeacherProfile;
   academicSetting: AcademicSetting;
   atp?: ATPData;
+  tp?: TPData;
   k13Analysis?: K13Analysis;
   calendar?: AcademicCalendar;
   calendarDays: CalendarDay[];
@@ -117,6 +119,7 @@ export interface TimePlanningManagerProps {
   onSaveTimeAllocations: (allocations: TimeAllocation[], explicitSemesterPlanId?: string) => boolean;
   onSaveSubjectWeeklySchedule?: (schedule: SubjectWeeklySchedule, explicitSemesterPlanId?: string) => boolean;
   onSaveLearningMeetingSchedule?: (schedule: LearningMeetingScheduleData, explicitSemesterPlanId?: string) => boolean;
+  onSaveUnitExecutionPlan?: (data: UnitExecutionPlanData) => boolean;
 }
 
 export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
@@ -124,6 +127,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   profile,
   academicSetting,
   atp,
+  tp,
   k13Analysis,
   calendar,
   calendarDays = [],
@@ -142,6 +146,7 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
   onSaveTimeAllocations,
   onSaveSubjectWeeklySchedule,
   onSaveLearningMeetingSchedule,
+  onSaveUnitExecutionPlan,
 }) => {
   const isK13Curriculum =
     academicSetting.curriculumType === 'K13' || academicSetting.curriculum?.includes('2013');
@@ -2565,11 +2570,17 @@ export const TimePlanningManager: React.FC<TimePlanningManagerProps> = ({
               calendarDays={days}
               schoolDaysPerWeek={calendar?.schoolDaysPerWeek ?? null}
               persistedSchedule={persistedSchedule}
+              atp={atp}
+              tp={tp}
+              subject={academicSetting.subject}
+              grade={academicSetting.grade}
+              phase={academicSetting.phase}
               onSaveLearningMeetingSchedule={(data, spId) =>
                 onSaveLearningMeetingSchedule
                   ? onSaveLearningMeetingSchedule(data, spId)
                   : false
               }
+              onSaveUnitExecutionPlan={onSaveUnitExecutionPlan}
             />
           )}
 

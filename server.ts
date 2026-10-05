@@ -2607,6 +2607,144 @@ Kembalikan respon JSON dengan skema:
   }
 });
 
+// Endpoint: AI Recommend Meeting Reconciliation
+app.post('/api/ai/recommend-meeting-reconciliation', async (req, res) => {
+  const {
+    subject = 'Mata Pelajaran',
+    grade = '',
+    phase = '',
+    unitTitle = '',
+    unresolvedMeetingTitle = '',
+    sourceMaterials = [],
+    sourceAtpSummary = [],
+    sourceTpSummary = [],
+    adjacentMeetings = [],
+    safeOptions = [],
+  } = req.body || {};
+
+  if (!Array.isArray(safeOptions) || safeOptions.length === 0) {
+    return res.status(400).json({
+      success: false,
+      code: 'INVALID_PAYLOAD',
+      error: 'Daftar opsi aman (safeOptions) diperlukan dan tidak boleh kosong.',
+    });
+  }
+
+  const apiKey = resolveApiKey(req);
+  if (!apiKey) {
+    // Rule-based fallback using first available safe option
+    const firstOpt = safeOptions[0];
+    return res.json({
+      success: true,
+      recommendation: {
+        action: firstOpt.action,
+        candidateDate: firstOpt.candidateDate,
+        candidateSessionId: firstOpt.candidateSessionId,
+        targetMeetingId: firstOpt.targetMeetingId,
+        suggestedTitle: firstOpt.targetMeetingTitle
+          ? `${firstOpt.targetMeetingTitle} & ${unresolvedMeetingTitle}`
+          : unresolvedMeetingTitle,
+        reason: 'Rekomendasi otomatis berbasis ketersediaan opsi aman (tanpa AI).',
+      },
+    });
+  }
+
+  try {
+    const ai = createAIClient(apiKey);
+
+    const prompt = `Anda adalah asisten kurikulum pedagogis yang membantu guru menentukan rekomendasi terbaik ketika sebuah Pertemuan Pembelajaran tidak memperoleh slot tanggal aktual pada kalender pendidikan semester.
+
+Aplikasi telah menghitung opsi yang AMAN (safeOptions). Tugas Anda HANYA MEMILIH satu dari safeOptions tersebut secara pedagogis yang paling masuk akal dan efisien bagi guru tanpa mengurangi kualitas/tujuan pembelajaran.
+
+Dilarang keras membuat tanggal, sesi, ID, atau opsi baru yang TIDAK ada di safeOptions.
+Dilarang menghapus atau mengubah referensi materi kanonikal.
+
+KONTEKS PEMBELAJARAN:
+- Mata Pelajaran: ${subject}
+- Kelas / Fase: ${grade} / ${phase}
+- Unit / Bab: ${unitTitle}
+- Pertemuan Belum Terjadwal (Unresolved): ${unresolvedMeetingTitle}
+- Materi Source: ${JSON.stringify(sourceMaterials)}
+- Summary ATP: ${JSON.stringify(sourceAtpSummary)}
+- Summary TP: ${JSON.stringify(sourceTpSummary)}
+- Pertemuan Berdampingan pada Unit Sama: ${JSON.stringify(adjacentMeetings)}
+
+DAFTAR OPSI AMAN YANG TERSEDIA (HANYA PILIH DARI SINI):
+${JSON.stringify(safeOptions, null, 2)}
+
+PANDUAN PRIORITAS PEDAGOGIS:
+1. "REDUCE" (Padatkan Pertemuan): Pilih jika pertemuan source TIDAK membawa materi kanonikal unik dan pemadatannya tetap menjaga kelengkapan alur.
+2. "MERGE" (Gabungkan Pertemuan): Pilih jika cakupan materi source penting untuk digabungkan dengan pertemuan berdampingan pada Unit yang sama.
+3. "RESCHEDULE" (Jadwalkan Ulang): Pilih jika pertemuan harus tetap berdiri sendiri dan tersedia slot jadwal pengganti yang cocok.
+
+Format respons WAJIB berupa JSON murni dengan skema berikut:
+{
+  "action": "RESCHEDULE" | "MERGE" | "REDUCE",
+  "candidateDate": "YYYY-MM-DD" (opsional, hanya jika RESCHEDULE),
+  "candidateSessionId": "sessionId" (opsional, hanya jika RESCHEDULE),
+  "targetMeetingId": "targetMeetingId" (opsional, hanya jika MERGE),
+  "suggestedTitle": "Judul Usulan Gabungan" (opsional, untuk MERGE),
+  "reason": "Penjelasan pedagogis ringkas (1-2 kalimat) dalam Bahasa Indonesia mengapa solusi ini dipilih."
+}`;
+
+    const result = await generateContentWithRetry(ai, {
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+      },
+    });
+
+    const rawText = result.text || '';
+    const cleanJson = rawText.replace(/```json/g, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(cleanJson);
+
+    // STRICT SERVER VALIDATION AGAINST safeOptions
+    let isValidSelection = false;
+
+    if (parsed.action === 'RESCHEDULE') {
+      isValidSelection = safeOptions.some(
+        (opt: any) =>
+          opt.action === 'RESCHEDULE' &&
+          opt.candidateDate === parsed.candidateDate &&
+          opt.candidateSessionId === parsed.candidateSessionId
+      );
+    } else if (parsed.action === 'MERGE') {
+      isValidSelection = safeOptions.some(
+        (opt: any) =>
+          opt.action === 'MERGE' && opt.targetMeetingId === parsed.targetMeetingId
+      );
+    } else if (parsed.action === 'REDUCE') {
+      isValidSelection = safeOptions.some((opt: any) => opt.action === 'REDUCE');
+    }
+
+    if (!isValidSelection) {
+      return res.status(400).json({
+        success: false,
+        code: 'AI_RECONCILIATION_INVALID',
+        error: 'AI merekomendasikan opsi yang tidak valid atau tidak aman.',
+      });
+    }
+
+    return res.json({
+      success: true,
+      recommendation: {
+        action: parsed.action,
+        candidateDate: parsed.candidateDate,
+        candidateSessionId: parsed.candidateSessionId,
+        targetMeetingId: parsed.targetMeetingId,
+        suggestedTitle: parsed.suggestedTitle,
+        reason: parsed.reason || 'Rekomendasi disesuaikan secara pedagogis oleh AI.',
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({
+      success: false,
+      code: 'AI_RECONCILIATION_ERROR',
+      error: `Gagal memproses rekomendasi AI: ${err.message || String(err)}`,
+    });
+  }
+});
+
 // Endpoint: AI Analyze ATP Unit Mapping (Read-Only Analysis)
 app.post('/api/ai/analyze-atp-unit-mapping', async (req, res) => {
   const { subject, grade, phase, tpData, atpData, currentMapping } = req.body || {};

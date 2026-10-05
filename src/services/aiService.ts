@@ -1036,4 +1036,69 @@ export async function generateUnitMeetingsWithAI(
   }
 }
 
+import { MeetingReconciliationSafeOption } from './meetingReconciliationService';
+
+export interface AIMeetingReconciliationRecommendation {
+  action: 'RESCHEDULE' | 'MERGE' | 'REDUCE';
+  candidateDate?: string;
+  candidateSessionId?: string;
+  targetMeetingId?: string;
+  suggestedTitle?: string;
+  reason: string;
+}
+
+export interface AIMeetingReconciliationRecommendationParams {
+  subject: string;
+  grade: string;
+  phase: string;
+  unitTitle: string;
+  unresolvedMeetingTitle: string;
+  sourceMaterials: string[];
+  sourceAtpSummary: string[];
+  sourceTpSummary: string[];
+  adjacentMeetings: Array<{
+    meetingId: string;
+    title: string;
+    materials: string[];
+    isPrevious: boolean;
+  }>;
+  safeOptions: MeetingReconciliationSafeOption[];
+}
+
+export interface AIMeetingReconciliationRecommendationResponse {
+  success: boolean;
+  code?: string;
+  error?: string;
+  recommendation?: AIMeetingReconciliationRecommendation;
+}
+
+export async function requestMeetingReconciliationAI(
+  params: AIMeetingReconciliationRecommendationParams
+): Promise<AIMeetingReconciliationRecommendationResponse> {
+  try {
+    const res = await aiFetch('/api/ai/recommend-meeting-reconciliation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(params),
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      return {
+        success: false,
+        code: errData.code || 'AI_RECONCILIATION_ERROR',
+        error: errData.error || `Layanan AI mengalami kendala (${res.status})`,
+      };
+    }
+
+    return await res.json();
+  } catch (err: any) {
+    return {
+      success: false,
+      code: 'AI_RECONCILIATION_ERROR',
+      error: `Gagal memproses rekomendasi AI: ${err.message || String(err)}`,
+    };
+  }
+}
+
 
