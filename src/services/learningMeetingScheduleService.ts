@@ -262,16 +262,14 @@ function createFailedResult(
  */
 export function isLearningMeetingScheduleStale(params: {
   schedule: LearningMeetingScheduleData;
-  mappingUpdatedAt: string;
-  unitExecutionPlanUpdatedAt: string;
+  mappingUpdatedAt?: string;
+  unitExecutionPlanUpdatedAt?: string;
   subjectWeeklyScheduleUpdatedAt: string;
   calendarUpdatedAt: string;
   expectedWeeklyJP: number;
 }): boolean {
   const {
     schedule,
-    mappingUpdatedAt,
-    unitExecutionPlanUpdatedAt,
     subjectWeeklyScheduleUpdatedAt,
     calendarUpdatedAt,
     expectedWeeklyJP,
@@ -280,8 +278,6 @@ export function isLearningMeetingScheduleStale(params: {
   if (!schedule) return true;
 
   return (
-    schedule.basedOnMappingUpdatedAt !== mappingUpdatedAt ||
-    schedule.basedOnUnitExecutionPlanUpdatedAt !== unitExecutionPlanUpdatedAt ||
     schedule.basedOnSubjectWeeklyScheduleUpdatedAt !== subjectWeeklyScheduleUpdatedAt ||
     schedule.basedOnCalendarUpdatedAt !== calendarUpdatedAt ||
     schedule.basedOnWeeklyJP !== expectedWeeklyJP

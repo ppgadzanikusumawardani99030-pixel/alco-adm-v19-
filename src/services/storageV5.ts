@@ -39,6 +39,7 @@ import {
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from './unitSemesterPlanningService';
 import { validateLearningMeetingScheduleData } from './learningMeetingScheduleService';
+import { resolveSemesterJPFromState } from './semesterJPResolver';
 
 export { STORAGE_KEY_V5 };
 
@@ -1774,18 +1775,15 @@ export function saveLearningMeetingScheduleV5(
   const state = loadStorageV5();
   const { semesterPlan, yearPlan } = assertSemesterPlanAndParentExist(state, semesterPlanId);
 
-  // Authority check: current weekly JP from SemesterJPSetting
-  const currentSemesterJPSetting = (state.semesterJPSettings || []).find(
-    (entry) => entry.semesterPlanId === semesterPlanId
-  )?.value;
-
-  const currentWeeklyJP = currentSemesterJPSetting?.actualScheduledWeeklyJP;
+  // Authority check: current weekly JP resolved from semester override or annual default
+  const resolvedJP = resolveSemesterJPFromState(semesterPlanId, state);
+  const currentWeeklyJP = resolvedJP.weeklyJP;
   if (
     typeof currentWeeklyJP !== 'number' ||
     !Number.isFinite(currentWeeklyJP) ||
     currentWeeklyJP <= 0
   ) {
-    throw new Error('JP mingguan semester (SemesterJPSetting) belum valid atau tidak tersedia.');
+    throw new Error('JP mingguan semester belum dapat ditentukan dari penyesuaian semester maupun referensi JP tahunan.');
   }
 
   // Lineage resolution & validation

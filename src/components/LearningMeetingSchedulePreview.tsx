@@ -15,6 +15,7 @@ import {
   resolveLearningMeetingSchedule,
   isLearningMeetingScheduleStale,
   buildLearningMeetingScheduleData,
+  validateLearningMeetingScheduleData,
 } from '../services/learningMeetingScheduleService';
 import { resolveUnitSemesterPlacement } from '../services/unitSemesterPlanningService';
 import { getEffectiveWeeksList, normalizeCalendarDayStatus } from '../services/jpEngine';
@@ -952,6 +953,23 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
         manualOverrides: validManuals,
         persistedId: persistedSchedule?.id,
       });
+
+      const validation = validateLearningMeetingScheduleData({
+        data: dataToSave,
+        semester,
+        mapping,
+        unitExecutionPlan,
+        subjectWeeklySchedule: schedule,
+        expectedWeeklyJP,
+        calendar,
+        calendarDays,
+      });
+
+      if (!validation.isValid) {
+        setSaveStatus('error');
+        setSaveMessage(`Gagal validasi jadwal: ${validation.errors.join('; ')}`);
+        return;
+      }
 
       const success = onSaveLearningMeetingSchedule(dataToSave, semesterPlanId);
       if (success) {
