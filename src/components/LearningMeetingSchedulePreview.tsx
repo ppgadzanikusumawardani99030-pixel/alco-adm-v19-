@@ -86,6 +86,17 @@ interface ManualSelection {
   sessionId: string;
 }
 
+interface ReplacementCandidate {
+  date: string;
+  dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6;
+  sessionId: string;
+  sessionOrder: number;
+  jp: number;
+  weekIndex: number;
+  label: string;
+  value: string;
+}
+
 export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePreviewProps> = ({
   semesterPlanId,
   semester,
@@ -234,13 +245,25 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
     setSaveMessage('');
   }, [persistedSchedule, isPersistedStale]);
 
-  // Candidate effective dates for manual selection
-  const effectiveLearningDates = useMemo(() => {
-    if (!calendar?.startDate || !calendar?.endDate || !calendarDays) return [];
+  // Available sessions from subjectWeeklySchedule
+  const availableSessions = useMemo(() => {
+    return [...(schedule?.sessions || [])].sort((a, b) => a.order - b.order);
+  }, [schedule?.sessions]);
+
+  // Effective weeks list from calendar
+  const effectiveWeeks = useMemo(() => {
+    return getEffectiveWeeksList(calendar, calendarDays);
+  }, [calendar, calendarDays]);
+
+  // All potential replacement candidates: EFFECTIVE_LEARNING dates × availableSessions
+  const allPotentialCandidates = useMemo<ReplacementCandidate[]>(() => {
+    if (!calendar?.startDate || !calendar?.endDate || !calendarDays || availableSessions.length === 0) {
+      return [];
+    }
     const start = calendar.startDate;
     const end = calendar.endDate;
 
-    const dates: Array<{ date: string; label: string; dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6 }> = [];
+    const effectiveDates: Array<{ date: string; dayOfWeek: 1 | 2 | 3 | 4 | 5 | 6; weekIndex: number }> = [];
 
     for (const day of calendarDays) {
       if (!day || !day.date) continue;
@@ -252,21 +275,135 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
       const jsDay = d.getDay();
       if (jsDay === 0) continue; // Sunday
 
-      dates.push({
+      const wk = effectiveWeeks.find((w) => day.date >= w.startDate && day.date <= w.endDate);
+
+      effectiveDates.push({
         date: day.date,
-        label: formatIndonesianDate(day.date),
         dayOfWeek: jsDay as 1 | 2 | 3 | 4 | 5 | 6,
+        weekIndex: wk ? wk.weekIndex : 1,
       });
     }
 
-    dates.sort((a, b) => a.date.localeCompare(b.date));
-    return dates;
-  }, [calendar?.startDate, calendar?.endDate, calendarDays]);
+    effectiveDates.sort((a, b) => a.date.localeCompare(b.date));
 
-  // Available sessions from subjectWeeklySchedule
-  const availableSessions = useMemo(() => {
-    return [...(schedule?.sessions || [])].sort((a, b) => a.order - b.order);
-  }, [schedule?.sessions]);
+    const candidates: ReplacementCandidate[] = [];
+    for (const d of effectiveDates) {
+      for (const s of availableSessions) {
+        candidates.push({
+          date: d.date,
+          dayOfWeek: d.dayOfWeek,
+          sessionId: s.id,
+          sessionOrder: s.order,
+          jp: s.jp,
+          weekIndex: d.weekIndex,
+          label: `${formatIndonesianDate(d.date)} • Sesi ${s.order} • ${s.jp} JP`,
+          value: `${d.date}|${s.id}`,
+        });
+      }
+    }
+
+    return candidates;
+  }, [calendar?.startDate, calendar?.endDate, calendarDays, availableSessions, effectiveWeeks]);
+
+  // Set of occupied AUTO date:session keys
+  const autoDateSessions = useMemo(() => {
+    const set = new Set<string>();
+    (scheduleResult?.scheduledEntries || []).forEach((e) => {
+      set.add(`${e.date}:${e.sessionId}`);
+    });
+    return set;
+  }, [scheduleResult?.scheduledEntries]);
+
+  // Compute filtered candidates per unscheduled meeting with chronological enforcement
+  const candidatesByMeetingId = useMemo(() => {
+    const map = new Map<string, ReplacementCandidate[]>();
+    if (!scheduleResult || !scheduleResult.unscheduledMeetingIds) return map;
+
+    const sessionOrderMap = new Map<string, number>();
+    availableSessions.forEach((s) => sessionOrderMap.set(s.id, s.order));
+
+    for (const mId of scheduleResult.unscheduledMeetingIds) {
+      const targetIdx = semesterMeetings.findIndex((m) => m.meetingId === mId);
+      if (targetIdx === -1) {
+        map.set(mId, []);
+        continue;
+      }
+
+      // 1. Find previous scheduled boundary
+      let prevSlot: { date: string; sessionOrder: number } | null = null;
+      for (let i = targetIdx - 1; i >= 0; i--) {
+        const prevM = semesterMeetings[i];
+        const autoEntry = scheduleResult.scheduledEntries.find((e) => e.meetingId === prevM.meetingId);
+        if (autoEntry) {
+          prevSlot = { date: autoEntry.date, sessionOrder: sessionOrderMap.get(autoEntry.sessionId) ?? 1 };
+          break;
+        }
+        const manSel = manualSelections[prevM.meetingId];
+        if (manSel && manSel.date && manSel.sessionId) {
+          prevSlot = { date: manSel.date, sessionOrder: sessionOrderMap.get(manSel.sessionId) ?? 1 };
+          break;
+        }
+      }
+
+      // 2. Find next scheduled boundary
+      let nextSlot: { date: string; sessionOrder: number } | null = null;
+      for (let i = targetIdx + 1; i < semesterMeetings.length; i++) {
+        const nextM = semesterMeetings[i];
+        const autoEntry = scheduleResult.scheduledEntries.find((e) => e.meetingId === nextM.meetingId);
+        if (autoEntry) {
+          nextSlot = { date: autoEntry.date, sessionOrder: sessionOrderMap.get(autoEntry.sessionId) ?? 1 };
+          break;
+        }
+        const manSel = manualSelections[nextM.meetingId];
+        if (manSel && manSel.date && manSel.sessionId) {
+          nextSlot = { date: manSel.date, sessionOrder: sessionOrderMap.get(manSel.sessionId) ?? 1 };
+          break;
+        }
+      }
+
+      // 3. Collect manual selections from other meetings
+      const otherManualKeys = new Set<string>();
+      for (const [otherMId, sel] of Object.entries(manualSelections) as [string, ManualSelection][]) {
+        if (otherMId !== mId && sel && sel.date && sel.sessionId) {
+          otherManualKeys.add(`${sel.date}:${sel.sessionId}`);
+        }
+      }
+
+      // 4. Filter all potential candidates
+      const filtered = allPotentialCandidates.filter((c) => {
+        const key = `${c.date}:${c.sessionId}`;
+        // Exclude occupied AUTO slots
+        if (autoDateSessions.has(key)) return false;
+        // Exclude occupied other MANUAL slots
+        if (otherManualKeys.has(key)) return false;
+
+        // Chronological boundary with previous scheduled slot
+        if (prevSlot) {
+          if (c.date < prevSlot.date) return false;
+          if (c.date === prevSlot.date && c.sessionOrder <= prevSlot.sessionOrder) return false;
+        }
+
+        // Chronological boundary with next scheduled slot
+        if (nextSlot) {
+          if (c.date > nextSlot.date) return false;
+          if (c.date === nextSlot.date && c.sessionOrder >= nextSlot.sessionOrder) return false;
+        }
+
+        return true;
+      });
+
+      map.set(mId, filtered);
+    }
+
+    return map;
+  }, [
+    scheduleResult,
+    semesterMeetings,
+    availableSessions,
+    manualSelections,
+    allPotentialCandidates,
+    autoDateSessions,
+  ]);
 
   // 1. Prerequisite check for mapping & execution plan
   if (!mapping || !unitExecutionPlan) {
@@ -421,16 +558,17 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   }
 
   // 7. When scheduleResult is valid and ready
-  const effectiveWeeks = getEffectiveWeeksList(calendar, calendarDays);
+  const sessionOrderMap = useMemo(() => {
+    const map = new Map<string, number>();
+    availableSessions.forEach((s) => map.set(s.id, s.order));
+    return map;
+  }, [availableSessions]);
 
-  // Validate manual overrides: check collisions & chronology
-  const autoDateSessions = new Set<string>();
-  (scheduleResult.scheduledEntries || []).forEach((e) => {
-    autoDateSessions.add(`${e.date}:${e.sessionId}`);
-  });
-
-  const canonicalOrderMap = new Map<string, number>();
-  semesterMeetings.forEach((m, idx) => canonicalOrderMap.set(m.meetingId, idx));
+  const canonicalOrderMap = useMemo(() => {
+    const map = new Map<string, number>();
+    semesterMeetings.forEach((m, idx) => map.set(m.meetingId, idx));
+    return map;
+  }, [semesterMeetings]);
 
   // Compute resolved manual entries
   const manualEntries: LearningMeetingScheduleEntry[] = [];
@@ -443,11 +581,11 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
 
     const dateSessionKey = `${sel.date}:${sel.sessionId}`;
     if (autoDateSessions.has(dateSessionKey)) {
-      manualErrors[mId] = `Konflik: Tanggal dan sesi ${dateSessionKey} sudah dipakai oleh jadwal otomatis.`;
+      manualErrors[mId] = `Konflik: Tanggal dan sesi (${formatIndonesianDate(sel.date)}) sudah dipakai oleh jadwal otomatis.`;
       continue;
     }
     if (manualDateSessions.has(dateSessionKey)) {
-      manualErrors[mId] = `Konflik: Tanggal dan sesi ${dateSessionKey} sudah dipilih oleh Pertemuan lain.`;
+      manualErrors[mId] = `Konflik: Tanggal dan sesi (${formatIndonesianDate(sel.date)}) sudah dipilih oleh Pertemuan lain.`;
       continue;
     }
     manualDateSessions.add(dateSessionKey);
@@ -489,10 +627,18 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   for (let i = 1; i < combinedEntries.length; i++) {
     const prev = combinedEntries[i - 1];
     const curr = combinedEntries[i];
+    const prevSessionOrder = sessionOrderMap.get(prev.sessionId) ?? 1;
+    const currSessionOrder = sessionOrderMap.get(curr.sessionId) ?? 1;
+
+    let isChronologyViolated = false;
     if (curr.date < prev.date) {
-      if (curr.mode === 'MANUAL_OVERRIDE') {
-        manualErrors[curr.meetingId] = `Urutan kronologis salah: Tanggal (${formatIndonesianDate(curr.date)}) lebih awal dari Pertemuan sebelumnya (${formatIndonesianDate(prev.date)}).`;
-      }
+      isChronologyViolated = true;
+    } else if (curr.date === prev.date && currSessionOrder <= prevSessionOrder) {
+      isChronologyViolated = true;
+    }
+
+    if (isChronologyViolated && curr.mode === 'MANUAL_OVERRIDE') {
+      manualErrors[curr.meetingId] = `Urutan kronologis salah: Slot (${formatIndonesianDate(curr.date)}, Sesi ${currSessionOrder}) harus setelah Pertemuan sebelumnya (${formatIndonesianDate(prev.date)}, Sesi ${prevSessionOrder}).`;
     }
   }
 
@@ -513,26 +659,23 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
   const totalActualJP = Array.from(activeEntryMap.values()).reduce((sum, e) => sum + e.jp, 0);
   const totalExcludedOccurrences = scheduleResult.totalExcludedOccurrences;
 
-  const handleDateChange = (meetingId: string, newDate: string) => {
-    setManualSelections((prev) => ({
-      ...prev,
-      [meetingId]: {
-        date: newDate,
-        sessionId: prev[meetingId]?.sessionId || '',
-      },
-    }));
-    setSaveStatus('idle');
-    setSaveMessage('');
-  };
-
-  const handleSessionChange = (meetingId: string, newSessionId: string) => {
-    setManualSelections((prev) => ({
-      ...prev,
-      [meetingId]: {
-        date: prev[meetingId]?.date || '',
-        sessionId: newSessionId,
-      },
-    }));
+  const handleCandidateSelect = (meetingId: string, candidateValue: string) => {
+    if (!candidateValue) {
+      setManualSelections((prev) => {
+        const next = { ...prev };
+        delete next[meetingId];
+        return next;
+      });
+    } else {
+      const [d, sId] = candidateValue.split('|');
+      setManualSelections((prev) => ({
+        ...prev,
+        [meetingId]: {
+          date: d,
+          sessionId: sId,
+        },
+      }));
+    }
     setSaveStatus('idle');
     setSaveMessage('');
   };
@@ -725,48 +868,49 @@ export const LearningMeetingSchedulePreview: React.FC<LearningMeetingSchedulePre
                     </span>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 pt-1 items-center">
-                    <div className="sm:col-span-6">
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 pt-1 items-center">
+                    <div className="sm:col-span-9">
                       <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                        Pilih Tanggal Pengganti (Hari Efektif):
+                        Pilih Slot Jadwal Pengganti (Hari Efektif & Sesi Valid):
                       </label>
-                      <select
-                        value={sel.date}
-                        onChange={(e) => handleDateChange(mId, e.target.value)}
-                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded bg-white font-medium focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                      >
-                        <option value="">-- Pilih Tanggal --</option>
-                        {effectiveLearningDates.map((d) => (
-                          <option key={d.date} value={d.date}>
-                            {d.label}
-                          </option>
-                        ))}
-                      </select>
+                      {(() => {
+                        const candidates = candidatesByMeetingId.get(mId) || [];
+                        const currentVal = sel.date && sel.sessionId ? `${sel.date}|${sel.sessionId}` : '';
+                        const isCurrentInCandidates = candidates.some((c) => c.value === currentVal);
+
+                        return (
+                          <select
+                            value={currentVal}
+                            onChange={(e) => handleCandidateSelect(mId, e.target.value)}
+                            className={`w-full text-xs px-2.5 py-2 border rounded bg-white font-medium focus:ring-1 focus:outline-none transition ${
+                              err ? 'border-rose-400 focus:ring-rose-400 text-rose-900' : 'border-slate-300 focus:ring-indigo-500 text-slate-800'
+                            }`}
+                          >
+                            <option value="">
+                              {candidates.length > 0
+                                ? `-- Pilih Slot Jadwal Pengganti (${candidates.length} slot valid tersedia) --`
+                                : '-- Tidak ada slot jadwal valid yang tersedia dalam rentang tanggal ini --'}
+                            </option>
+                            {currentVal && !isCurrentInCandidates && (
+                              <option value={currentVal} disabled>
+                                {formatIndonesianDate(sel.date)} (Pilihan saat ini tidak valid / bentrok)
+                              </option>
+                            )}
+                            {candidates.map((c) => (
+                              <option key={c.value} value={c.value}>
+                                {c.label}
+                              </option>
+                            ))}
+                          </select>
+                        );
+                      })()}
                     </div>
 
-                    <div className="sm:col-span-4">
-                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
-                        Pilih Sesi Mengajar:
-                      </label>
-                      <select
-                        value={sel.sessionId}
-                        onChange={(e) => handleSessionChange(mId, e.target.value)}
-                        className="w-full text-xs px-2.5 py-1.5 border border-slate-300 rounded bg-white font-medium focus:ring-1 focus:ring-indigo-500 focus:outline-none"
-                      >
-                        <option value="">-- Pilih Sesi --</option>
-                        {availableSessions.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            Sesi {s.order} ({s.jp} JP)
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <div className="sm:col-span-2">
+                    <div className="sm:col-span-3">
                       <label className="block text-[11px] font-medium text-slate-600 mb-1">
                         Alokasi JP:
                       </label>
-                      <div className="px-2.5 py-1.5 bg-slate-100 border border-slate-200 rounded text-center font-bold text-slate-700">
+                      <div className="px-2.5 py-2 bg-slate-100 border border-slate-200 rounded text-center font-bold text-slate-700 text-xs">
                         {selectedSess ? `${selectedSess.jp} JP` : '-'}
                       </div>
                     </div>
