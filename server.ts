@@ -1724,13 +1724,13 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
   const { subject = 'Mata Pelajaran', grade = '', phase = '', mapping, tpData, atpData, currentPlan, capacityContext } = req.body || {};
 
   if (!mapping || !Array.isArray(mapping.units)) {
-    return res.status(400).json({ error: 'Data pemetaan Unit/Bab (mapping) diperlukan.' });
+    return res.status(400).json({ success: false, code: 'INVALID_PAYLOAD', error: 'Data pemetaan Unit/Bab (mapping) diperlukan.' });
   }
   if (!tpData || !Array.isArray(tpData.items)) {
-    return res.status(400).json({ error: 'Data TP canonical diperlukan.' });
+    return res.status(400).json({ success: false, code: 'INVALID_PAYLOAD', error: 'Data TP canonical diperlukan.' });
   }
   if (!atpData || !Array.isArray(atpData.items)) {
-    return res.status(400).json({ error: 'Data ATP canonical diperlukan.' });
+    return res.status(400).json({ success: false, code: 'INVALID_PAYLOAD', error: 'Data ATP canonical diperlukan.' });
   }
 
   const validTpMap = new Map<string, any>(tpData.items.map((tp: any) => [tp.id, tp]));
@@ -1739,7 +1739,9 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
   const sortedMappingUnits = [...(mapping.units || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
   const validUnitIdsSet = new Set(sortedMappingUnits.map((u) => u.id));
 
-  const semester1LastUnitId = capacityContext?.semester1LastUnitId;
+  const semester1LastUnitId = capacityContext?.semester1LastUnitId !== undefined
+    ? capacityContext.semester1LastUnitId
+    : (currentPlan?.semesterPlacement?.semester1LastUnitId ?? null);
   const semester1UnitIds: string[] = [];
   const semester2UnitIds: string[] = [];
 
@@ -1748,7 +1750,25 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
       sortedMappingUnits.forEach((u) => semester2UnitIds.push(u.id));
     } else {
       if (!validUnitIdsSet.has(semester1LastUnitId)) {
-        return res.status(400).json({ error: `semester1LastUnitId '${semester1LastUnitId}' tidak dikenal pada mapping.units` });
+        return res.status(400).json({
+          success: false,
+          code: 'BOUNDARY_MISMATCH',
+          error: `semester1LastUnitId '${semester1LastUnitId}' tidak dikenal pada mapping.units`,
+          diagnostic: {
+            version: 1,
+            stage: 'BOUNDARY_RESOLUTION',
+            code: 'BOUNDARY_MISMATCH',
+            mappingId: mapping.id,
+            planId: currentPlan?.id,
+            semester1LastUnitId,
+            semester1UnitIds: [],
+            semester2UnitIds: [],
+            capacity: {
+              semester1: { target: capacityContext?.semester1?.targetMeetingCount ?? 0, existing: 0, requestedNew: 0 },
+              semester2: { target: capacityContext?.semester2?.targetMeetingCount ?? 0, existing: 0, requestedNew: 0 },
+            },
+          },
+        });
       }
       let reachedLastS1 = false;
       for (const u of sortedMappingUnits) {
@@ -1762,34 +1782,29 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
         }
       }
     }
-  } else {
-    const currentPlacement = currentPlan?.semesterPlacement;
-    if (currentPlacement && currentPlacement.mode === 'CONTIGUOUS_BOUNDARY') {
-      const lastS1 = currentPlacement.semester1LastUnitId;
-      if (lastS1 === null) {
-        sortedMappingUnits.forEach((u) => semester2UnitIds.push(u.id));
-      } else {
-        if (!validUnitIdsSet.has(lastS1)) {
-          return res.status(400).json({ error: `semester1LastUnitId '${lastS1}' dari currentPlan tidak dikenal.` });
-        }
-        let reachedLastS1 = false;
-        for (const u of sortedMappingUnits) {
-          if (!reachedLastS1) {
-            semester1UnitIds.push(u.id);
-            if (u.id === lastS1) {
-              reachedLastS1 = true;
-            }
-          } else {
-            semester2UnitIds.push(u.id);
-          }
-        }
-      }
-    }
   }
 
   if (currentPlan?.semesterPlacement && capacityContext) {
     if (currentPlan.semesterPlacement.semester1LastUnitId !== capacityContext.semester1LastUnitId) {
-      return res.status(400).json({ error: 'Boundary semester dari currentPlan tidak sama dengan capacityContext.' });
+      return res.status(400).json({
+        success: false,
+        code: 'BOUNDARY_MISMATCH',
+        error: 'Boundary semester dari currentPlan tidak sama dengan capacityContext.',
+        diagnostic: {
+          version: 1,
+          stage: 'BOUNDARY_RESOLUTION',
+          code: 'BOUNDARY_MISMATCH',
+          mappingId: mapping.id,
+          planId: currentPlan?.id,
+          semester1LastUnitId,
+          semester1UnitIds,
+          semester2UnitIds,
+          capacity: {
+            semester1: { target: capacityContext?.semester1?.targetMeetingCount ?? 0, existing: 0, requestedNew: 0 },
+            semester2: { target: capacityContext?.semester2?.targetMeetingCount ?? 0, existing: 0, requestedNew: 0 },
+          },
+        },
+      });
     }
   }
 
@@ -1814,8 +1829,88 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
   const additionalS1 = targetS1 - s1ExistingMeetingCount;
   const additionalS2 = targetS2 - s2ExistingMeetingCount;
 
+  const buildDiagnostic = (opts: {
+    stage: string;
+    code: string;
+    suggS1Count?: number;
+    suggS2Count?: number;
+    perUnitMap?: Map<string, {
+      unitId: string;
+      semester: 1 | 2;
+      existingCount: number;
+      generatedCount: number;
+      suggestions?: any[];
+    }>;
+    issue?: {
+      unitId?: string;
+      suggestionIndex?: number;
+      title?: string;
+      field?: 'unitId' | 'materialIds' | 'linkedAtpItemIds' | 'linkedTpIds';
+      invalidId?: string;
+    };
+    missingCoverage?: Array<{
+      unitId: string;
+      materialIds: string[];
+      atpItemIds: string[];
+      tpIds: string[];
+    }>;
+  }) => {
+    const perUnitList = opts.perUnitMap
+      ? Array.from(opts.perUnitMap.values())
+      : sortedMappingUnits.map((u) => {
+          const uPlan = currentPlan?.units?.find((p: any) => p.unitId === u.id);
+          const sem = s1UnitsSet.has(u.id) ? 1 : 2;
+          return {
+            unitId: u.id,
+            semester: sem as (1 | 2),
+            existingCount: (uPlan?.meetings || []).length,
+            generatedCount: 0,
+          };
+        });
+
+    return {
+      version: 1,
+      stage: opts.stage,
+      code: opts.code,
+      mappingId: mapping?.id || '',
+      planId: currentPlan?.id,
+      semester1LastUnitId,
+      semester1UnitIds,
+      semester2UnitIds,
+      capacity: {
+        semester1: {
+          target: targetS1,
+          existing: s1ExistingMeetingCount,
+          requestedNew: additionalS1,
+        },
+        semester2: {
+          target: targetS2,
+          existing: s2ExistingMeetingCount,
+          requestedNew: additionalS2,
+        },
+      },
+      generated: typeof opts.suggS1Count === 'number' && typeof opts.suggS2Count === 'number' ? {
+        semester1: opts.suggS1Count,
+        semester2: opts.suggS2Count,
+        deltaSemester1: opts.suggS1Count - additionalS1,
+        deltaSemester2: opts.suggS2Count - additionalS2,
+      } : undefined,
+      perUnit: perUnitList,
+      issue: opts.issue,
+      missingCoverage: opts.missingCoverage && opts.missingCoverage.length > 0 ? opts.missingCoverage : undefined,
+    };
+  };
+
   if (additionalS1 < 0 || additionalS2 < 0) {
-    return res.status(400).json({ error: 'Kapasitas Pertemuan manual melebihi kapasitas Pertemuan perencanaan.' });
+    return res.status(400).json({
+      success: false,
+      code: 'MANUAL_OVER_CAPACITY',
+      error: 'Kapasitas Pertemuan manual melebihi kapasitas Pertemuan perencanaan.',
+      diagnostic: buildDiagnostic({
+        stage: 'CAPACITY_CHECK',
+        code: 'MANUAL_OVER_CAPACITY',
+      }),
+    });
   }
 
   const unitsContext = sortedMappingUnits.map((unit: any) => {
@@ -1893,7 +1988,11 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
     return res.status(503).json({
       success: false,
       code: 'AI_NOT_CONFIGURED',
-      error: 'Layanan AI belum dikonfigurasi pada server.'
+      error: 'Layanan AI belum dikonfigurasi pada server.',
+      diagnostic: buildDiagnostic({
+        stage: 'AI_CONFIGURATION',
+        code: 'AI_NOT_CONFIGURED',
+      }),
     });
   }
 
@@ -1981,7 +2080,15 @@ Kembalikan respon JSON dengan skema:
 
     const parsed = cleanAndParseJSON(response.text, null);
     if (!parsed || !Array.isArray(parsed.units)) {
-      return res.status(400).json({ error: 'AI mengembalikan format respon yang tidak valid.' });
+      return res.status(400).json({
+        success: false,
+        code: 'AI_FORMAT_INVALID',
+        error: 'AI mengembalikan format respon yang tidak valid.',
+        diagnostic: buildDiagnostic({
+          stage: 'RESPONSE_PARSING',
+          code: 'AI_FORMAT_INVALID',
+        }),
+      });
     }
 
     const validUnitsMap = new Map<string, any>(mapping.units.map((u: any) => [u.id, u]));
@@ -1996,8 +2103,23 @@ Kembalikan respon JSON dengan skema:
       tps: Set<string>;
     }>();
 
-    // Initialize with existing meetings coverage
-    for (const unit of mapping.units) {
+    // Map to track per-unit diagnostic information (all units in mapping)
+    const perUnitDiagnosticMap = new Map<string, {
+      unitId: string;
+      semester: 1 | 2;
+      existingCount: number;
+      generatedCount: number;
+      suggestions: Array<{
+        suggestionIndex: number;
+        title: string;
+        materialIds: string[];
+        linkedAtpItemIds: string[];
+        linkedTpIds: string[];
+      }>;
+    }>();
+
+    // Initialize with existing meetings coverage and per-unit entries
+    for (const unit of sortedMappingUnits) {
       const unitPlan = currentPlan?.units?.find((u: any) => u.unitId === unit.id);
       const existingMeetings = unitPlan?.meetings || [];
       unitCoverageMap.set(unit.id, {
@@ -2005,26 +2127,73 @@ Kembalikan respon JSON dengan skema:
         atpItems: new Set(existingMeetings.flatMap((m: any) => m.linkedAtpItemIds || [])),
         tps: new Set(existingMeetings.flatMap((m: any) => m.linkedTpIds || [])),
       });
+
+      const sem = s1UnitsSet.has(unit.id) ? 1 : 2;
+      perUnitDiagnosticMap.set(unit.id, {
+        unitId: unit.id,
+        semester: sem as (1 | 2),
+        existingCount: existingMeetings.length,
+        generatedCount: 0,
+        suggestions: [],
+      });
     }
 
     const sanitizedUnits: any[] = [];
 
     for (const su of parsed.units) {
       if (!su || typeof su !== 'object') {
-        return res.status(400).json({ error: 'Struktur Unit dari AI tidak valid.' });
+        return res.status(400).json({
+          success: false,
+          code: 'AI_FORMAT_INVALID',
+          error: 'Struktur Unit dari AI tidak valid.',
+          diagnostic: buildDiagnostic({
+            stage: 'UNIT_VALIDATION',
+            code: 'AI_FORMAT_INVALID',
+            perUnitMap: perUnitDiagnosticMap,
+          }),
+        });
       }
       const uId = su.unitId;
       if (!uId) {
-        return res.status(400).json({ error: 'AI mengembalikan Unit tanpa unitId.' });
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_UNIT_ID',
+          error: 'AI mengembalikan Unit tanpa unitId.',
+          diagnostic: buildDiagnostic({
+            stage: 'UNIT_VALIDATION',
+            code: 'INVALID_UNIT_ID',
+            perUnitMap: perUnitDiagnosticMap,
+          }),
+        });
       }
       if (seenUnitIds.has(uId)) {
-        return res.status(400).json({ error: `AI mengembalikan unitId '${uId}' ganda.` });
+        return res.status(400).json({
+          success: false,
+          code: 'DUPLICATE_UNIT_ID',
+          error: `AI mengembalikan unitId '${uId}' ganda.`,
+          diagnostic: buildDiagnostic({
+            stage: 'UNIT_VALIDATION',
+            code: 'DUPLICATE_UNIT_ID',
+            perUnitMap: perUnitDiagnosticMap,
+            issue: { unitId: uId, field: 'unitId', invalidId: uId },
+          }),
+        });
       }
       seenUnitIds.add(uId);
 
       const canonicalUnit = validUnitsMap.get(uId);
       if (!canonicalUnit) {
-        return res.status(400).json({ error: `AI menghasilkan unitId tidak valid: '${uId}'` });
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_UNIT_ID',
+          error: `AI menghasilkan unitId tidak valid: '${uId}'`,
+          diagnostic: buildDiagnostic({
+            stage: 'UNIT_VALIDATION',
+            code: 'INVALID_UNIT_ID',
+            perUnitMap: perUnitDiagnosticMap,
+            issue: { unitId: uId, field: 'unitId', invalidId: uId },
+          }),
+        });
       }
 
       const validMatIds = new Set((canonicalUnit.materials || []).map((m: any) => m.id));
@@ -2035,23 +2204,63 @@ Kembalikan respon JSON dengan skema:
 
       const rawMeetings = su.meetings;
       if (!Array.isArray(rawMeetings)) {
-        return res.status(400).json({ error: `AI mengembalikan meetings bukan array untuk unit '${uId}'` });
+        return res.status(400).json({
+          success: false,
+          code: 'AI_FORMAT_INVALID',
+          error: `AI mengembalikan meetings bukan array untuk unit '${uId}'`,
+          diagnostic: buildDiagnostic({
+            stage: 'UNIT_VALIDATION',
+            code: 'AI_FORMAT_INVALID',
+            perUnitMap: perUnitDiagnosticMap,
+          }),
+        });
       }
 
       const sanitizedMeetings: any[] = [];
       const cov = unitCoverageMap.get(uId)!;
+      const diagUnit = perUnitDiagnosticMap.get(uId)!;
 
-      for (const m of rawMeetings) {
+      for (let mIdx = 0; mIdx < rawMeetings.length; mIdx++) {
+        const m = rawMeetings[mIdx];
         if (!m || typeof m !== 'object') {
-          return res.status(400).json({ error: 'Pertemuan dari AI tidak valid.' });
+          return res.status(400).json({
+            success: false,
+            code: 'AI_FORMAT_INVALID',
+            error: 'Pertemuan dari AI tidak valid.',
+            diagnostic: buildDiagnostic({
+              stage: 'MEETING_VALIDATION',
+              code: 'AI_FORMAT_INVALID',
+              perUnitMap: perUnitDiagnosticMap,
+            }),
+          });
         }
         const title = typeof m.title === 'string' ? m.title.trim() : '';
         if (!title) {
-          return res.status(400).json({ error: `Judul Pertemuan kosong pada unit '${uId}'.` });
+          return res.status(400).json({
+            success: false,
+            code: 'AI_FORMAT_INVALID',
+            error: `Judul Pertemuan kosong pada unit '${uId}'.`,
+            diagnostic: buildDiagnostic({
+              stage: 'MEETING_VALIDATION',
+              code: 'AI_FORMAT_INVALID',
+              perUnitMap: perUnitDiagnosticMap,
+              issue: { unitId: uId, suggestionIndex: mIdx + 1 },
+            }),
+          });
         }
 
         if (!Array.isArray(m.materialIds) || !Array.isArray(m.linkedAtpItemIds) || !Array.isArray(m.linkedTpIds)) {
-          return res.status(400).json({ error: `Array referensi kosong atau salah tipe pada unit '${uId}'.` });
+          return res.status(400).json({
+            success: false,
+            code: 'AI_FORMAT_INVALID',
+            error: `Array referensi kosong atau salah tipe pada unit '${uId}'.`,
+            diagnostic: buildDiagnostic({
+              stage: 'MEETING_VALIDATION',
+              code: 'AI_FORMAT_INVALID',
+              perUnitMap: perUnitDiagnosticMap,
+              issue: { unitId: uId, suggestionIndex: mIdx + 1, title },
+            }),
+          });
         }
 
         const uniqMatIds = new Set(m.materialIds);
@@ -2059,34 +2268,95 @@ Kembalikan respon JSON dengan skema:
         const uniqTpIds = new Set(m.linkedTpIds);
 
         if (uniqMatIds.size !== m.materialIds.length || uniqAtpIds.size !== m.linkedAtpItemIds.length || uniqTpIds.size !== m.linkedTpIds.length) {
-          return res.status(400).json({ error: `AI menghasilkan referensi ganda dalam satu array pada unit '${uId}'.` });
+          return res.status(400).json({
+            success: false,
+            code: 'INVALID_REFERENCE',
+            error: `AI menghasilkan referensi ganda dalam satu array pada unit '${uId}'.`,
+            diagnostic: buildDiagnostic({
+              stage: 'REFERENCE_VALIDATION',
+              code: 'INVALID_REFERENCE',
+              perUnitMap: perUnitDiagnosticMap,
+              issue: { unitId: uId, suggestionIndex: mIdx + 1, title },
+            }),
+          });
         }
 
         for (const matId of m.materialIds) {
           if (!validMatIds.has(matId)) {
-            return res.status(400).json({ error: `AI merujuk materialId '${matId}' yang tidak valid/bukan milik unit '${uId}'.` });
+            return res.status(400).json({
+              success: false,
+              code: 'INVALID_REFERENCE',
+              error: `AI merujuk materialId '${matId}' yang tidak valid/bukan milik unit '${uId}'.`,
+              diagnostic: buildDiagnostic({
+                stage: 'REFERENCE_VALIDATION',
+                code: 'INVALID_REFERENCE',
+                perUnitMap: perUnitDiagnosticMap,
+                issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'materialIds', invalidId: matId },
+              }),
+            });
           }
           cov.materials.add(matId);
         }
         for (const atpId of m.linkedAtpItemIds) {
           if (!validAtpIds.has(atpId)) {
-            return res.status(400).json({ error: `AI merujuk atpId '${atpId}' yang tidak valid/bukan milik unit '${uId}'.` });
+            return res.status(400).json({
+              success: false,
+              code: 'INVALID_REFERENCE',
+              error: `AI merujuk atpId '${atpId}' yang tidak valid/bukan milik unit '${uId}'.`,
+              diagnostic: buildDiagnostic({
+                stage: 'REFERENCE_VALIDATION',
+                code: 'INVALID_REFERENCE',
+                perUnitMap: perUnitDiagnosticMap,
+                issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedAtpItemIds', invalidId: atpId },
+              }),
+            });
           }
           cov.atpItems.add(atpId);
         }
         for (const tpId of m.linkedTpIds) {
           if (!validTpIds.has(tpId)) {
-            return res.status(400).json({ error: `AI merujuk tpId '${tpId}' yang tidak valid/bukan milik unit '${uId}'.` });
+            return res.status(400).json({
+              success: false,
+              code: 'INVALID_REFERENCE',
+              error: `AI merujuk tpId '${tpId}' yang tidak valid/bukan milik unit '${uId}'.`,
+              diagnostic: buildDiagnostic({
+                stage: 'REFERENCE_VALIDATION',
+                code: 'INVALID_REFERENCE',
+                perUnitMap: perUnitDiagnosticMap,
+                issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds', invalidId: tpId },
+              }),
+            });
           }
           cov.tps.add(tpId);
         }
 
         if (m.materialIds.length + m.linkedAtpItemIds.length + m.linkedTpIds.length === 0) {
-          return res.status(400).json({ error: `Pertemuan '${title}' tidak memiliki referensi canonical apa pun.` });
+          return res.status(400).json({
+            success: false,
+            code: 'EMPTY_REFERENCE',
+            error: `Pertemuan '${title}' tidak memiliki referensi canonical apa pun.`,
+            diagnostic: buildDiagnostic({
+              stage: 'REFERENCE_VALIDATION',
+              code: 'EMPTY_REFERENCE',
+              perUnitMap: perUnitDiagnosticMap,
+              issue: { unitId: uId, suggestionIndex: mIdx + 1, title },
+            }),
+          });
         }
 
         if (semester === 1) suggS1Count++;
         else suggS2Count++;
+
+        const suggestionObj = {
+          suggestionIndex: mIdx + 1,
+          title,
+          materialIds: m.materialIds,
+          linkedAtpItemIds: m.linkedAtpItemIds,
+          linkedTpIds: m.linkedTpIds,
+        };
+
+        diagUnit.suggestions.push(suggestionObj);
+        diagUnit.generatedCount++;
 
         sanitizedMeetings.push({
           title,
@@ -2104,33 +2374,73 @@ Kembalikan respon JSON dengan skema:
 
     if (suggS1Count !== additionalS1 || suggS2Count !== additionalS2) {
       return res.status(400).json({
-        error: `Jumlah Pertemuan baru dari AI (${suggS1Count} S1, ${suggS2Count} S2) tidak sesuai kapasitas target (${additionalS1} S1, ${additionalS2} S2).`
+        success: false,
+        code: 'COUNT_MISMATCH',
+        error: `Jumlah Pertemuan baru dari AI (${suggS1Count} S1, ${suggS2Count} S2) tidak sesuai kapasitas target (${additionalS1} S1, ${additionalS2} S2).`,
+        diagnostic: buildDiagnostic({
+          stage: 'COUNT_VERIFICATION',
+          code: 'COUNT_MISMATCH',
+          suggS1Count,
+          suggS2Count,
+          perUnitMap: perUnitDiagnosticMap,
+        }),
       });
     }
 
-    for (const unit of mapping.units) {
+    // Collect ALL remaining missing coverage across all units
+    const missingCoverageList: Array<{
+      unitId: string;
+      materialIds: string[];
+      atpItemIds: string[];
+      tpIds: string[];
+    }> = [];
+
+    for (const unit of sortedMappingUnits) {
       const cov = unitCoverageMap.get(unit.id);
       if (cov) {
         const expectedMats = (unit.materials || []).map((m: any) => m.id);
         const expectedAtp = unit.linkedAtpItemIds || [];
         const expectedTp = unit.linkedTpIds || [];
 
-        for (const matId of expectedMats) {
-          if (!cov.materials.has(matId)) {
-            return res.status(400).json({ error: `Cakupan Materi '${matId}' belum terpenuhi pada Unit '${unit.id}'.` });
-          }
-        }
-        for (const atpId of expectedAtp) {
-          if (!cov.atpItems.has(atpId)) {
-            return res.status(400).json({ error: `Cakupan ATP '${atpId}' belum terpenuhi pada Unit '${unit.id}'.` });
-          }
-        }
-        for (const tpId of expectedTp) {
-          if (!cov.tps.has(tpId)) {
-            return res.status(400).json({ error: `Cakupan TP '${tpId}' belum terpenuhi pada Unit '${unit.id}'.` });
-          }
+        const uncovMats = expectedMats.filter((matId: string) => !cov.materials.has(matId));
+        const uncovAtp = expectedAtp.filter((atpId: string) => !cov.atpItems.has(atpId));
+        const uncovTp = expectedTp.filter((tpId: string) => !cov.tps.has(tpId));
+
+        if (uncovMats.length > 0 || uncovAtp.length > 0 || uncovTp.length > 0) {
+          missingCoverageList.push({
+            unitId: unit.id,
+            materialIds: uncovMats,
+            atpItemIds: uncovAtp,
+            tpIds: uncovTp,
+          });
         }
       }
+    }
+
+    if (missingCoverageList.length > 0) {
+      const firstMissing = missingCoverageList[0];
+      let firstMsg = `Cakupan belum terpenuhi pada Unit '${firstMissing.unitId}'.`;
+      if (firstMissing.materialIds.length > 0) {
+        firstMsg = `Cakupan Materi '${firstMissing.materialIds[0]}' belum terpenuhi pada Unit '${firstMissing.unitId}'.`;
+      } else if (firstMissing.atpItemIds.length > 0) {
+        firstMsg = `Cakupan ATP '${firstMissing.atpItemIds[0]}' belum terpenuhi pada Unit '${firstMissing.unitId}'.`;
+      } else if (firstMissing.tpIds.length > 0) {
+        firstMsg = `Cakupan TP '${firstMissing.tpIds[0]}' belum terpenuhi pada Unit '${firstMissing.unitId}'.`;
+      }
+
+      return res.status(400).json({
+        success: false,
+        code: 'COVERAGE_MISSING',
+        error: firstMsg,
+        diagnostic: buildDiagnostic({
+          stage: 'COVERAGE_VERIFICATION',
+          code: 'COVERAGE_MISSING',
+          suggS1Count,
+          suggS2Count,
+          perUnitMap: perUnitDiagnosticMap,
+          missingCoverage: missingCoverageList,
+        }),
+      });
     }
 
     return res.json({
@@ -2139,7 +2449,15 @@ Kembalikan respon JSON dengan skema:
       engine: 'gemini',
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'Gagal memproses penyusunan AI.' });
+    return res.status(500).json({
+      success: false,
+      code: 'AI_GENERATION_ERROR',
+      error: err.message || 'Gagal memproses penyusunan AI.',
+      diagnostic: buildDiagnostic({
+        stage: 'AI_CALL',
+        code: 'AI_GENERATION_ERROR',
+      }),
+    });
   }
 });
 

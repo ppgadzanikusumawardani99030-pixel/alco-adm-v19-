@@ -900,6 +900,73 @@ export interface AIMeetingGenerationResult {
   units: AIUnitMeetingSuggestion[];
 }
 
+export interface AIMeetingDiagnostic {
+  version?: number;
+  stage?: string;
+  code?: string;
+  mappingId?: string;
+  planId?: string;
+  semester1LastUnitId?: string | null;
+  semester1UnitIds?: string[];
+  semester2UnitIds?: string[];
+  capacity?: {
+    semester1: {
+      target: number;
+      existing: number;
+      requestedNew: number;
+    };
+    semester2: {
+      target: number;
+      existing: number;
+      requestedNew: number;
+    };
+  };
+  generated?: {
+    semester1: number;
+    semester2: number;
+    deltaSemester1: number;
+    deltaSemester2: number;
+  };
+  perUnit?: Array<{
+    unitId: string;
+    semester: 1 | 2;
+    existingCount: number;
+    generatedCount: number;
+    suggestions?: Array<{
+      suggestionIndex: number;
+      title: string;
+      materialIds: string[];
+      linkedAtpItemIds: string[];
+      linkedTpIds: string[];
+    }>;
+  }>;
+  issue?: {
+    unitId?: string;
+    suggestionIndex?: number;
+    title?: string;
+    field?: 'unitId' | 'materialIds' | 'linkedAtpItemIds' | 'linkedTpIds';
+    invalidId?: string;
+  };
+  missingCoverage?: Array<{
+    unitId: string;
+    materialIds: string[];
+    atpItemIds: string[];
+    tpIds: string[];
+  }>;
+}
+
+export class AIMeetingGenerationError extends Error {
+  code?: string;
+  diagnostic?: AIMeetingDiagnostic;
+
+  constructor(message: string, code?: string, diagnostic?: AIMeetingDiagnostic) {
+    super(message);
+    this.name = 'AIMeetingGenerationError';
+    this.code = code;
+    this.diagnostic = diagnostic;
+  }
+}
+
 export interface GenerateUnitMeetingsWithAIParams {
   subject?: string;
   grade?: string;
@@ -934,18 +1001,30 @@ export async function generateUnitMeetingsWithAI(
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
       if (errData.code === 'AI_NOT_CONFIGURED') {
-        throw new Error('Layanan AI belum dikonfigurasi pada server.');
+        throw new AIMeetingGenerationError(
+          'Layanan AI belum dikonfigurasi pada server.',
+          'AI_NOT_CONFIGURED',
+          errData.diagnostic
+        );
       }
-      throw new Error(errData.error || `Gagal menyusun draf Pertemuan dengan AI (Status ${res.status})`);
+      const rawMsg = errData.error || `Gagal menyusun draf Pertemuan dengan AI (Status ${res.status})`;
+      const formatted = formatAIErrorMessage(rawMsg, 'menyusun draf Pertemuan dengan AI');
+      throw new AIMeetingGenerationError(formatted, errData.code, errData.diagnostic);
     }
 
     const data = await res.json();
     if (!data.data || !Array.isArray(data.data.units)) {
-      throw new Error('Hasil respon AI tidak memuat data unit meeting yang valid.');
+      throw new AIMeetingGenerationError('Hasil respon AI tidak memuat data unit meeting yang valid.', 'AI_FORMAT_INVALID');
     }
     return data.data;
-  } catch (err) {
-    throw new Error(formatAIErrorMessage(err, 'menyusun draf Pertemuan dengan AI'));
+  } catch (err: any) {
+    if (err instanceof AIMeetingGenerationError) {
+      throw err;
+    }
+    throw new AIMeetingGenerationError(
+      formatAIErrorMessage(err, 'menyusun draf Pertemuan dengan AI'),
+      'AI_GENERATION_ERROR'
+    );
   }
 }
 

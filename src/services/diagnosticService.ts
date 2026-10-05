@@ -7,11 +7,22 @@ import {
   AssessmentCriterion,
   AssessmentPlan,
   AssessmentPackage,
+  ATPUnitMappingData,
+  UnitExecutionPlanData,
 } from '../types';
 import { APP_BUILD_ID } from '../config/buildInfo';
 import { normalizePhaseCode, TPValidationDetails } from './cpWorkflowService';
+import { UnitExecutionPlanValidationResult } from './unitExecutionPlanService';
+import { AIMeetingDiagnostic } from './aiService';
 
-export type DiagnosticScope = 'TP' | 'ATP' | 'LEARNING_PLAN' | 'KKTP' | 'ASSESSMENT_PLAN' | 'ASSESSMENT_PACKAGE';
+export type DiagnosticScope =
+  | 'TP'
+  | 'ATP'
+  | 'UNIT_EXECUTION_PLAN'
+  | 'LEARNING_PLAN'
+  | 'KKTP'
+  | 'ASSESSMENT_PLAN'
+  | 'ASSESSMENT_PACKAGE';
 
 export interface DiagnosticEvent {
   timestamp: string;
@@ -245,5 +256,151 @@ export function buildAdministrationChainDiagnosticReport(data: {
     '',
     'Recent Events:',
     ...getRecentDiagnosticEvents().slice(-10).map((event) => `- ${event.timestamp} ${event.scope}.${event.action}${event.status ? ` status=${event.status}` : ''}`),
+  ].join('\n');
+}
+
+export function buildUnitExecutionPlanAIDiagnosticReport(data: {
+  mapping?: ATPUnitMappingData | null;
+  unitExecutionPlan?: UnitExecutionPlanData | null;
+  capacityContext?: {
+    semester1LastUnitId?: string | null;
+    semester1?: { targetMeetingCount: number; totalJP?: number };
+    semester2?: { targetMeetingCount: number; totalJP?: number };
+  } | null;
+  validation?: UnitExecutionPlanValidationResult | null;
+  lastAIDiagnostic?: AIMeetingDiagnostic | null;
+  lastAIGenerationError?: string | null;
+}): string {
+  const mapping = data.mapping;
+  const plan = data.unitExecutionPlan;
+  const diag = data.lastAIDiagnostic;
+  const val = data.validation;
+
+  // Semester boundary resolution
+  const s1Last = diag?.semester1LastUnitId !== undefined
+    ? diag.semester1LastUnitId
+    : (data.capacityContext?.semester1LastUnitId !== undefined
+        ? data.capacityContext.semester1LastUnitId
+        : (plan?.semesterPlacement?.semester1LastUnitId ?? null));
+
+  const s1UnitIds = diag?.semester1UnitIds || [];
+  const s2UnitIds = diag?.semester2UnitIds || [];
+
+  // Capacity calculations
+  const capS1 = diag?.capacity?.semester1 || {
+    target: data.capacityContext?.semester1?.targetMeetingCount ?? 0,
+    existing: 0,
+    requestedNew: 0,
+  };
+  const capS2 = diag?.capacity?.semester2 || {
+    target: data.capacityContext?.semester2?.targetMeetingCount ?? 0,
+    existing: 0,
+    requestedNew: 0,
+  };
+
+  // Current plan meeting count per unit
+  const currentUnitCounts = (mapping?.units || []).map((u) => {
+    const uPlan = plan?.units?.find((p) => p.unitId === u.id);
+    const count = (uPlan?.meetings || []).length;
+    return `- ${u.id} ("${u.title}"): ${count} meetings`;
+  });
+
+  // Current Validation errors & missing coverage
+  const valErrors = val?.errors?.length
+    ? val.errors.map((e) => `- ${e}`)
+    : ['- none'];
+
+  const valMissingCov = (val?.coverage || [])
+    .filter((c) => c.missingMaterialIds.length > 0 || c.missingAtpItemIds.length > 0 || c.missingTpIds.length > 0)
+    .map((c) => `- Unit ${c.unitId}: Materials=[${c.missingMaterialIds.join(', ')}], ATP=[${c.missingAtpItemIds.join(', ')}], TP=[${c.missingTpIds.join(', ')}]`);
+
+  // Suggestions listing from diag
+  const suggestionsList: string[] = [];
+  if (diag?.perUnit && diag.perUnit.length > 0) {
+    for (const pu of diag.perUnit) {
+      if (pu.suggestions && pu.suggestions.length > 0) {
+        for (const s of pu.suggestions) {
+          suggestionsList.push(
+            `- Unit ${pu.unitId} | #${s.suggestionIndex} "${s.title}" | Materials=[${s.materialIds.join(', ')}] | ATP=[${s.linkedAtpItemIds.join(', ')}] | TP=[${s.linkedTpIds.join(', ')}]`
+          );
+        }
+      }
+    }
+  }
+
+  // Missing coverage from diag
+  const diagMissingCov = (diag?.missingCoverage || []).map(
+    (mc) => `- Unit ${mc.unitId}: Materials=[${mc.materialIds.join(', ')}], ATP=[${mc.atpItemIds.join(', ')}], TP=[${mc.tpIds.join(', ')}]`
+  );
+
+  return [
+    'ADMINISTRASI GURU AI - MEETING AI DIAGNOSTIC',
+    '',
+    'Build:',
+    APP_BUILD_ID,
+    '',
+    'GeneratedAt:',
+    new Date().toISOString(),
+    '',
+    'Mapping:',
+    line('mappingId', mapping?.id),
+    line('mappingUpdatedAt', mapping?.updatedAt),
+    line('unitExecutionPlanId', plan?.id),
+    line('basedOnMappingUpdatedAt', plan?.basedOnMappingUpdatedAt),
+    '',
+    'Capacity:',
+    `S1 target=${capS1.target} existing=${capS1.existing} requestedNew=${capS1.requestedNew}`,
+    `S2 target=${capS2.target} existing=${capS2.existing} requestedNew=${capS2.requestedNew}`,
+    '',
+    'Semester Boundary:',
+    line('semester1LastUnitId', s1Last === null ? 'null (all S2)' : s1Last),
+    line('S1 Unit IDs', s1UnitIds.length > 0 ? s1UnitIds.join(', ') : '-'),
+    line('S2 Unit IDs', s2UnitIds.length > 0 ? s2UnitIds.join(', ') : '-'),
+    '',
+    'Current Plan:',
+    ...(currentUnitCounts.length > 0 ? currentUnitCounts : ['- none']),
+    '',
+    'Current Validation:',
+    line('isValid', val ? val.isValid : '-'),
+    line('isComplete', val ? val.isComplete : '-'),
+    line('isStale', val ? val.isStale : '-'),
+    'Errors:',
+    ...valErrors,
+    'Missing Coverage:',
+    ...(valMissingCov.length > 0 ? valMissingCov : ['- none']),
+    '',
+    'Last AI Attempt:',
+    line('code', diag?.code || (data.lastAIGenerationError ? 'AI_GENERATION_ERROR' : '-')),
+    line('stage', diag?.stage || '-'),
+    line('error', data.lastAIGenerationError || '-'),
+    '',
+    'Generated:',
+    line('S1', diag?.generated?.semester1 ?? '-'),
+    line('S2', diag?.generated?.semester2 ?? '-'),
+    line('delta S1', diag?.generated?.deltaSemester1 !== undefined ? (diag.generated.deltaSemester1 >= 0 ? `+${diag.generated.deltaSemester1}` : String(diag.generated.deltaSemester1)) : '-'),
+    line('delta S2', diag?.generated?.deltaSemester2 !== undefined ? (diag.generated.deltaSemester2 >= 0 ? `+${diag.generated.deltaSemester2}` : String(diag.generated.deltaSemester2)) : '-'),
+    '',
+    'AI Result Per Unit:',
+    ...(diag?.perUnit && diag.perUnit.length > 0
+      ? diag.perUnit.map(
+          (pu) =>
+            `- Unit ${pu.unitId} | S${pu.semester} | existing=${pu.existingCount} | generated=${pu.generatedCount}`
+        )
+      : ['- none']),
+    '',
+    'Suggestions:',
+    ...(suggestionsList.length > 0 ? suggestionsList : ['- none']),
+    '',
+    'Invalid Reference:',
+    line('field', diag?.issue?.field || '-'),
+    line('invalidId', diag?.issue?.invalidId || '-'),
+    line('unitId', diag?.issue?.unitId || '-'),
+    line('suggestionIndex', diag?.issue?.suggestionIndex ?? '-'),
+    '',
+    'Missing Coverage (AI Result):',
+    ...(diagMissingCov.length > 0 ? diagMissingCov : ['- none']),
+    '',
+    'Recent UNIT_EXECUTION_PLAN events:',
+    ...formatEvents('UNIT_EXECUTION_PLAN'),
   ].join('\n');
 }

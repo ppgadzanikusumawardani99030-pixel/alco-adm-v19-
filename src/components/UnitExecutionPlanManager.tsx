@@ -31,9 +31,21 @@ import {
   ChevronDown,
   ChevronUp,
   Sparkles,
+  Clipboard,
 } from 'lucide-react';
-import { generateUnitMeetingsWithAI } from '../services/aiService';
-import { suggestSemesterBoundaryByMeetingSlots, resolveUnitSemesterPlacement } from '../services/unitSemesterPlanningService';
+import {
+  generateUnitMeetingsWithAI,
+  AIMeetingDiagnostic,
+  AIMeetingGenerationError,
+} from '../services/aiService';
+import {
+  suggestSemesterBoundaryByMeetingSlots,
+  resolveUnitSemesterPlacement,
+} from '../services/unitSemesterPlanningService';
+import {
+  buildUnitExecutionPlanAIDiagnosticReport,
+  recordDiagnosticEvent,
+} from '../services/diagnosticService';
 
 export interface UnitExecutionPlanManagerProps {
   mapping: ATPUnitMappingData;
@@ -103,6 +115,9 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
   const [isGeneratingMeetings, setIsGeneratingMeetings] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
   const [generationNotice, setGenerationNotice] = useState<string | null>(null);
+  const [lastAIDiagnostic, setLastAIDiagnostic] = useState<AIMeetingDiagnostic | null>(null);
+  const [lastAIGenerationError, setLastAIGenerationError] = useState<string | null>(null);
+  const [copyNotice, setCopyNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const totalMeetingsCount = useMemo(() => {
     return draft.units.reduce((sum, u) => sum + (u.meetings || []).length, 0);
@@ -122,11 +137,22 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
     setGenerationError(null);
     setGenerationNotice(null);
 
+    const targetS1 = meetingCapacity.semester1.targetMeetingCount;
+    const targetS2 = meetingCapacity.semester2.targetMeetingCount;
+
+    recordDiagnosticEvent({
+      scope: 'UNIT_EXECUTION_PLAN',
+      action: 'AI_GENERATION_REQUEST',
+      metadata: {
+        mappingId: mapping.id,
+        targetS1,
+        targetS2,
+      },
+    });
+
     try {
       // 1. Resolve semesterPlacement candidate
       let candidatePlacement = draft.semesterPlacement;
-      const targetS1 = meetingCapacity.semester1.targetMeetingCount;
-      const targetS2 = meetingCapacity.semester2.targetMeetingCount;
 
       if (!candidatePlacement || candidatePlacement.mode !== 'CONTIGUOUS_BOUNDARY') {
         const boundary = suggestSemesterBoundaryByMeetingSlots(draft, mapping, targetS1, targetS2);
@@ -295,10 +321,83 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
 
       setDraft(mergedDraft);
       setGenerationNotice(`AI menyusun draf sesuai kapasitas perencanaan semester: Semester 1 = ${targetS1} Pertemuan, Semester 2 = ${targetS2} Pertemuan. Tinjau struktur dan pembagian Unit/Bab sebelum menyimpan.`);
+      setLastAIDiagnostic(null);
+      setLastAIGenerationError(null);
+
+      recordDiagnosticEvent({
+        scope: 'UNIT_EXECUTION_PLAN',
+        action: 'AI_GENERATION_SUCCESS',
+        status: 'SUCCESS',
+        metadata: {
+          mappingId: mapping.id,
+          targetS1,
+          targetS2,
+          generatedS1: finalS1Count,
+          generatedS2: finalS2Count,
+        },
+      });
     } catch (err: any) {
-      setGenerationError(err?.message || 'Gagal menyusun draf Pertemuan dengan AI.');
+      const isAIMeetingErr = err instanceof AIMeetingGenerationError;
+      const diag = isAIMeetingErr ? err.diagnostic || null : null;
+      const code = isAIMeetingErr ? err.code || 'AI_GENERATION_ERROR' : 'AI_GENERATION_ERROR';
+      const errMsg = err?.message || 'Gagal menyusun draf Pertemuan dengan AI.';
+
+      setLastAIDiagnostic(diag);
+      setLastAIGenerationError(errMsg);
+      setGenerationError(errMsg);
+
+      recordDiagnosticEvent({
+        scope: 'UNIT_EXECUTION_PLAN',
+        action: 'AI_GENERATION_FAILED',
+        status: 'FAILED',
+        metadata: {
+          mappingId: mapping.id,
+          code,
+          targetS1,
+          targetS2,
+          generatedS1: diag?.generated?.semester1,
+          generatedS2: diag?.generated?.semester2,
+          deltaS1: diag?.generated?.deltaSemester1,
+          deltaS2: diag?.generated?.deltaSemester2,
+        },
+      });
     } finally {
       setIsGeneratingMeetings(false);
+    }
+  };
+
+  const handleCopyDiagnostic = async () => {
+    try {
+      const report = buildUnitExecutionPlanAIDiagnosticReport({
+        mapping,
+        unitExecutionPlan: draft,
+        capacityContext: meetingCapacity ? {
+          semester1LastUnitId: draft.semesterPlacement?.semester1LastUnitId,
+          semester1: { targetMeetingCount: meetingCapacity.semester1.targetMeetingCount, totalJP: meetingCapacity.semester1.totalJP },
+          semester2: { targetMeetingCount: meetingCapacity.semester2.targetMeetingCount, totalJP: meetingCapacity.semester2.totalJP },
+        } : null,
+        validation,
+        lastAIDiagnostic,
+        lastAIGenerationError,
+      });
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(report);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = report;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        document.body.removeChild(area);
+      }
+      setCopyNotice({ type: 'success', message: 'Diagnostik Struktur Pertemuan berhasil disalin ke clipboard.' });
+      setTimeout(() => setCopyNotice(null), 3500);
+    } catch (err: any) {
+      setCopyNotice({ type: 'error', message: 'Gagal menyalin diagnostik. Periksa izin clipboard browser.' });
+      setTimeout(() => setCopyNotice(null), 4000);
     }
   };
 
@@ -709,6 +808,16 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
 
           <button
             type="button"
+            onClick={handleCopyDiagnostic}
+            title="Salin Diagnostik Struktur Pertemuan & AI"
+            className="px-3.5 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700"
+          >
+            <Clipboard className="w-4 h-4" />
+            <span>Salin Diagnostik</span>
+          </button>
+
+          <button
+            type="button"
             onClick={handleGenerateWithAI}
             disabled={isGeneratingMeetings || validation.isStale || !validation.isValid || !isCapacityReady || isAINoWork}
             className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer ${
@@ -738,6 +847,22 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
           </button>
         </div>
       </div>
+
+      {copyNotice && (
+        <div className={`px-5 py-3 text-xs font-medium border-b flex items-center justify-between ${
+          copyNotice.type === 'success' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' : 'bg-rose-50 text-rose-800 border-rose-200'
+        }`}>
+          <div className="flex items-center gap-2">
+            {copyNotice.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            )}
+            <span>{copyNotice.message}</span>
+          </div>
+          <button type="button" onClick={() => setCopyNotice(null)} className="text-[11px] font-bold underline cursor-pointer">Tutup</button>
+        </div>
+      )}
 
       {generationError && (
         <div className="px-5 py-3 text-xs font-medium bg-rose-50 text-rose-800 border-b border-rose-200 flex items-center justify-between">
