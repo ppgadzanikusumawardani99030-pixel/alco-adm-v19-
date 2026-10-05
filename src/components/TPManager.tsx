@@ -217,7 +217,7 @@ export const TPManager: React.FC<TPManagerProps> = ({
     });
 
     try {
-      const generated = await generateTPWithAI({
+      const generatedResult = await generateTPWithAI({
         cpGeneral: cp.generalDescription,
         cpElements: cp.elements || [],
         cpAnalysisItems: cpAnalysis?.items || [],
@@ -227,6 +227,7 @@ export const TPManager: React.FC<TPManagerProps> = ({
         phase: context.phase,
         curriculum: context.curriculum,
       });
+      const generated = generatedResult.items;
 
       setItems(generated);
       const candidateTP: TPData = {
@@ -241,6 +242,7 @@ export const TPManager: React.FC<TPManagerProps> = ({
         phase: context.phase,
         items: generated,
         generatedBy: items.length > 0 ? (tp.generatedBy || 'AI_EDITED_BY_TEACHER') : 'AI',
+        generationEngine: generatedResult.engine,
         generatedAt: new Date().toISOString(),
         needsReview: false,
         reviewReason: undefined,

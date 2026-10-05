@@ -40,6 +40,7 @@ import {
   ATPUnitMappingData,
   UnitExecutionPlanData,
   LearningMeetingScheduleData,
+  AssessmentPlan,
 } from '../../types';
 import {
   validateLearningPlan,
@@ -64,7 +65,7 @@ import { generateModulAjar } from '../../services/documentEngine/generators/modu
 import { generatePdfDocument } from '../../services/documentEngine/renderers/pdf/pdfDocGenerators';
 import { DocumentGenerationContext } from '../../services/documentEngine/types';
 import {
-  buildTPDiagnosticReport,
+  buildLearningPlanDiagnosticReport,
   recordDiagnosticEvent,
 } from '../../services/diagnosticService';
 import saveAs from 'file-saver';
@@ -97,6 +98,7 @@ interface LearningPlanManagerProps {
   students?: Student[];
   timeAllocations?: TimeAllocation[];
   assessmentCriteria?: AssessmentCriterion[];
+  assessmentPlans?: AssessmentPlan[];
   learningPlans: LearningPlan[];
   onSavePlan: (plan: LearningPlan) => void;
   onSaveBulkPlans?: (plans: LearningPlan[]) => void;
@@ -116,6 +118,7 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
   students = [],
   timeAllocations = [],
   assessmentCriteria = [],
+  assessmentPlans = [],
   learningPlans = [],
   onSavePlan,
   onSaveBulkPlans,
@@ -274,13 +277,18 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       : atp?.items?.length && !isAtpReadyForAIScope(atp)
       ? 'ATP_STATUS_NOT_READY'
       : 'ALLOWED';
-    const report = buildTPDiagnosticReport({
-      module: 'LEARNING_PLAN',
+    const report = buildLearningPlanDiagnosticReport({
       workspaceId: workspace?.id,
       academicSetting,
       tp,
-      uiItemsCount: tp?.items?.length || 0,
       atp,
+      atpUnitMapping,
+      unitExecutionPlan,
+      learningMeetingSchedules,
+      learningPlans,
+      assessmentCriteria,
+      assessmentPlans,
+      activeSemesterScopes: semesterScopes,
       learningPlanGate: gateReason === 'ALLOWED' ? 'ALLOWED' : 'BLOCKED',
       learningPlanGateReason: gateReason,
     });
@@ -471,6 +479,20 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     showNotification('info', `Sedang menyusun Draf AI Modul Ajar untuk unit '${scope.title}'...`);
 
     try {
+      recordDiagnosticEvent({
+        scope: 'LEARNING_PLAN',
+        action: 'LEARNING_PLAN_AI_REQUEST',
+        status: 'STARTED',
+        metadata: {
+          unitId: scope.unitId || '-',
+          tpCount: scope.linkedTpIds?.length || 0,
+          atpCount: scope.linkedAtpItemIds?.length || 0,
+          learningMeetingCount: scope.learningMeetingIds?.length || 0,
+          allocatedJP: scope.jp || 0,
+          meetingStructureSent: false,
+          kktpSent: false,
+        },
+      });
       const draftPlan = await generateAIDraftPlanForScope(scope);
 
       onSavePlan(draftPlan);
@@ -556,6 +578,20 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     let processed = 0;
     for (const scope of pendingScopes) {
       try {
+        recordDiagnosticEvent({
+          scope: 'LEARNING_PLAN',
+          action: 'LEARNING_PLAN_AI_REQUEST',
+          status: 'STARTED',
+          metadata: {
+            unitId: scope.unitId || '-',
+            tpCount: scope.linkedTpIds?.length || 0,
+            atpCount: scope.linkedAtpItemIds?.length || 0,
+            learningMeetingCount: scope.learningMeetingIds?.length || 0,
+            allocatedJP: scope.jp || 0,
+            meetingStructureSent: false,
+            kktpSent: false,
+          },
+        });
         const draftPlan = await generateAIDraftPlanForScope(scope);
         generatedPlans.push(draftPlan);
         successCount++;

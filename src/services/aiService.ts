@@ -44,6 +44,11 @@ export interface GenerateTPParams {
   count?: number;
 }
 
+export interface GenerateTPResult {
+  items: TPItem[];
+  engine: 'gemini' | 'pedagogical_engine';
+}
+
 export interface GenerateATPParams {
   tps: TPItem[];
   cpGeneral: string;
@@ -258,7 +263,7 @@ export async function analyzeCPWithAI(params: {
   }
 }
 
-export async function generateTPWithAI(params: GenerateTPParams): Promise<TPItem[]> {
+export async function generateTPWithAI(params: GenerateTPParams): Promise<GenerateTPResult> {
   try {
     const { existingTps, ...payloadToSend } = params;
     const res = await aiFetch('/api/ai/generate-tp', {
@@ -292,6 +297,12 @@ export async function generateTPWithAI(params: GenerateTPParams): Promise<TPItem
     if (!Array.isArray(data.items) || data.items.length === 0) {
       throw new Error('Respons AI TP tidak valid: "items" harus berupa array dan tidak boleh kosong.');
     }
+    if (
+      data.engine !== 'gemini' &&
+      data.engine !== 'pedagogical_engine'
+    ) {
+      throw new Error('Respons AI TP tidak memiliki provenance engine yang valid.');
+    }
     for (let i = 0; i < data.items.length; i++) {
       const item = data.items[i];
       if (!item || typeof item !== 'object') {
@@ -303,12 +314,14 @@ export async function generateTPWithAI(params: GenerateTPParams): Promise<TPItem
       }
     }
 
-    const rawItems = data.items;
-    return mergeGeneratedTPsWithExisting(
-      rawItems,
-      params.existingTps || [],
-      params.cpAnalysisItems || []
-    );
+    return {
+      items: mergeGeneratedTPsWithExisting(
+        data.items,
+        params.existingTps || [],
+        params.cpAnalysisItems || []
+      ),
+      engine: data.engine,
+    };
   } catch (err) {
     throw new Error(formatAIErrorMessage(err, 'merumuskan Tujuan Pembelajaran'));
   }

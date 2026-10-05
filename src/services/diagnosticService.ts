@@ -9,6 +9,7 @@ import {
   AssessmentPackage,
   ATPUnitMappingData,
   UnitExecutionPlanData,
+  LearningMeetingScheduleData,
 } from '../types';
 import { APP_BUILD_ID } from '../config/buildInfo';
 import { normalizePhaseCode, TPValidationDetails } from './cpWorkflowService';
@@ -147,6 +148,236 @@ export function buildTPDiagnosticReport(data: {
     '',
     'Recent Diagnostic Events:',
     ...formatEvents(data.module || 'TP'),
+  ].join('\n');
+}
+
+function listValue(values?: unknown[]): string {
+  return values && values.length > 0 ? `[${values.join(', ')}]` : '[]';
+}
+
+function formatTPItems(tp?: TPData | null): string[] {
+  const items = tp?.items || [];
+  if (items.length === 0) return ['- none'];
+  return items.flatMap((item) => [
+    `- code: ${item.code || '-'}`,
+    `  id: ${item.id || '-'}`,
+    `  statement: ${item.statement || '-'}`,
+    `  competence: ${item.competence || '-'}`,
+    `  contentScope: ${item.contentScope || '-'}`,
+    `  cpAnalysisItemIds: ${listValue(item.cpAnalysisItemIds || (item.cpAnalysisId ? [item.cpAnalysisId] : []))}`,
+  ]);
+}
+
+function formatATPItems(atp?: ATPData | null): string[] {
+  const items = atp?.items || [];
+  if (items.length === 0) return ['- none'];
+  return items.flatMap((item) => [
+    `- step: ${item.stepNumber ?? item.sequence ?? '-'}`,
+    `  id: ${item.id || '-'}`,
+    `  focus: ${item.focus || '-'}`,
+    `  linkedTpIds: ${listValue(item.linkedTpIds || (item.tpId ? [item.tpId] : []))}`,
+  ]);
+}
+
+function countLearningPlanAssessments(plan: LearningPlan, type: 'initial' | 'formative' | 'summative'): number {
+  return plan.assessmentPlan?.[type]?.length || 0;
+}
+
+export function buildLearningPlanDiagnosticReport(data: {
+  workspaceId?: string;
+  academicSetting?: AcademicSetting | null;
+  tp?: TPData | null;
+  atp?: ATPData | null;
+  atpUnitMapping?: ATPUnitMappingData | null;
+  unitExecutionPlan?: UnitExecutionPlanData | null;
+  learningMeetingSchedules?: {
+    semesterPlanId: string;
+    semester: 1 | 2;
+    schedule: LearningMeetingScheduleData;
+  }[];
+  learningPlans?: LearningPlan[];
+  assessmentCriteria?: AssessmentCriterion[];
+  assessmentPlans?: AssessmentPlan[];
+  activeSemesterScopes?: {
+    unitId?: string;
+    unitTitle?: string;
+    title?: string;
+    linkedTpIds?: string[];
+    linkedAtpItemIds?: string[];
+    learningMeetingIds?: string[];
+    meetingCount?: number;
+    allocatedJP?: number;
+    jp?: number;
+  }[];
+  learningPlanGate?: 'ALLOWED' | 'BLOCKED';
+  learningPlanGateReason?: string;
+}): string {
+  const setting = data.academicSetting;
+  const activeScopes = data.activeSemesterScopes || [];
+  const activeMeetingIds = new Set(activeScopes.flatMap((scope) => scope.learningMeetingIds || []));
+  const activeUnitIds = new Set(activeScopes.map((scope) => scope.unitId).filter(Boolean));
+  const activePlans = (data.learningPlans || []).filter((plan) => {
+    if (plan.unitId && activeUnitIds.has(plan.unitId)) return true;
+    return (plan.learningMeetingIds || []).some((id) => activeMeetingIds.has(id));
+  });
+  const scheduleEntries = (data.learningMeetingSchedules || []).flatMap((item) =>
+    (item.schedule.entries || []).map((entry) => ({
+      entry,
+      scheduleStatus: item.schedule.status,
+    }))
+  );
+  const latestAIRequest = getRecentDiagnosticEvents('LEARNING_PLAN')
+    .filter((event) => event.action === 'LEARNING_PLAN_AI_REQUEST')
+    .slice(-1)[0];
+
+  const canonicalScopes = activeScopes.length > 0
+    ? activeScopes.flatMap((scope) => [
+        `- unitId: ${scope.unitId || '-'}`,
+        `  unitTitle: ${scope.unitTitle || scope.title || '-'}`,
+        `  linkedTpIds: ${listValue(scope.linkedTpIds)}`,
+        `  linkedAtpItemIds: ${listValue(scope.linkedAtpItemIds)}`,
+        `  learningMeetingIds: ${listValue(scope.learningMeetingIds)}`,
+        `  meetingCount: ${scope.meetingCount ?? scope.learningMeetingIds?.length ?? 0}`,
+        `  allocatedJP: ${scope.allocatedJP ?? scope.jp ?? 0}`,
+      ])
+    : ['- none'];
+
+  const meetings = (data.unitExecutionPlan?.units || [])
+    .filter((unit) => activeUnitIds.has(unit.unitId))
+    .flatMap((unit) => unit.meetings || [])
+    .filter((meeting) => activeMeetingIds.has(meeting.id))
+    .flatMap((meeting) => {
+      const scheduleMatch = scheduleEntries.find((candidate) => candidate.entry.meetingId === meeting.id);
+      return [
+        `- unitId: ${meeting.unitId || '-'}`,
+        `  meetingId: ${meeting.id || '-'}`,
+        `  order: ${meeting.order ?? '-'}`,
+        `  title: ${meeting.title || '-'}`,
+        `  materialIds: ${listValue(meeting.materialIds)}`,
+        `  linkedAtpItemIds: ${listValue(meeting.linkedAtpItemIds)}`,
+        `  linkedTpIds: ${listValue(meeting.linkedTpIds)}`,
+        `  date: ${scheduleMatch?.entry.date || '-'}`,
+        `  jp: ${scheduleMatch?.entry.jp ?? '-'}`,
+        `  scheduleStatus: ${scheduleMatch?.scheduleStatus || '-'}`,
+      ];
+    });
+
+  const learningPlanLines = activePlans.length > 0
+    ? activePlans.flatMap((plan) => [
+        `- planId: ${plan.id || '-'}`,
+        `  title: ${plan.title || '-'}`,
+        `  unitId: ${plan.unitId || '-'}`,
+        `  status: ${plan.status || '-'}`,
+        `  sourceType: ${plan.sourceType || '-'}`,
+        `  learningMeetingIds: ${listValue(plan.learningMeetingIds)}`,
+        `  tpIds: ${listValue(plan.tpIds)}`,
+        `  atpItemIds: ${listValue(plan.atpItemIds)}`,
+        `  allocatedJP: ${plan.allocatedJP ?? '-'}`,
+        `  learningExperiencesCount: ${plan.learningExperiences?.length || 0}`,
+        `  assessmentInitialCount: ${countLearningPlanAssessments(plan, 'initial')}`,
+        `  assessmentFormativeCount: ${countLearningPlanAssessments(plan, 'formative')}`,
+        `  assessmentSummativeCount: ${countLearningPlanAssessments(plan, 'summative')}`,
+      ])
+    : ['- none'];
+
+  const embeddedAssessmentLines = activePlans.length > 0
+    ? activePlans.flatMap((plan) => [
+        `- planId: ${plan.id || '-'}`,
+        `  title: ${plan.title || '-'}`,
+        `  initial: ${countLearningPlanAssessments(plan, 'initial')}`,
+        `  formative: ${countLearningPlanAssessments(plan, 'formative')}`,
+        `  summative: ${countLearningPlanAssessments(plan, 'summative')}`,
+      ])
+    : ['- none'];
+
+  const aiInputLines = latestAIRequest
+    ? [
+        line('unitId', latestAIRequest.metadata?.unitId),
+        line('TP sent', latestAIRequest.metadata?.tpCount),
+        line('ATP sent', latestAIRequest.metadata?.atpCount),
+        line('LearningMeeting IDs in scope', latestAIRequest.metadata?.learningMeetingCount),
+        line('Allocated JP sent', latestAIRequest.metadata?.allocatedJP),
+        line('Meeting structure sent to AI', latestAIRequest.metadata?.meetingStructureSent),
+        line('KKTP sent to AI', latestAIRequest.metadata?.kktpSent),
+      ]
+    : ['- no request recorded'];
+
+  const canonicalAssessmentPlans = (data.assessmentPlans || []).length > 0
+    ? (data.assessmentPlans || []).flatMap((plan) => [
+        `- id: ${plan.id || '-'}`,
+        `  title: ${plan.title || '-'}`,
+        `  purpose: ${plan.purpose || '-'}`,
+        `  timing: ${plan.timing || '-'}`,
+        `  scopeType: ${plan.scopeType || '-'}`,
+        `  tpIds: ${listValue(plan.tpIds)}`,
+        `  learningPlanIds: ${listValue(plan.learningPlanIds)}`,
+        `  workflowStatus: ${plan.workflowStatus || '-'}`,
+        `  linkedToLearningPlan: ${activePlans.some((learningPlan) => plan.learningPlanIds?.includes(learningPlan.id))}`,
+      ])
+    : ['- none'];
+
+  return [
+    'ADMINISTRASI GURU AI - LEARNING PLAN DIAGNOSTIC REPORT',
+    '',
+    'Build:',
+    APP_BUILD_ID,
+    '',
+    'GeneratedAt:',
+    new Date().toISOString(),
+    '',
+    'Context:',
+    line('workspaceId', data.workspaceId),
+    line('academicSettingId', setting?.id),
+    line('curriculumType', setting?.curriculumType),
+    line('academicYear', setting?.academicYear),
+    line('semester', setting?.semester),
+    line('level', setting?.level),
+    line('grade', setting?.grade),
+    line('phase', setting?.phase),
+    line('phaseNormalized', normalizePhaseCode(setting?.phase)),
+    line('subject', setting?.subject),
+    '',
+    'GATE:',
+    line('learningPlanGate', data.learningPlanGate || '-'),
+    line('learningPlanGateReason', data.learningPlanGateReason || '-'),
+    '',
+    'TP SOURCE:',
+    line('id', data.tp?.id),
+    line('workflowStatus', data.tp?.workflowStatus),
+    line('generatedBy', data.tp?.generatedBy),
+    line('generationEngine', data.tp?.generationEngine),
+    line('itemsCount', data.tp?.items?.length || 0),
+    '',
+    'TP ITEMS:',
+    ...formatTPItems(data.tp),
+    '',
+    'ATP:',
+    line('workflowStatus', data.atp?.workflowStatus),
+    line('itemsCount', data.atp?.items?.length || 0),
+    '',
+    'ATP ITEMS:',
+    ...formatATPItems(data.atp),
+    '',
+    'CANONICAL LEARNING SCOPES:',
+    ...canonicalScopes,
+    '',
+    'MEETINGS:',
+    ...(meetings.length > 0 ? meetings : ['- none']),
+    '',
+    'LEARNING PLANS:',
+    ...learningPlanLines,
+    '',
+    'AI INPUT:',
+    ...aiInputLines,
+    '',
+    'EMBEDDED ASSESSMENT:',
+    ...embeddedAssessmentLines,
+    '',
+    'CANONICAL ASSESSMENT PLANS:',
+    ...canonicalAssessmentPlans,
+    '',
+    'Recent LEARNING_PLAN Events:',
+    ...formatEvents('LEARNING_PLAN'),
   ].join('\n');
 }
 

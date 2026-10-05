@@ -481,6 +481,7 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
             students={students}
             timeAllocations={timeAllocations}
             assessmentCriteria={assessmentCriteria}
+            assessmentPlans={assessmentPlans}
             learningPlans={learningPlans || []}
             onSavePlan={onSaveLearningPlan || (() => {})}
             onSaveBulkPlans={onSaveBulkLearningPlans}
