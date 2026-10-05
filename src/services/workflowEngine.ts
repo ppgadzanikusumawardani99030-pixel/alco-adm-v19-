@@ -19,6 +19,7 @@ import {
   K13Analysis,
   K13KKM,
   ProfileWorkspaceData,
+  UnitExecutionPlanData,
 } from '../types';
 import { getCurriculumTypeFromSetting } from './curriculumRouter';
 import { validateAcademicSettingReadiness } from './academicSettingReadiness';
@@ -839,9 +840,20 @@ export function validateWorkflowDependencies(
       let s1UnitIds: string[] = [];
       let s2UnitIds: string[] = [];
 
-      const effectivePlan = currentPlan || (currentMapping ? { units: currentMapping.units.map((u: any) => ({ unitId: u.id, meetings: [] })), semesterPlacement: undefined } : null);
+      const fallbackPlan: UnitExecutionPlanData | undefined = currentMapping
+        ? {
+            id: `uep-temp-${currentMapping.id}`,
+            academicSettingId: currentMapping.academicSettingId,
+            mappingId: currentMapping.id,
+            basedOnMappingUpdatedAt: currentMapping.updatedAt,
+            units: currentMapping.units.map((u) => ({ unitId: u.id, meetings: [] })),
+            semesterPlacement: undefined,
+            updatedAt: currentMapping.updatedAt,
+          }
+        : undefined;
+      const effectivePlan: UnitExecutionPlanData | undefined = currentPlan || fallbackPlan;
       if (effectivePlan && currentMapping) {
-        const placementVal = resolveUnitSemesterPlacement(effectivePlan as any, currentMapping);
+        const placementVal = resolveUnitSemesterPlacement(effectivePlan, currentMapping);
         if (!placementVal.isValid || !placementVal.isComplete) {
           placementReason = 'Tetapkan pembagian Unit/Bab ke Semester 1 dan Semester 2.';
         } else {
@@ -908,7 +920,7 @@ export function validateWorkflowDependencies(
           schedule: s1Data?.learningMeetingSchedule,
           semester: 1,
           mapping: currentMapping,
-          unitExecutionPlan: (effectivePlan || currentPlan) as any,
+          unitExecutionPlan: effectivePlan || currentPlan,
           subjectWeeklySchedule: s1Data?.subjectWeeklySchedule,
           expectedWeeklyJP: s1WeeklyJP,
           calendar: s1Data?.academicCalendar?.calendar,
@@ -919,7 +931,7 @@ export function validateWorkflowDependencies(
           schedule: s2Data?.learningMeetingSchedule,
           semester: 2,
           mapping: currentMapping,
-          unitExecutionPlan: (effectivePlan || currentPlan) as any,
+          unitExecutionPlan: effectivePlan || currentPlan,
           subjectWeeklySchedule: s2Data?.subjectWeeklySchedule,
           expectedWeeklyJP: s2WeeklyJP,
           calendar: s2Data?.academicCalendar?.calendar,
