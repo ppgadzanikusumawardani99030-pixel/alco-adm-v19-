@@ -569,61 +569,113 @@ export function resolveLearningPlanAllocatedJP(
 ): LearningPlanJPResolution {
   const issues: string[] = [];
 
-  // 1. CANONICAL AUTHORITY: scheduled meetings projection wins over stored allocatedJP and TimeAllocation
-  if (plan.unitId || (plan.learningMeetingIds && plan.learningMeetingIds.length > 0)) {
-    let rows: ScheduledLearningMeetingProjection[] = [];
+  const isCanonicalPlan = Boolean(
+    plan.unitId || (plan.learningMeetingIds && plan.learningMeetingIds.length > 0)
+  );
+
+  // 1. CANONICAL AUTHORITY: scheduled meetings projection (Fail-closed: NO fallback for canonical plans!)
+  if (isCanonicalPlan) {
+    let projectionRows: ScheduledLearningMeetingProjection[] = [];
 
     if (context.scheduledMeetings) {
-      rows = context.scheduledMeetings;
+      projectionRows = context.scheduledMeetings;
     } else if (
       context.atpUnitMapping &&
       context.unitExecutionPlan &&
-      context.learningMeetingSchedules
+      context.learningMeetingSchedules &&
+      context.learningMeetingSchedules.length > 0
     ) {
       const proj = resolveScheduledLearningMeetings({
         mapping: context.atpUnitMapping,
         unitExecutionPlan: context.unitExecutionPlan,
         schedules: context.learningMeetingSchedules,
+        tp: undefined,
+        atp: context.atp || undefined,
       });
       if (proj.isValid) {
-        rows = proj.rows;
+        projectionRows = proj.rows;
+      } else {
+        issues.push(...proj.errors);
+        return {
+          source: 'UNRESOLVED',
+          issues: issues.length > 0 ? issues : ['Proyeksi jadwal pertemuan canonical tidak valid.'],
+        };
       }
+    } else {
+      return {
+        source: 'UNRESOLVED',
+        issues: ['Proyeksi jadwal pertemuan canonical tidak tersedia untuk rencana pembelajaran ini.'],
+      };
     }
 
     const activeSettingId = context.academicSetting?.id || plan.academicSettingId;
     const semesterRows = activeSettingId
-      ? rows.filter((r) => r.semesterPlanId === activeSettingId)
-      : rows;
+      ? projectionRows.filter((r) => r.semesterPlanId === activeSettingId)
+      : projectionRows;
 
-    if (semesterRows.length > 0) {
-      let matchedRows: ScheduledLearningMeetingProjection[] = [];
+    if (semesterRows.length === 0) {
+      return {
+        source: 'UNRESOLVED',
+        issues: ['Tidak ada jadwal pertemuan canonical pada semester aktif.'],
+      };
+    }
 
-      if (plan.learningMeetingIds && plan.learningMeetingIds.length > 0) {
-        const meetingIdSet = new Set(plan.learningMeetingIds);
-        matchedRows = semesterRows.filter((r) => meetingIdSet.has(r.meetingId));
-      } else if (plan.unitId) {
-        matchedRows = semesterRows.filter((r) => r.unitId === plan.unitId);
+    let matchedRows: ScheduledLearningMeetingProjection[] = [];
+
+    if (plan.unitId) {
+      matchedRows = semesterRows.filter((r) => r.unitId === plan.unitId);
+      if (matchedRows.length === 0) {
+        return {
+          source: 'UNRESOLVED',
+          issues: [`Tidak ada jadwal pertemuan untuk Unit '${plan.unitId}' pada semester aktif.`],
+        };
       }
-
-      if (matchedRows.length > 0) {
-        const totalJP = matchedRows.reduce((sum, r) => sum + (Number(r.jp) || 0), 0);
-        if (totalJP > 0) {
+      if (plan.learningMeetingIds && plan.learningMeetingIds.length > 0) {
+        const canonicalMeetingIds = matchedRows.map((r) => r.meetingId);
+        const canonicalSet = new Set(canonicalMeetingIds);
+        const planSet = new Set(plan.learningMeetingIds);
+        if (canonicalSet.size !== planSet.size || !canonicalMeetingIds.every((id) => planSet.has(id))) {
           return {
-            allocatedJP: totalJP,
-            source: 'CANONICAL_MEETINGS',
-            issues,
+            source: 'UNRESOLVED',
+            issues: ['Daftar learningMeetingIds rencana tidak sesuai dengan jadwal pertemuan canonical Unit.'],
           };
         }
       }
+    } else if (plan.learningMeetingIds && plan.learningMeetingIds.length > 0) {
+      const semesterMeetingMap = new Map(semesterRows.map((r) => [r.meetingId, r]));
+      for (const mId of plan.learningMeetingIds) {
+        const row = semesterMeetingMap.get(mId);
+        if (!row) {
+          return {
+            source: 'UNRESOLVED',
+            issues: [`Pertemuan '${mId}' tidak ditemukan pada semester aktif.`],
+          };
+        }
+        matchedRows.push(row);
+      }
     }
+
+    const totalJP = matchedRows.reduce((sum, r) => sum + (Number(r.jp) || 0), 0);
+    if (totalJP > 0) {
+      return {
+        allocatedJP: totalJP,
+        source: 'CANONICAL_MEETINGS',
+        issues,
+      };
+    }
+
+    return {
+      source: 'UNRESOLVED',
+      issues: ['Alokasi JP canonical bernilai 0 atau tidak valid.'],
+    };
   }
 
-  // 2. Explicit LearningPlan.allocatedJP (fallback if no canonical meetings)
+  // 2. Explicit LearningPlan.allocatedJP (fallback if non-canonical plan)
   if (typeof plan.allocatedJP === 'number' && !isNaN(plan.allocatedJP) && plan.allocatedJP > 0) {
     return { allocatedJP: plan.allocatedJP, source: 'EXPLICIT_PLAN' };
   }
 
-  // 3. Linked TimeAllocation (legacy fallback)
+  // 3. Linked TimeAllocation (legacy fallback only for non-canonical plan)
   if (context.timeAllocations && context.timeAllocations.length > 0) {
     const scopedAllocations = context.timeAllocations.filter(
       (ta) => !ta.academicSettingId || ta.academicSettingId === plan.academicSettingId
@@ -977,7 +1029,8 @@ export function validateLearningPlan(
     } else if (
       context.atpUnitMapping &&
       context.unitExecutionPlan &&
-      context.learningMeetingSchedules
+      context.learningMeetingSchedules &&
+      context.learningMeetingSchedules.length > 0
     ) {
       const proj = resolveScheduledLearningMeetings({
         mapping: context.atpUnitMapping,
@@ -991,6 +1044,8 @@ export function validateLearningPlan(
       } else {
         errors.push(...proj.errors);
       }
+    } else {
+      errors.push('Proyeksi jadwal pertemuan canonical tidak tersedia untuk memvalidasi lineage rencana pembelajaran.');
     }
 
     const activeSettingId = context.academicSetting?.id || plan.academicSettingId;
@@ -998,23 +1053,88 @@ export function validateLearningPlan(
       ? projectionRows.filter((r) => r.semesterPlanId === activeSettingId)
       : projectionRows;
 
-    const semesterMeetingMap = new Map(semesterRows.map((r) => [r.meetingId, r]));
-
-    if (plan.learningMeetingIds && plan.learningMeetingIds.length > 0) {
-      for (const mId of plan.learningMeetingIds) {
-        const meetingRow = semesterMeetingMap.get(mId);
-        if (!meetingRow) {
-          errors.push(`Pertemuan dengan ID '${mId}' tidak ditemukan pada jadwal pertemuan semester aktif.`);
-        } else if (plan.unitId && meetingRow.unitId !== plan.unitId) {
-          errors.push(`Pertemuan '${mId}' berasal dari unit '${meetingRow.unitId}', berbeda dengan unitId rancangan '${plan.unitId}'.`);
-        }
-      }
-    }
-
     if (plan.unitId && context.atpUnitMapping) {
       const unitExists = (context.atpUnitMapping.units || []).some((u) => u.id === plan.unitId);
       if (!unitExists) {
         errors.push(`Unit ID '${plan.unitId}' tidak ditemukan pada Pemetaan Unit/Bab.`);
+      }
+    }
+
+    if (plan.unitId) {
+      const canonicalUnitRows = semesterRows.filter((r) => r.unitId === plan.unitId);
+      if (canonicalUnitRows.length === 0 && projectionRows.length > 0) {
+        errors.push(`Tidak ditemukan jadwal pertemuan untuk Unit '${plan.unitId}' pada semester aktif.`);
+      } else if (canonicalUnitRows.length > 0) {
+        // 1. learningMeetingIds = meeting canonical Unit tersebut (Set equality)
+        const canonicalMeetingIds = canonicalUnitRows.map((r) => r.meetingId);
+        const canonicalMeetingIdSet = new Set(canonicalMeetingIds);
+        const planMeetingIdSet = new Set(plan.learningMeetingIds || []);
+
+        for (const mId of canonicalMeetingIds) {
+          if (!planMeetingIdSet.has(mId)) {
+            errors.push(`Pertemuan canonical '${mId}' untuk Unit '${plan.unitId}' belum dimasukkan ke dalam rencana pembelajaran.`);
+          }
+        }
+        for (const mId of plan.learningMeetingIds || []) {
+          if (!canonicalMeetingIdSet.has(mId)) {
+            errors.push(`Pertemuan '${mId}' bukan merupakan bagian dari pertemuan canonical Unit '${plan.unitId}' pada semester aktif.`);
+          }
+        }
+
+        // 2. tpIds = deterministic union linkedTpIds canonical (Set equality)
+        const canonicalTpIdSet = new Set<string>();
+        for (const r of canonicalUnitRows) {
+          for (const tpId of r.linkedTpIds || []) {
+            if (tpId) canonicalTpIdSet.add(tpId);
+          }
+        }
+
+        const planTpIdSet = new Set(plan.tpIds || []);
+        for (const tpId of canonicalTpIdSet) {
+          if (!planTpIdSet.has(tpId)) {
+            errors.push(`Tujuan Pembelajaran (TP) canonical '${tpId}' dari Unit '${plan.unitId}' belum terhubung ke rencana pembelajaran.`);
+          }
+        }
+        for (const tpId of plan.tpIds || []) {
+          if (!canonicalTpIdSet.has(tpId)) {
+            errors.push(`Tujuan Pembelajaran (TP) '${tpId}' bukan merupakan bagian dari TP canonical Unit '${plan.unitId}'.`);
+          }
+        }
+
+        // 3. atpItemIds = deterministic union linkedAtpItemIds canonical (Set equality)
+        const canonicalAtpIdSet = new Set<string>();
+        for (const r of canonicalUnitRows) {
+          for (const atpId of r.linkedAtpItemIds || []) {
+            if (atpId) canonicalAtpIdSet.add(atpId);
+          }
+        }
+
+        const planAtpIdSet = new Set(plan.atpItemIds || []);
+        for (const atpId of canonicalAtpIdSet) {
+          if (!planAtpIdSet.has(atpId)) {
+            errors.push(`Langkah ATP canonical '${atpId}' dari Unit '${plan.unitId}' belum terhubung ke rencana pembelajaran.`);
+          }
+        }
+        for (const atpId of plan.atpItemIds || []) {
+          if (!canonicalAtpIdSet.has(atpId)) {
+            errors.push(`Langkah ATP '${atpId}' bukan merupakan bagian dari ATP canonical Unit '${plan.unitId}'.`);
+          }
+        }
+      }
+    } else if (plan.learningMeetingIds && plan.learningMeetingIds.length > 0) {
+      const semesterMeetingMap = new Map(semesterRows.map((r) => [r.meetingId, r]));
+      let inferredUnitId: string | null = null;
+      for (const mId of plan.learningMeetingIds) {
+        const meetingRow = semesterMeetingMap.get(mId);
+        if (!meetingRow) {
+          errors.push(`Pertemuan dengan ID '${mId}' tidak ditemukan pada jadwal pertemuan semester aktif.`);
+        } else {
+          if (!inferredUnitId) {
+            inferredUnitId = meetingRow.unitId;
+          } else if (inferredUnitId !== meetingRow.unitId) {
+            errors.push(`Pertemuan '${mId}' berasal dari unit berbeda ('${meetingRow.unitId}' vs '${inferredUnitId}'). Seluruh pertemuan harus berasal dari satu Unit.`);
+          }
+        }
       }
     }
   }
@@ -1516,6 +1636,14 @@ export function confirmLearningPlan(
     academicSetting?: AcademicSetting | null;
     tp?: TPData | null;
     atp?: ATPData | null;
+    atpUnitMapping?: ATPUnitMappingData | null;
+    unitExecutionPlan?: UnitExecutionPlanData | null;
+    learningMeetingSchedules?: Array<{
+      semesterPlanId: string;
+      semester: 1 | 2;
+      schedule: LearningMeetingScheduleData;
+    }> | null;
+    scheduledMeetings?: ScheduledLearningMeetingProjection[] | null;
     k13Analysis?: K13Analysis | null;
     timeAllocations?: TimeAllocation[] | null;
     assessmentCriteria?: AssessmentCriterion[] | null;

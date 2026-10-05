@@ -37,6 +37,9 @@ import {
   AssessmentCriterion,
   AdministrationWorkspace,
   LearningExperiencePhase,
+  ATPUnitMappingData,
+  UnitExecutionPlanData,
+  LearningMeetingScheduleData,
 } from '../../types';
 import {
   validateLearningPlan,
@@ -84,6 +87,13 @@ interface LearningPlanManagerProps {
   workspace?: AdministrationWorkspace;
   tp?: TPData;
   atp?: ATPData;
+  atpUnitMapping?: ATPUnitMappingData;
+  unitExecutionPlan?: UnitExecutionPlanData;
+  learningMeetingSchedules?: {
+    semesterPlanId: string;
+    semester: 1 | 2;
+    schedule: LearningMeetingScheduleData;
+  }[];
   students?: Student[];
   timeAllocations?: TimeAllocation[];
   assessmentCriteria?: AssessmentCriterion[];
@@ -100,6 +110,9 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
   workspace,
   tp,
   atp,
+  atpUnitMapping,
+  unitExecutionPlan,
+  learningMeetingSchedules = [],
   students = [],
   timeAllocations = [],
   assessmentCriteria = [],
@@ -117,6 +130,8 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
   const [isGeneratingAI, setIsGeneratingAI] = useState<boolean>(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
 
+  const isK13Curriculum = academicSetting.curriculumType === 'K13' || academicSetting.curriculum?.includes('2013');
+
   // Active plan resolution
   const activePlan = useMemo(() => {
     if (!selectedPlanId) return null;
@@ -125,14 +140,40 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
 
   // Canonical Active Semester Learning Scopes (Single Source of Truth)
   const semesterScopes = useMemo(() => {
+    if (!isK13Curriculum) {
+      return buildLearningPlanScopeUnits({
+        academicSetting,
+        atpUnitMapping,
+        unitExecutionPlan,
+        learningMeetingSchedules,
+        tp,
+        atp,
+      });
+    }
     return resolveSemesterLearningScopes(tp, atp, timeAllocations);
-  }, [tp, atp, timeAllocations]);
+  }, [
+    isK13Curriculum,
+    academicSetting,
+    atpUnitMapping,
+    unitExecutionPlan,
+    learningMeetingSchedules,
+    tp,
+    atp,
+    timeAllocations,
+  ]);
 
   const activeSemesterTps = useMemo(() => {
     const seen = new Set<string>();
     const list: TPItem[] = [];
     for (const scope of semesterScopes) {
-      if (scope.tpItem && !seen.has(scope.tpItem.id)) {
+      if (scope.tpItems && scope.tpItems.length > 0) {
+        for (const t of scope.tpItems) {
+          if (!seen.has(t.id)) {
+            seen.add(t.id);
+            list.push(t);
+          }
+        }
+      } else if (scope.tpItem && !seen.has(scope.tpItem.id)) {
         seen.add(scope.tpItem.id);
         list.push(scope.tpItem);
       }
@@ -161,15 +202,43 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       academicSetting,
       tp,
       atp,
+      atpUnitMapping,
+      unitExecutionPlan,
+      learningMeetingSchedules,
       timeAllocations,
       assessmentCriteria,
     });
-  }, [activePlan, academicSetting, tp, atp, timeAllocations, assessmentCriteria]);
+  }, [
+    activePlan,
+    academicSetting,
+    tp,
+    atp,
+    atpUnitMapping,
+    unitExecutionPlan,
+    learningMeetingSchedules,
+    timeAllocations,
+    assessmentCriteria,
+  ]);
   const curriculumType = getCurriculumTypeFromSetting(academicSetting);
   const activePlanJpResolution = useMemo(() => {
     if (!activePlan) return null;
-    return resolveLearningPlanAllocatedJP(activePlan, { atp, timeAllocations });
-  }, [activePlan, atp, timeAllocations]);
+    return resolveLearningPlanAllocatedJP(activePlan, {
+      atp,
+      academicSetting,
+      atpUnitMapping,
+      unitExecutionPlan,
+      learningMeetingSchedules,
+      timeAllocations,
+    });
+  }, [
+    activePlan,
+    atp,
+    academicSetting,
+    atpUnitMapping,
+    unitExecutionPlan,
+    learningMeetingSchedules,
+    timeAllocations,
+  ]);
 
   const showNotification = (type: 'success' | 'error' | 'info', text: string) => {
     setNotification({ type, text });
@@ -234,6 +303,31 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     }
   };
 
+  const [availableScopes, setAvailableScopes] = useState<LearningPlanScopeUnit[]>([]);
+  const [scopeModalMode, setScopeModalMode] = useState<'ai' | 'manual'>('ai');
+  const [isScopeModalOpen, setIsScopeModalOpen] = useState(false);
+
+  const executeManualCreationForScope = (scope: LearningPlanScopeUnit) => {
+    setIsScopeModalOpen(false);
+    const newPlan = createEmptyLearningPlan({
+      academicSetting,
+      curriculumType,
+      unitId: scope.unitId,
+      learningMeetingIds: scope.learningMeetingIds,
+      tpIds: scope.linkedTpIds,
+      atpItemIds: scope.linkedAtpItemIds,
+      allocatedJP: scope.jp ?? undefined,
+      title: scope.unitTitle ? `Modul Ajar: ${scope.unitTitle}` : scope.title,
+      topic: scope.materialScope || scope.unitTitle || scope.title,
+      context: { tp, atp },
+    });
+
+    onSavePlan(newPlan);
+    setSelectedPlanId(newPlan.id);
+    setActiveTab('editor');
+    showNotification('success', `Rancangan Pembelajaran baru dibuat untuk unit '${scope.title}' (Status: DRAFT). Silakan lengkapi komponen modul.`);
+  };
+
   // Create new manual empty plan
   const handleCreateNewManual = () => {
     if (curriculumType === 'K13') {
@@ -244,22 +338,23 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       showNotification('error', 'Kurikulum belum terselesaikan. Rancangan manual tidak dibuat agar tidak diarahkan diam-diam ke Kurikulum Merdeka.');
       return;
     }
-    const newPlan = createEmptyLearningPlan({
-      academicSetting,
-      curriculumType,
-      tpIds: [],
-      atpItemIds: [],
-      context: { tp, atp },
-    });
 
-    onSavePlan(newPlan);
-    setSelectedPlanId(newPlan.id);
-    setActiveTab('editor');
-    showNotification('success', 'Rancangan Pembelajaran baru dibuat (Status: DRAFT). Silakan pilih TP/ATP.');
+    if (semesterScopes.length === 0) {
+      showNotification(
+        'error',
+        'Struktur Pertemuan atau Jadwal Aktual belum valid/lengkap. Selesaikan Jadwal Aktual pada Perencanaan Tahunan terlebih dahulu.'
+      );
+      return;
+    }
+
+    if (semesterScopes.length === 1) {
+      executeManualCreationForScope(semesterScopes[0]);
+    } else {
+      setAvailableScopes(semesterScopes);
+      setScopeModalMode('manual');
+      setIsScopeModalOpen(true);
+    }
   };
-
-  const [availableScopes, setAvailableScopes] = useState<LearningPlanScopeUnit[]>([]);
-  const [isScopeModalOpen, setIsScopeModalOpen] = useState(false);
 
   // Trigger AI Assisted Draft with strict canonical scope (0 / 1 / >1 rule)
   const handleCreateAIDraftClick = () => {
@@ -293,23 +388,23 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       showNotification('error', 'ATP belum siap untuk digunakan sebagai sumber Draf AI. Tinjau dan selesaikan ATP terlebih dahulu.');
       return;
     }
-    const scopes = resolveSemesterLearningScopes(tp, atp, timeAllocations);
 
-    if (scopes.length === 0) {
+    if (semesterScopes.length === 0) {
       recordLearningPlanBlocked('NO_VALID_SCOPE');
       showNotification(
         'error',
-        'Belum ada TP/ATP yang dialokasikan pada semester aktif. Selesaikan Pemetaan Waktu terlebih dahulu.'
+        'Struktur Pertemuan atau Jadwal Aktual belum valid/lengkap. Selesaikan Jadwal Aktual pada Perencanaan Tahunan terlebih dahulu.'
       );
       return;
     }
 
-    if (scopes.length === 1) {
+    if (semesterScopes.length === 1) {
       // 1 valid scope -> auto-select -> generate
-      executeAIGenerationForScope(scopes[0]);
+      executeAIGenerationForScope(semesterScopes[0]);
     } else {
       // >1 valid scope -> require explicit teacher selection
-      setAvailableScopes(scopes);
+      setAvailableScopes(semesterScopes);
+      setScopeModalMode('ai');
       setIsScopeModalOpen(true);
     }
   };
@@ -319,6 +414,9 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
 
   const hasAssociatedPlan = (scope: LearningPlanScopeUnit, plans: LearningPlan[]): boolean => {
     return plans.some((p) => {
+      if (scope.unitId) {
+        return p.unitId === scope.unitId;
+      }
       if (scope.type === 'ATP_STEP' && scope.atpItem?.id) {
         if (p.atpItemIds && p.atpItemIds.includes(scope.atpItem.id)) {
           return true;
@@ -336,21 +434,31 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
   };
 
   const generateAIDraftPlanForScope = async (scope: LearningPlanScopeUnit): Promise<LearningPlan> => {
+    const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
+    const atpsToSend = scope.atpItems && scope.atpItems.length > 0 ? scope.atpItems : (scope.atpItem ? [scope.atpItem] : []);
+    const canonicalTopic = scope.materialScope || scope.unitTitle || scope.title || (scope.tpItem ? (scope.tpItem.contentScope || scope.tpItem.statement) : '');
+
     const aiDraftResult = await generateLearningPlanWithAI({
       academicSetting,
-      tps: [scope.tpItem],
-      atpItems: scope.atpItem ? [scope.atpItem] : [],
-      topic: scope.materialScope || scope.tpItem.contentScope || scope.tpItem.statement,
+      tps: tpsToSend,
+      atpItems: atpsToSend,
+      topic: canonicalTopic,
       allocatedJP: scope.jp,
     });
 
     const draftPlan = createAIDraftLearningPlan({
       academicSetting,
       curriculumType,
+      unitId: scope.unitId,
+      learningMeetingIds: scope.learningMeetingIds,
       tpIds: scope.linkedTpIds,
       atpItemIds: scope.linkedAtpItemIds,
       allocatedJP: scope.jp,
-      aiDraft: aiDraftResult,
+      aiDraft: {
+        ...aiDraftResult,
+        title: aiDraftResult.title || (scope.unitTitle ? `Modul Ajar: ${scope.unitTitle}` : undefined),
+        topic: aiDraftResult.topic || canonicalTopic,
+      },
       context: { tp, atp },
     });
 
@@ -543,6 +651,9 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       academicSetting,
       tp,
       atp,
+      atpUnitMapping,
+      unitExecutionPlan,
+      learningMeetingSchedules,
       timeAllocations,
       assessmentCriteria,
     });
@@ -576,6 +687,9 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
         workspace,
         tp,
         atp,
+        atpUnitMapping,
+        unitExecutionPlan,
+        learningMeetingSchedules,
         students,
         timeAllocations,
         assessmentCriteria,
@@ -611,6 +725,9 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
         workspace,
         tp,
         atp,
+        atpUnitMapping,
+        unitExecutionPlan,
+        learningMeetingSchedules,
         students,
         timeAllocations,
         assessmentCriteria,
@@ -772,7 +889,21 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
                             {plan.title || plan.topic || 'Rancangan Tanpa Judul'}
                           </h4>
                           <p className="text-xs text-slate-500 mt-0.5">
-                            {plan.tpIds.length} TP terpilih • {resolveLearningPlanAllocatedJP(plan, { atp, timeAllocations }).allocatedJP ? `${resolveLearningPlanAllocatedJP(plan, { atp, timeAllocations }).allocatedJP} JP` : 'Belum ada JP'}
+                            {plan.tpIds.length} TP terpilih • {resolveLearningPlanAllocatedJP(plan, {
+                              atp,
+                              academicSetting,
+                              atpUnitMapping,
+                              unitExecutionPlan,
+                              learningMeetingSchedules,
+                              timeAllocations,
+                            }).allocatedJP ? `${resolveLearningPlanAllocatedJP(plan, {
+                              atp,
+                              academicSetting,
+                              atpUnitMapping,
+                              unitExecutionPlan,
+                              learningMeetingSchedules,
+                              timeAllocations,
+                            }).allocatedJP} JP` : 'Belum ada JP'}
                           </p>
                         </div>
                         <span
@@ -1723,8 +1854,16 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
           <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-2xl overflow-hidden flex flex-col max-h-[85vh]">
             <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <Sparkles className="w-5 h-5 text-blue-600" />
-                <h3 className="font-bold text-slate-800 text-base">Pilih Lingkup Pembelajaran Modul Ajar</h3>
+                {scopeModalMode === 'ai' ? (
+                  <Sparkles className="w-5 h-5 text-blue-600" />
+                ) : (
+                  <Plus className="w-5 h-5 text-blue-600" />
+                )}
+                <h3 className="font-bold text-slate-800 text-base">
+                  {scopeModalMode === 'ai'
+                    ? 'Pilih Lingkup Pembelajaran Modul Ajar (AI)'
+                    : 'Pilih Lingkup Pembelajaran Rencana Manual'}
+                </h3>
               </div>
               <button
                 onClick={() => setIsScopeModalOpen(false)}
@@ -1737,9 +1876,13 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
 
             <div className="p-6 overflow-y-auto space-y-3">
               <p className="text-sm text-slate-600 mb-2">
-                Satu Modul Pembelajaran AI harus mempunyai scope pedagogis yang spesifik. Ditemukan{' '}
+                {scopeModalMode === 'ai'
+                  ? 'Satu Modul Pembelajaran AI harus mempunyai scope pedagogis yang spesifik. Ditemukan '
+                  : 'Pilih unit pembelajaran canonical untuk membuat rancangan manual. Ditemukan '}
                 <span className="font-semibold text-slate-800">{availableScopes.length} lingkup pembelajaran</span>.{' '}
-                Pilih lingkup pembelajaran yang akan disusun drafnya:
+                {scopeModalMode === 'ai'
+                  ? 'Pilih lingkup pembelajaran yang akan disusun drafnya:'
+                  : 'Pilih unit yang akan dibuatkan rancangan manual:'}
               </p>
 
               <div className="space-y-2.5">
@@ -1797,17 +1940,27 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
                             )}
                           </div>
                           <h4 className="font-bold text-slate-800 text-sm">{scope.title}</h4>
-                          <p className="text-xs text-slate-600 line-clamp-2">{scope.tpItem.statement}</p>
+                          <p className="text-xs text-slate-600 line-clamp-2">{scope.tpItem?.statement || (scope.tpItems && scope.tpItems.map(t => t.statement).join('; '))}</p>
                         </div>
                       )}
 
-                      <button
-                        onClick={() => executeAIGenerationForScope(scope)}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 flex-shrink-0 shadow-2xs group-hover:scale-102 cursor-pointer"
-                      >
-                        <Sparkles className="w-3.5 h-3.5" />
-                        <span>Susun Draf Ini</span>
-                      </button>
+                      {scopeModalMode === 'ai' ? (
+                        <button
+                          onClick={() => executeAIGenerationForScope(scope)}
+                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 flex-shrink-0 shadow-2xs group-hover:scale-102 cursor-pointer"
+                        >
+                          <Sparkles className="w-3.5 h-3.5" />
+                          <span>Susun Draf Ini</span>
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => executeManualCreationForScope(scope)}
+                          className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white font-medium text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 flex-shrink-0 shadow-2xs group-hover:scale-102 cursor-pointer"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          <span>Buat Rencana Unit Ini</span>
+                        </button>
+                      )}
                     </div>
                   );
                 })}
