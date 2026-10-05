@@ -1019,13 +1019,27 @@ export function validateWorkflowDependencies(
     };
 
     // 7. Administrasi Hub Overall Gating
+    const isAdminBlocked = !isAnnualPlanningComplete || isAnnualPlanningStale;
+
     stepStates.admin = {
       id: 'admin',
-      status: isATPComplete ? 'COMPLETE' : isTPDataValid ? 'IN_PROGRESS' : 'BLOCKED',
-      isBlocked: !isTPDataValid,
-      isComplete: isATPComplete,
-      isStale: isATPStale || isTPStale || isKKTPStale,
-      reason: !isTPDataValid ? 'Memerlukan TP dan Alur ATP untuk modul administrasi lengkap' : undefined,
+      status: isAnnualPlanningStale
+        ? 'STALE'
+        : isAdminBlocked
+        ? 'BLOCKED'
+        : 'READY',
+      isBlocked: isAdminBlocked,
+      isComplete: false,
+      isStale:
+        isAnnualPlanningStale ||
+        isATPStale ||
+        isTPStale ||
+        isKKTPStale,
+      reason: isAnnualPlanningStale
+        ? 'Rencana Tahunan berubah. Selesaikan kembali Jadwal Aktual sebelum melanjutkan administrasi semester.'
+        : !isAnnualPlanningComplete
+        ? 'Selesaikan Perencanaan Tahunan (08) terlebih dahulu.'
+        : undefined,
     };
   } else {
     // Unresolved / unknown curriculum: all downstream branches stay BLOCKED!

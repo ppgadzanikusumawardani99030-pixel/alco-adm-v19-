@@ -56,6 +56,7 @@ import { AdminDocsExport } from '../AdminDocsExport';
 import { ProtaSemesterAllocationBundle } from '../../services/documentEngine';
 import { isK13 } from '../../services/curriculumRouter';
 import { buildAdministrationChainDiagnosticReport } from '../../services/diagnosticService';
+import { SemesterScheduleSummary } from './SemesterScheduleSummary';
 
 export type AdministrationTab =
   | 'time_planning'
@@ -196,6 +197,29 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
   const [assessmentSubTab, setAssessmentSubTab] = useState<'plan_master' | 'package_builder' | 'gradebook'>('plan_master');
   const [diagnosticNotice, setDiagnosticNotice] = useState<string | null>(null);
 
+  const activeSemesterNum = useMemo(() => {
+    return academicSetting?.semester?.includes('1') ||
+      academicSetting?.semester?.toLowerCase().includes('ganjil')
+      ? 1
+      : 2;
+  }, [academicSetting]);
+
+  const merdekaHeaderStats = useMemo(() => {
+    if (isK13Active) return null;
+    const matchedScheduleInput =
+      learningMeetingSchedules.find((s) => s.semesterPlanId === academicSetting.id) ||
+      learningMeetingSchedules.find((s) => s.semester === activeSemesterNum);
+
+    if (!matchedScheduleInput || !matchedScheduleInput.schedule?.entries) {
+      return { meetingCount: 0, totalJP: 0 };
+    }
+
+    const entries = matchedScheduleInput.schedule.entries;
+    const meetingCount = entries.length;
+    const totalJP = entries.reduce((sum, entry) => sum + (entry.jp || 0), 0);
+    return { meetingCount, totalJP };
+  }, [isK13Active, learningMeetingSchedules, academicSetting.id, activeSemesterNum]);
+
   const handleCopyChainDiagnostic = async () => {
     const report = buildAdministrationChainDiagnosticReport({
       workspaceId: workspace?.id,
@@ -331,11 +355,13 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
                 <span className="flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-slate-400" />
                   <span>
-                    {isK13Active
-                      ? `${k13Analysis?.items?.length || 0} Butir KD`
-                      : totalPlannedJP !== null
-                      ? `${totalPlannedJP} Total JP`
-                      : 'Belum dialokasikan'}
+                    {isK13Active ? (
+                      `${k13Analysis?.items?.length || 0} Butir KD`
+                    ) : merdekaHeaderStats && merdekaHeaderStats.meetingCount > 0 ? (
+                      `${merdekaHeaderStats.meetingCount} Pertemuan • ${merdekaHeaderStats.totalJP} JP Aktual`
+                    ) : (
+                      'Belum dialokasikan'
+                    )}
                   </span>
                 </span>
               </div>
@@ -357,7 +383,7 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
               onClick={() => onBackToStep(isK13Active ? 'k13-tujuan' : 'semester')}
               className="text-xs text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg border border-slate-700 transition-colors cursor-pointer"
             >
-              {isK13Active ? '← Kembali ke Tujuan & IPK (05)' : '← Kembali ke Pilih Semester (07)'}
+              {isK13Active ? '← Kembali ke Tujuan & IPK (05)' : '← Kembali ke Pilih Semester (09)'}
             </button>
           </div>
         </div>
@@ -406,9 +432,23 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
         </div>
       </div>
 
+      {!isK13Active && (
+        <SemesterScheduleSummary
+          academicSetting={academicSetting}
+          atpUnitMapping={atpUnitMapping}
+          unitExecutionPlan={unitExecutionPlan}
+          learningMeetingSchedules={learningMeetingSchedules}
+          tp={tp}
+          atp={atp}
+          semesterJPSetting={semesterJPSetting}
+          annualJPReference={annualJPReference}
+          onBackToAnnualPlanning={() => onBackToStep('annual-planning')}
+        />
+      )}
+
       {/* Main Content Area Based on Active Tab */}
       <div className="min-h-[500px]">
-        {activeTab === 'time_planning' && (
+        {isK13Active && activeTab === 'time_planning' && (
           <TimePlanningManager
             school={school}
             profile={profile}

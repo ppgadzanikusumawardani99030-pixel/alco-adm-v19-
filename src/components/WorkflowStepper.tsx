@@ -297,13 +297,17 @@ export const WorkflowStepper: React.FC<WorkflowStepperProps> = ({
           id: 'admin',
           num: '10',
           title: 'ADMINISTRASI',
-          sub: 'Asesmen & Dokumen',
+          sub: 'Pembelajaran, Asesmen & Dokumen',
           icon: <FileCheck2 className="w-4 h-4" />,
-          status: !hasSelectedSemester ? 'BLOCKED' : 'READY',
+          status: stepStates.admin.isBlocked
+            ? 'BLOCKED'
+            : !hasSelectedSemester
+            ? 'BLOCKED'
+            : stepStates.admin.status,
           isComplete: false,
-          isLocked: !hasSelectedSemester,
+          isLocked: !hasSelectedSemester || stepStates.admin.isBlocked,
           isStale: stepStates.admin.isStale,
-          lockReason: !hasSelectedSemester ? 'Pilih semester aktif terlebih dahulu' : undefined,
+          lockReason: stepStates.admin.reason || (!hasSelectedSemester ? 'Pilih semester aktif terlebih dahulu' : undefined),
         },
       ]
     : [

@@ -37,7 +37,7 @@ export const SemesterSelector: React.FC<SemesterSelectorProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500 mt-1">
-              Pilih semester aktif untuk mengelola alokasi waktu mingguan, kalender akademik, modul ajar, dan administrasi nilai.
+              Pilih semester aktif untuk mengelola rencana pembelajaran, asesmen, presensi, dan dokumen semester.
             </p>
           </div>
         </div>
