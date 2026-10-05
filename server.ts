@@ -1721,7 +1721,17 @@ Kembalikan respon JSON dengan skema:
 
 // Endpoint: AI Generate Unit Meetings Draft
 app.post('/api/ai/generate-unit-meetings', async (req, res) => {
-  const { subject = 'Mata Pelajaran', grade = '', phase = '', mapping, tpData, atpData, currentPlan, capacityContext } = req.body || {};
+  const {
+    subject = 'Mata Pelajaran',
+    grade = '',
+    phase = '',
+    mapping,
+    tpData,
+    atpData,
+    currentPlan,
+    capacityContext,
+    unitMeetingTargets,
+  } = req.body || {};
 
   if (!mapping || !Array.isArray(mapping.units)) {
     return res.status(400).json({ success: false, code: 'INVALID_PAYLOAD', error: 'Data pemetaan Unit/Bab (mapping) diperlukan.' });
@@ -1838,7 +1848,9 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
       unitId: string;
       semester: 1 | 2;
       existingCount: number;
+      targetNewCount?: number;
       generatedCount: number;
+      delta?: number;
       suggestions?: any[];
     }>;
     issue?: {
@@ -1913,9 +1925,106 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
     });
   }
 
+  // Strict validation of unitMeetingTargets
+  if (!Array.isArray(unitMeetingTargets) || unitMeetingTargets.length === 0) {
+    return res.status(400).json({
+      success: false,
+      code: 'UNIT_TARGET_INVALID',
+      error: 'Data target alokasi per Unit (unitMeetingTargets) wajib disertakan.',
+      diagnostic: buildDiagnostic({
+        stage: 'TARGET_VALIDATION',
+        code: 'UNIT_TARGET_INVALID',
+      }),
+    });
+  }
+
+  const targetsByUnitId = new Map<string, { unitId: string; semester: 1 | 2; existingCount: number; newTargetCount: number }>();
+  let sumS1Target = 0;
+  let sumS2Target = 0;
+
+  for (const t of unitMeetingTargets) {
+    if (!t || typeof t !== 'object') {
+      return res.status(400).json({
+        success: false,
+        code: 'UNIT_TARGET_INVALID',
+        error: 'Target per unit tidak valid.',
+        diagnostic: buildDiagnostic({ stage: 'TARGET_VALIDATION', code: 'UNIT_TARGET_INVALID' }),
+      });
+    }
+    const { unitId, semester, existingCount, newTargetCount } = t;
+    if (!unitId || !validUnitIdsSet.has(unitId)) {
+      return res.status(400).json({
+        success: false,
+        code: 'UNIT_TARGET_INVALID',
+        error: `unitId '${unitId}' pada unitMeetingTargets tidak ditemukan pada pemetaan mapping.`,
+        diagnostic: buildDiagnostic({ stage: 'TARGET_VALIDATION', code: 'UNIT_TARGET_INVALID', issue: { unitId, field: 'unitId', invalidId: unitId } }),
+      });
+    }
+    if (targetsByUnitId.has(unitId)) {
+      return res.status(400).json({
+        success: false,
+        code: 'UNIT_TARGET_INVALID',
+        error: `Duplikasi unitId '${unitId}' pada unitMeetingTargets.`,
+        diagnostic: buildDiagnostic({ stage: 'TARGET_VALIDATION', code: 'UNIT_TARGET_INVALID', issue: { unitId, field: 'unitId', invalidId: unitId } }),
+      });
+    }
+    const expectedSemester = s1UnitsSet.has(unitId) ? 1 : 2;
+    if (semester !== expectedSemester) {
+      return res.status(400).json({
+        success: false,
+        code: 'UNIT_TARGET_INVALID',
+        error: `Semester untuk Unit '${unitId}' (${semester}) tidak sesuai dengan boundary (${expectedSemester}).`,
+        diagnostic: buildDiagnostic({ stage: 'TARGET_VALIDATION', code: 'UNIT_TARGET_INVALID', issue: { unitId } }),
+      });
+    }
+    if (typeof newTargetCount !== 'number' || !Number.isInteger(newTargetCount) || newTargetCount < 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'UNIT_TARGET_INVALID',
+        error: `newTargetCount untuk Unit '${unitId}' harus bilangan bulat integer >= 0.`,
+        diagnostic: buildDiagnostic({ stage: 'TARGET_VALIDATION', code: 'UNIT_TARGET_INVALID', issue: { unitId } }),
+      });
+    }
+    const uPlan = currentPlan?.units?.find((u: any) => u.unitId === unitId);
+    const actualExisting = (uPlan?.meetings || []).length;
+    if (typeof existingCount !== 'number' || existingCount !== actualExisting) {
+      return res.status(400).json({
+        success: false,
+        code: 'UNIT_TARGET_INVALID',
+        error: `existingCount untuk Unit '${unitId}' (${existingCount}) tidak sesuai dengan currentPlan (${actualExisting}).`,
+        diagnostic: buildDiagnostic({ stage: 'TARGET_VALIDATION', code: 'UNIT_TARGET_INVALID', issue: { unitId } }),
+      });
+    }
+
+    targetsByUnitId.set(unitId, { unitId, semester, existingCount, newTargetCount });
+    if (semester === 1) sumS1Target += newTargetCount;
+    else sumS2Target += newTargetCount;
+  }
+
+  for (const unit of sortedMappingUnits) {
+    if (!targetsByUnitId.has(unit.id)) {
+      return res.status(400).json({
+        success: false,
+        code: 'UNIT_TARGET_INVALID',
+        error: `Unit '${unit.id}' belum tercakup dalam unitMeetingTargets.`,
+        diagnostic: buildDiagnostic({ stage: 'TARGET_VALIDATION', code: 'UNIT_TARGET_INVALID', issue: { unitId: unit.id } }),
+      });
+    }
+  }
+
+  if (sumS1Target !== additionalS1 || sumS2Target !== additionalS2) {
+    return res.status(400).json({
+      success: false,
+      code: 'UNIT_TARGET_INVALID',
+      error: `Total newTargetCount (${sumS1Target} S1, ${sumS2Target} S2) tidak sesuai dengan kapasitas slot semester (${additionalS1} S1, ${additionalS2} S2).`,
+      diagnostic: buildDiagnostic({ stage: 'TARGET_VALIDATION', code: 'UNIT_TARGET_INVALID' }),
+    });
+  }
+
   const unitsContext = sortedMappingUnits.map((unit: any) => {
     const unitPlan = currentPlan?.units?.find((u: any) => u.unitId === unit.id);
     const existingMeetings = unitPlan?.meetings || [];
+    const unitTarget = targetsByUnitId.get(unit.id);
 
     const coveredMaterials = new Set(existingMeetings.flatMap((m: any) => m.materialIds || []));
     const coveredAtp = new Set(existingMeetings.flatMap((m: any) => m.linkedAtpItemIds || []));
@@ -1931,6 +2040,8 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
       unitId: unit.id,
       unitTitle: unit.title,
       semester,
+      newMeetingsToGenerate: unitTarget?.newTargetCount ?? 0,
+      existingMeetingsCount: existingMeetings.length,
       materials: (unit.materials || []).map((m: any) => ({
         id: m.id,
         title: m.title,
@@ -1968,21 +2079,6 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
     };
   });
 
-  const semesterCapacity = {
-    semester1: {
-      targetMeetingCount: targetS1,
-      existingMeetingCount: s1ExistingMeetingCount,
-      additionalMeetingsNeeded: additionalS1,
-      totalJP: capacityContext?.semester1?.totalJP ?? 0
-    },
-    semester2: {
-      targetMeetingCount: targetS2,
-      existingMeetingCount: s2ExistingMeetingCount,
-      additionalMeetingsNeeded: additionalS2,
-      totalJP: capacityContext?.semester2?.totalJP ?? 0
-    }
-  };
-
   const apiKey = resolveApiKey(req);
   if (!apiKey) {
     return res.status(503).json({
@@ -1998,29 +2094,35 @@ app.post('/api/ai/generate-unit-meetings', async (req, res) => {
 
   try {
     const ai = createAIClient(apiKey);
+    const targetPerUnitPrompt = sortedMappingUnits.map((u) => {
+      const t = targetsByUnitId.get(u.id)!;
+      return `- Unit [ID: "${u.id}"] "${u.title}" | Semester ${t.semester}: buat EXACT ${t.newTargetCount} Pertemuan baru (Sudah ada ${t.existingCount} pertemuan existing).`;
+    }).join('\n');
+
     const prompt = `Anda adalah pakar pengembang kurikulum dan perangkat pembelajaran Kurikulum Merdeka.
-TUGAS ANDA: Menyusun tambahan LearningMeeting untuk mengisi kapasitas Pertemuan perencanaan semester berdasarkan Kalender Pendidikan, JP mingguan, dan pola Pertemuan mingguan.
+TUGAS ANDA: Mengisi konten slot Pertemuan baru yang sudah ditentukan secara deterministik untuk setiap Unit / Bab Pembelajaran.
 
-JUMLAH PERTEMUAN YANG DIHASILKAN HARUS EXACT SANGAT PRESISI.
-- Untuk Semester 1: hasilkan total Pertemuan BARU tepat sejumlah: ${additionalS1} Pertemuan.
-- Untuk Semester 2: hasilkan total Pertemuan BARU tepat sejumlah: ${additionalS2} Pertemuan.
+TARGET WAJIB PER UNIT (HARUS DIPENUHI SECARA EXACT):
+${targetPerUnitPrompt}
 
-Pertemuan existing (yang sudah ada) tidak boleh diubah atau dihapus.
+TOTAL TARGET SEMESTER:
+- Semester 1: total ${additionalS1} Pertemuan baru.
+- Semester 2: total ${additionalS2} Pertemuan baru.
 
 RULES WAJIB:
-1. Gunakan HANYA Unit yang diberikan. Satu Pertemuan hanya milik satu Unit.
-2. Unit sudah dikelompokkan ke semester. Jangan pindahkan Unit atau mengubah semesternya.
-3. Jangan output field 'semester' dalam list meetings Anda. Semester diwarisi dari parent Unit-nya.
-4. Jangan output: JP, tanggal, minggu, duration, assessment, learning model.
-5. Referensi materialIds, linkedAtpItemIds, dan linkedTpIds harus menggunakan ID canonical yang persis yang ada di data konteks unit.
-6. ID atau Materi canonical yang sama boleh digunakan ulang di beberapa Pertemuan jika secara pedagogis diperlukan (misalnya untuk penguatan/praktik/refleksi lanjutan).
-7. Dilarang menciptakan ID baru atau Materi canonical baru yang tidak terdaftar di konteks unit.
-8. Semua missingCoverage yang tertera wajib tercakup sepenuhnya dalam tambahan Pertemuan yang Anda buat.
-9. Judul Pertemuan harus substantif, kreatif, dan berbeda secara pedagogis. Hindari judul generik seperti "Pertemuan 1", "Pertemuan 2", atau "Pembelajaran materi X".
-10. Setiap Pertemuan yang diusulkan wajib memiliki minimal satu referensi canonical (tidak boleh ketiganya: materialIds, linkedAtpItemIds, dan linkedTpIds kosong).
-
-KAPASITAS SEMESTER DETIL:
-${JSON.stringify(semesterCapacity, null, 2)}
+1. Jumlah Pertemuan baru pada array 'meetings' setiap Unit HARUS PERSIS SAMA DENGAN target newTargetCount di atas.
+   - Contoh: jika Unit target adalah 7 pertemuan baru, array 'meetings' untuk unit tersebut WAJIB berisi TEPAT 7 butir objek pertemuan.
+2. DILARANG menambah Pertemuan ekstra untuk refleksi, evaluasi, sumatif, atau penguatan jika target Unit sudah terpenuhi. Jika diperlukan refleksi/penguatan, integrasikan fokus tersebut ke dalam salah satu slot Pertemuan yang dialokasikan.
+3. DILARANG mengurangi jumlah Pertemuan dari target yang telah ditentukan.
+4. Gunakan HANYA Unit yang diberikan. Satu Pertemuan hanya milik satu Unit.
+5. Jangan output field 'semester' dalam list meetings. Semester diwarisi dari parent Unit-nya.
+6. Jangan output: JP, tanggal, minggu, duration, assessment, learning model.
+7. Referensi materialIds, linkedAtpItemIds, dan linkedTpIds harus menggunakan ID canonical yang persis yang ada di data konteks unit.
+8. ID atau Materi canonical yang sama boleh digunakan ulang di beberapa Pertemuan jika secara pedagogis diperlukan (misalnya untuk penguatan/praktik/refleksi lanjutan).
+9. Dilarang menciptakan ID baru atau Materi canonical baru yang tidak terdaftar di konteks unit.
+10. Semua missingCoverage yang tertera wajib tercakup sepenuhnya dalam tambahan Pertemuan yang Anda buat.
+11. Judul Pertemuan harus substantif, kreatif, dan berbeda secara pedagogis. Hindari judul generik seperti "Pertemuan 1", "Pertemuan 2", atau "Pembelajaran materi X".
+12. Setiap Pertemuan yang diusulkan wajib memiliki minimal satu referensi canonical (tidak boleh ketiganya: materialIds, linkedAtpItemIds, dan linkedTpIds kosong).
 
 DATA KONTEKS UNIT:
 ${JSON.stringify(unitsContext, null, 2)}
@@ -2108,7 +2210,9 @@ Kembalikan respon JSON dengan skema:
       unitId: string;
       semester: 1 | 2;
       existingCount: number;
+      targetNewCount: number;
       generatedCount: number;
+      delta: number;
       suggestions: Array<{
         suggestionIndex: number;
         title: string;
@@ -2122,6 +2226,7 @@ Kembalikan respon JSON dengan skema:
     for (const unit of sortedMappingUnits) {
       const unitPlan = currentPlan?.units?.find((u: any) => u.unitId === unit.id);
       const existingMeetings = unitPlan?.meetings || [];
+      const unitTarget = targetsByUnitId.get(unit.id);
       unitCoverageMap.set(unit.id, {
         materials: new Set(existingMeetings.flatMap((m: any) => m.materialIds || [])),
         atpItems: new Set(existingMeetings.flatMap((m: any) => m.linkedAtpItemIds || [])),
@@ -2129,11 +2234,14 @@ Kembalikan respon JSON dengan skema:
       });
 
       const sem = s1UnitsSet.has(unit.id) ? 1 : 2;
+      const targetNew = unitTarget?.newTargetCount ?? 0;
       perUnitDiagnosticMap.set(unit.id, {
         unitId: unit.id,
         semester: sem as (1 | 2),
         existingCount: existingMeetings.length,
+        targetNewCount: targetNew,
         generatedCount: 0,
+        delta: -targetNew,
         suggestions: [],
       });
     }
@@ -2357,6 +2465,7 @@ Kembalikan respon JSON dengan skema:
 
         diagUnit.suggestions.push(suggestionObj);
         diagUnit.generatedCount++;
+        diagUnit.delta = diagUnit.generatedCount - diagUnit.targetNewCount;
 
         sanitizedMeetings.push({
           title,
@@ -2372,6 +2481,34 @@ Kembalikan respon JSON dengan skema:
       });
     }
 
+    // Strict validation of per-unit generated meeting counts
+    for (const unit of sortedMappingUnits) {
+      const diagUnit = perUnitDiagnosticMap.get(unit.id)!;
+      const expectedNew = targetsByUnitId.get(unit.id)!.newTargetCount;
+      const actualNew = diagUnit.generatedCount;
+      if (actualNew !== expectedNew) {
+        const delta = actualNew - expectedNew;
+        const deltaStr = delta > 0 ? `+${delta}` : `${delta}`;
+        return res.status(400).json({
+          success: false,
+          code: 'UNIT_COUNT_MISMATCH',
+          error: `Jumlah Pertemuan baru AI untuk Unit '${unit.id}' (${actualNew}) tidak sesuai target exact (${expectedNew}, delta: ${deltaStr}).`,
+          diagnostic: buildDiagnostic({
+            stage: 'UNIT_COUNT_VERIFICATION',
+            code: 'UNIT_COUNT_MISMATCH',
+            suggS1Count,
+            suggS2Count,
+            perUnitMap: perUnitDiagnosticMap,
+            issue: {
+              unitId: unit.id,
+              field: 'unitId',
+            },
+          }),
+        });
+      }
+    }
+
+    // Invariant check: total semester count
     if (suggS1Count !== additionalS1 || suggS2Count !== additionalS2) {
       return res.status(400).json({
         success: false,

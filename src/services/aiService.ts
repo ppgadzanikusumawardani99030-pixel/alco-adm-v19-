@@ -931,7 +931,9 @@ export interface AIMeetingDiagnostic {
     unitId: string;
     semester: 1 | 2;
     existingCount: number;
+    targetNewCount?: number;
     generatedCount: number;
+    delta?: number;
     suggestions?: Array<{
       suggestionIndex: number;
       title: string;
@@ -986,6 +988,12 @@ export interface GenerateUnitMeetingsWithAIParams {
       totalJP: number;
     };
   };
+  unitMeetingTargets?: Array<{
+    unitId: string;
+    semester: 1 | 2;
+    existingCount: number;
+    newTargetCount: number;
+  }>;
 }
 
 export async function generateUnitMeetingsWithAI(

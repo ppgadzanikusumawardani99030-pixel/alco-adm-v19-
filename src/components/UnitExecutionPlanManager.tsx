@@ -42,6 +42,7 @@ import {
   suggestSemesterBoundaryByMeetingSlots,
   resolveUnitSemesterPlacement,
 } from '../services/unitSemesterPlanningService';
+import { allocateUnitMeetings } from '../services/unitMeetingAllocationService';
 import {
   buildUnitExecutionPlanAIDiagnosticReport,
   recordDiagnosticEvent,
@@ -52,6 +53,9 @@ export interface UnitExecutionPlanManagerProps {
   unitExecutionPlan?: UnitExecutionPlanData;
   atp: ATPData;
   tp: TPData;
+  subject?: string;
+  grade?: string;
+  phase?: string;
   onSave: (plan: UnitExecutionPlanData) => boolean;
   meetingCapacity?: {
     semester1: {
@@ -95,6 +99,9 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
   unitExecutionPlan,
   atp,
   tp,
+  subject,
+  grade,
+  phase,
   onSave,
   meetingCapacity,
 }) => {
@@ -174,58 +181,24 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
         throw new Error('Pembagian unit semester sementara tidak valid.');
       }
 
-      const s1UnitIds = new Set(placementResult.semester1UnitIds);
-      const s2UnitIds = new Set(placementResult.semester2UnitIds);
-
-      // 2. Count existing meetings in S1 and S2
-      let s1Existing = 0;
-      let s2Existing = 0;
-      draft.units.forEach((u) => {
-        const count = u.meetings?.length || 0;
-        if (s1UnitIds.has(u.unitId)) s1Existing += count;
-        else if (s2UnitIds.has(u.unitId)) s2Existing += count;
+      // 2. Run deterministic allocator
+      const allocationResult = allocateUnitMeetings({
+        mapping,
+        currentPlan: draft,
+        semester1UnitIds: placementResult.semester1UnitIds,
+        semester2UnitIds: placementResult.semester2UnitIds,
+        targetS1,
+        targetS2,
       });
 
-      const additionalS1 = targetS1 - s1Existing;
-      const additionalS2 = targetS2 - s2Existing;
-
-      if (additionalS1 < 0) {
-        throw new Error('Jumlah Pertemuan manual melebihi kapasitas Pertemuan perencanaan Semester 1. Kurangi Pertemuan manual atau sesuaikan pola jadwal/kalender.');
-      }
-      if (additionalS2 < 0) {
-        throw new Error('Jumlah Pertemuan manual melebihi kapasitas Pertemuan perencanaan Semester 2. Kurangi Pertemuan manual atau sesuaikan pola jadwal/kalender.');
+      if (!allocationResult.isValid) {
+        throw new Error(allocationResult.errors.join(' '));
       }
 
-      // 3. Minimum coverage feasibility
-      let missingCoverageUnitsS1Count = 0;
-      let missingCoverageUnitsS2Count = 0;
+      const additionalS1 = allocationResult.semester1.newTarget;
+      const additionalS2 = allocationResult.semester2.newTarget;
 
-      mapping.units.forEach((unit) => {
-        const unitPlan = draft.units.find((u) => u.unitId === unit.id);
-        const existingMeetings = unitPlan?.meetings || [];
-
-        const coveredMaterials = new Set(existingMeetings.flatMap((m) => m.materialIds || []));
-        const coveredAtp = new Set(existingMeetings.flatMap((m) => m.linkedAtpItemIds || []));
-        const coveredTp = new Set(existingMeetings.flatMap((m) => m.linkedTpIds || []));
-
-        const hasMissing = (unit.materials || []).some((m) => !coveredMaterials.has(m.id)) ||
-                           (unit.linkedAtpItemIds || []).some((id) => !coveredAtp.has(id)) ||
-                           (unit.linkedTpIds || []).some((id) => !coveredTp.has(id));
-
-        if (hasMissing) {
-          if (s1UnitIds.has(unit.id)) {
-            missingCoverageUnitsS1Count++;
-          } else if (s2UnitIds.has(unit.id)) {
-            missingCoverageUnitsS2Count++;
-          }
-        }
-      });
-
-      if (additionalS1 < missingCoverageUnitsS1Count || additionalS2 < missingCoverageUnitsS2Count) {
-        throw new Error('Kapasitas Pertemuan tersisa tidak cukup untuk melengkapi coverage tanpa mengubah Pertemuan manual. Tinjau Pertemuan yang sudah ada.');
-      }
-
-      // 4. No-work condition
+      // 3. No-work condition
       const isCoverageComplete = validation.isComplete && !isStale;
       if (additionalS1 === 0 && additionalS2 === 0 && isCoverageComplete) {
         setGenerationNotice('Struktur Pertemuan sudah sesuai kapasitas perencanaan semester dan seluruh coverage telah tercakup.');
@@ -233,7 +206,21 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
         return;
       }
 
+      const unitMeetingTargets = allocationResult.units.map((u) => ({
+        unitId: u.unitId,
+        semester: u.semester,
+        existingCount: u.existingCount,
+        newTargetCount: u.newTargetCount,
+      }));
+
+      const resolvedSubject = subject || tp?.subject || atp?.subject || 'Mata Pelajaran';
+      const resolvedGrade = grade || tp?.grade || atp?.grade || '';
+      const resolvedPhase = phase || tp?.phase || atp?.phase || '';
+
       const result = await generateUnitMeetingsWithAI({
+        subject: resolvedSubject,
+        grade: resolvedGrade,
+        phase: resolvedPhase,
         mapping,
         tpData: tp,
         atpData: atp,
@@ -249,6 +236,7 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
             totalJP: meetingCapacity.semester2.totalJP,
           },
         },
+        unitMeetingTargets,
       });
 
       if (!result || !Array.isArray(result.units)) {
@@ -301,6 +289,17 @@ export const UnitExecutionPlanManager: React.FC<UnitExecutionPlanManagerProps> =
       // Post-merge validation
       const resVal = validateUnitExecutionPlan(mergedDraft, mapping, atp, tp);
       const resPlac = resolveUnitSemesterPlacement(mergedDraft, mapping);
+
+      // Verify each unit's exact meeting count against allocation result
+      for (const target of allocationResult.units) {
+        const uPlan = mergedDraft.units.find((u) => u.unitId === target.unitId);
+        const actualCount = (uPlan?.meetings || []).length;
+        if (actualCount !== target.finalTargetCount) {
+          throw new Error(
+            `Draf hasil AI untuk Unit '${target.unitId}' (${actualCount}) tidak sesuai target kapasitas final (${target.finalTargetCount}).`
+          );
+        }
+      }
 
       let finalS1Count = 0;
       let finalS2Count = 0;

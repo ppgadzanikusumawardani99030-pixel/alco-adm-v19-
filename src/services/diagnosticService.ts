@@ -382,10 +382,12 @@ export function buildUnitExecutionPlanAIDiagnosticReport(data: {
     '',
     'AI Result Per Unit:',
     ...(diag?.perUnit && diag.perUnit.length > 0
-      ? diag.perUnit.map(
-          (pu) =>
-            `- Unit ${pu.unitId} | S${pu.semester} | existing=${pu.existingCount} | generated=${pu.generatedCount}`
-        )
+      ? diag.perUnit.map((pu) => {
+          const targetPart = pu.targetNewCount !== undefined ? ` | targetNew=${pu.targetNewCount}` : '';
+          const deltaStr = pu.delta !== undefined ? (pu.delta >= 0 ? `+${pu.delta}` : String(pu.delta)) : '';
+          const deltaPart = deltaStr ? ` | delta=${deltaStr}` : '';
+          return `- Unit ${pu.unitId} | S${pu.semester} | existing=${pu.existingCount}${targetPart} | generated=${pu.generatedCount}${deltaPart}`;
+        })
       : ['- none']),
     '',
     'Suggestions:',
