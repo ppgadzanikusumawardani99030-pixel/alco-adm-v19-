@@ -392,9 +392,25 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
             {diagnosticNotice}
           </div>
         )}
+      </div>
 
-        {/* Tab Navigation Pill Bar */}
-        <div className="mt-6 pt-4 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
+      {!isK13Active && (
+        <SemesterScheduleSummary
+          academicSetting={academicSetting}
+          atpUnitMapping={atpUnitMapping}
+          unitExecutionPlan={unitExecutionPlan}
+          learningMeetingSchedules={learningMeetingSchedules}
+          tp={tp}
+          atp={atp}
+          semesterJPSetting={semesterJPSetting}
+          annualJPReference={annualJPReference}
+          onBackToAnnualPlanning={() => onBackToStep('annual-planning')}
+        />
+      )}
+
+      {/* Tab Navigation Pill Bar Container */}
+      <div className="bg-slate-900 text-white rounded-2xl p-5 shadow-xs border border-slate-800 mb-6">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-2">
           {tabs.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -431,20 +447,6 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
           })}
         </div>
       </div>
-
-      {!isK13Active && (
-        <SemesterScheduleSummary
-          academicSetting={academicSetting}
-          atpUnitMapping={atpUnitMapping}
-          unitExecutionPlan={unitExecutionPlan}
-          learningMeetingSchedules={learningMeetingSchedules}
-          tp={tp}
-          atp={atp}
-          semesterJPSetting={semesterJPSetting}
-          annualJPReference={annualJPReference}
-          onBackToAnnualPlanning={() => onBackToStep('annual-planning')}
-        />
-      )}
 
       {/* Main Content Area Based on Active Tab */}
       <div className="min-h-[500px]">

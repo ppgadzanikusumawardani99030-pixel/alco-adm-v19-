@@ -405,6 +405,7 @@ export interface TPData {
   reviewReason?: string;
   generatedBy?: 'AI' | 'TEACHER' | 'AI_EDITED_BY_TEACHER';
   generatedAt?: string;
+  generationEngine?: 'gemini' | 'pedagogical_engine';
   provenance?: DataProvenance;
   updatedAt: string;
 }
