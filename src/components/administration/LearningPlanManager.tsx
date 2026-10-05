@@ -69,6 +69,7 @@ import {
 } from '../../services/diagnosticService';
 import saveAs from 'file-saver';
 import { TPItem, ATPItem } from '../../types';
+import { SemesterScheduleSummary } from './SemesterScheduleSummary';
 
 export type { LearningPlanScopeUnit };
 export {
@@ -842,6 +843,15 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
           </div>
         )}
       </div>
+
+      <SemesterScheduleSummary
+        academicSetting={academicSetting}
+        atpUnitMapping={atpUnitMapping}
+        unitExecutionPlan={unitExecutionPlan}
+        learningMeetingSchedules={learningMeetingSchedules}
+        tp={tp}
+        atp={atp}
+      />
 
       {/* Main Content Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">

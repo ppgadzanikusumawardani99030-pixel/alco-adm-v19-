@@ -180,7 +180,19 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
   onUpdateDocuments,
 }) => {
   const isK13Active = isK13(academicSetting);
-  const [activeTab, setActiveTab] = useState<AdministrationTab>(initialTab);
+  const [activeTab, setActiveTab] = useState<AdministrationTab>(() => {
+    if (!isK13Active && initialTab === 'time_planning') {
+      return 'learning_plan';
+    }
+    return initialTab;
+  });
+
+  React.useEffect(() => {
+    if (!isK13Active && activeTab === 'time_planning') {
+      setActiveTab('learning_plan');
+    }
+  }, [isK13Active, activeTab]);
+
   const [assessmentSubTab, setAssessmentSubTab] = useState<'plan_master' | 'package_builder' | 'gradebook'>('plan_master');
   const [diagnosticNotice, setDiagnosticNotice] = useState<string | null>(null);
 
@@ -233,13 +245,13 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
   }, [timeAllocations]);
 
   const tabs = [
-    {
+    ...(isK13Active ? [{
       id: 'time_planning' as AdministrationTab,
       label: 'Perencanaan Waktu',
       sublabel: 'Kalender & Alokasi JP',
       icon: CalendarDays,
       badge: calendarBadge,
-    },
+    }] : []),
     {
       id: 'learning_plan' as AdministrationTab,
       label: 'Rencana Pembelajaran',
