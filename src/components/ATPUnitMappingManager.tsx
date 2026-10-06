@@ -30,6 +30,7 @@ import {
   generateCanonicalATPUnitMappingWithAI,
   MappingAnalysisResult,
 } from '../services/aiService';
+import { validateATPUnitMappingCanonical } from '../services/atpUnitMappingValidationService';
 
 export interface ATPUnitMappingManagerProps {
   atp: ATPData;
@@ -337,183 +338,32 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
 
   // Local structural validator (strict blocking check for canonical multi-unit contract)
   const localValidation = useMemo(() => {
-    const validAtpIds = new Set<string>(
-      (atp.items || [])
-        .map((i) => i.id)
-        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
-    );
-    const validTpIds = new Set<string>(
-      (tp.items || [])
-        .map((t) => t.id)
-        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
-    );
-
-    const issues: string[] = [];
-
-    let emptyTitleCount = 0;
-    let unitsWithoutAtp = 0;
-    let unitsWithoutTp = 0;
-    let unitsInvalidTp = 0;
-    let missingMaterialsCount = 0;
-    let materialsWithoutLineage = 0;
-    let materialsInvalidLineage = 0;
-    let invalidAtpRefCount = 0;
-
-    if (units.length === 0) {
-      issues.push('Belum ada Bab yang dibuat.');
-    } else {
-      units.forEach((u) => {
-        if (!u.title || !u.title.trim()) {
-          emptyTitleCount++;
-        }
-
-        const unitAtpIds = (u.linkedAtpItemIds || []).filter(Boolean);
-        if (unitAtpIds.length === 0) {
-          unitsWithoutAtp++;
-        } else {
-          unitAtpIds.forEach((id) => {
-            if (!validAtpIds.has(id)) invalidAtpRefCount++;
-          });
-        }
-
-        // Supported TPs by unit's ATPs
-        const unitSupportedTpSet = new Set<string>();
-        unitAtpIds.forEach((atpId) => {
-          const atpItem = atpItemMap.get(atpId);
-          if (atpItem) {
-            const tps = Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0
-              ? atpItem.linkedTpIds
-              : atpItem.tpId ? [atpItem.tpId] : [];
-            tps.forEach((tId) => {
-              if (tId && validTpIds.has(tId)) unitSupportedTpSet.add(tId.trim());
-            });
-          }
-        });
-
-        const unitTpIds = (u.linkedTpIds || []).filter(Boolean);
-        if (unitTpIds.length === 0) {
-          unitsWithoutTp++;
-        } else {
-          const unsupported = unitTpIds.some((tId) => !unitSupportedTpSet.has(tId));
-          if (unsupported) {
-            unitsInvalidTp++;
-          }
-        }
-
-        if (!Array.isArray(u.materials) || u.materials.length === 0) {
-          missingMaterialsCount++;
-        } else {
-          const hasEmptyTitleMat = u.materials.some((m) => !m.title || !m.title.trim());
-          if (hasEmptyTitleMat) {
-            missingMaterialsCount++;
-          }
-
-          u.materials.forEach((mat) => {
-            const matAtpIds = (mat.linkedAtpItemIds || []).filter(Boolean);
-            const matTpIds = (mat.linkedTpIds || []).filter(Boolean);
-
-            if (matAtpIds.length === 0 || matTpIds.length === 0) {
-              materialsWithoutLineage++;
-            } else {
-              // Material ATP/TP must belong to parent Unit
-              const atpOutsideUnit = matAtpIds.some((id) => !unitAtpIds.includes(id));
-              const tpOutsideUnit = matTpIds.some((id) => !unitTpIds.includes(id));
-
-              // Material TPs must be supported by material ATPs
-              const matSupportedTpSet = new Set<string>();
-              matAtpIds.forEach((atpId) => {
-                const atpItem = atpItemMap.get(atpId);
-                if (atpItem) {
-                  const tps = Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0
-                    ? atpItem.linkedTpIds
-                    : atpItem.tpId ? [atpItem.tpId] : [];
-                  tps.forEach((tId) => {
-                    if (tId) matSupportedTpSet.add(tId.trim());
-                  });
-                }
-              });
-              const tpNotSupportedByMatAtp = matTpIds.some((tId) => !matSupportedTpSet.has(tId));
-
-              if (atpOutsideUnit || tpOutsideUnit || tpNotSupportedByMatAtp) {
-                materialsInvalidLineage++;
-              }
-            }
-          });
-        }
-      });
-
-      // Global Coverage Checks:
-      // 1. Every canonical ATP must appear in at least one Unit
-      const coveredAtpIdSet = new Set<string>();
-      units.forEach((u) => (u.linkedAtpItemIds || []).forEach((id) => coveredAtpIdSet.add(id)));
-      let unmappedAtpCount = 0;
-      validAtpIds.forEach((id) => {
-        if (!coveredAtpIdSet.has(id)) unmappedAtpCount++;
-      });
-
-      // 2. Union of linkedTpIds from all units containing an ATP must cover all canonical TPs of that ATP
-      let uncoveredTpCount = 0;
-      (atp.items || []).forEach((atpItem) => {
-        const canonicalTpIds = (
-          Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0
-            ? atpItem.linkedTpIds
-            : atpItem.tpId ? [atpItem.tpId] : []
-        ).filter((id): id is string => Boolean(id && validTpIds.has(id)));
-
-        const unitsWithThisAtp = units.filter((u) => (u.linkedAtpItemIds || []).includes(atpItem.id));
-        const unionCoveredTpIds = new Set<string>();
-        unitsWithThisAtp.forEach((u) => {
-          (u.linkedTpIds || []).forEach((tpId) => unionCoveredTpIds.add(tpId));
-        });
-
-        canonicalTpIds.forEach((tpId) => {
-          if (!unionCoveredTpIds.has(tpId)) {
-            uncoveredTpCount++;
-          }
-        });
-      });
-
-      if (emptyTitleCount > 0) {
-        issues.push(`${emptyTitleCount} Bab belum memiliki judul.`);
-      }
-      if (unitsWithoutAtp > 0) {
-        issues.push(`${unitsWithoutAtp} Bab belum memiliki langkah ATP tertaut.`);
-      }
-      if (unitsWithoutTp > 0) {
-        issues.push(`${unitsWithoutTp} Bab belum memiliki TP yang dipilih.`);
-      }
-      if (unitsInvalidTp > 0) {
-        issues.push(`${unitsInvalidTp} Bab memuat TP yang tidak didukung oleh ATP Bab tersebut.`);
-      }
-      if (missingMaterialsCount > 0) {
-        issues.push(`${missingMaterialsCount} Bab belum memiliki Lingkup Materi yang valid.`);
-      }
-      if (materialsWithoutLineage > 0) {
-        issues.push(`${materialsWithoutLineage} Lingkup Materi belum memiliki relasi ATP/TP.`);
-      }
-      if (materialsInvalidLineage > 0) {
-        issues.push(`${materialsInvalidLineage} Lingkup Materi memiliki relasi ATP/TP di luar Bab atau tidak selaras.`);
-      }
-      if (invalidAtpRefCount > 0) {
-        issues.push(`${invalidAtpRefCount} referensi ID ATP tidak valid.`);
-      }
-      if (unmappedAtpCount > 0) {
-        issues.push(`${unmappedAtpCount} langkah ATP belum dipetakan ke Bab mana pun.`);
-      }
-      if (uncoveredTpCount > 0) {
-        issues.push(`${uncoveredTpCount} butir TP canonical belum dicakup oleh Bab yang memuat ATP terkait.`);
-      }
-    }
-
-    const isComplete = issues.length === 0 && (atp.items || []).length > 0;
-    return {
-      isComplete,
-      issues,
-      summaryMessage: isComplete
-        ? 'Pemetaan Bab dan Lingkup Materi lengkap.'
-        : `Belum lengkap: ${issues.join(' ')}`,
+    const tempMappingData: ATPUnitMappingData = {
+      id: mapping?.id || 'temp',
+      academicSettingId: academicSetting?.id || 'temp',
+      atpId: atp.id,
+      units,
+      updatedAt: new Date().toISOString()
     };
-  }, [units, atp.items, tp.items, atpItemMap]);
+    const validation = validateATPUnitMappingCanonical(tempMappingData, atp, tp);
+
+    // Compute Z
+    const zCount = validation.unmappedAtpIds.length + validation.uncoveredTpIds.length;
+
+    const summaryMessage = validation.isComplete
+      ? 'Pemetaan Bab dan Lingkup Materi lengkap.'
+      : 'Pemetaan belum siap digunakan.';
+
+    return {
+      isComplete: validation.isComplete,
+      isValid: validation.isValid,
+      unitsWithoutLineageCount: validation.unitsWithoutLineage.length,
+      materialsWithoutLineageCount: validation.materialsWithoutLineage.length,
+      unmappedAtpAndUncoveredTpCount: zCount,
+      summaryMessage,
+      issues: validation.issues,
+    };
+  }, [units, atp, tp, academicSetting, mapping?.id]);
 
   // Handlers for Bab (Unit)
   const handleRenameBab = (unitId: string, newTitle: string) => {
@@ -1082,6 +932,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     // 2. Apply ADD_MATERIAL_TO_UNIT actions
     selectedMaterialFindings.forEach((m) => {
       const action = m.action!;
+      if (action.type !== 'ADD_MATERIAL_TO_UNIT') return;
       const targetUnitId = action.targetUnitId;
 
       nextUnits = nextUnits.map((u) => {
@@ -1101,13 +952,75 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       });
     });
 
+    // 3. Apply ALIGN_EXISTING_MATERIAL actions
+    selectedMaterialFindings.forEach((m) => {
+      const action = m.action!;
+      if (action.type !== 'ALIGN_EXISTING_MATERIAL') return;
+      const targetUnitId = action.targetUnitId;
+      const targetMaterialId = action.targetMaterialId;
+
+      nextUnits = nextUnits.map((u) => {
+        if (u.id !== targetUnitId) return u;
+
+        const uProposedAtp = action.linkedAtpItemIds || [];
+        const uProposedTp = action.linkedTpIds || [];
+
+        const uUnionAtp = Array.from(new Set([...(u.linkedAtpItemIds || []), ...uProposedAtp]));
+        const uUnionTp = Array.from(new Set([...(u.linkedTpIds || []), ...uProposedTp]));
+
+        const sortedAtpIds = uUnionAtp.sort((a, b) => {
+          const indexA = (atp.items || []).findIndex((item) => item.id === a);
+          const indexB = (atp.items || []).findIndex((item) => item.id === b);
+          return indexA - indexB;
+        });
+
+        const sortedTpIds = uUnionTp.sort((a, b) => {
+          const indexA = (tp.items || []).findIndex((item) => item.id === a);
+          const indexB = (tp.items || []).findIndex((item) => item.id === b);
+          return indexA - indexB;
+        });
+
+        const nextMaterials = (u.materials || []).map((mat) => {
+          if (mat.id !== targetMaterialId) return mat;
+
+          const matUnionAtp = Array.from(new Set([...(mat.linkedAtpItemIds || []), ...uProposedAtp]));
+          const matUnionTp = Array.from(new Set([...(mat.linkedTpIds || []), ...uProposedTp]));
+
+          const sortedMatAtpIds = matUnionAtp.sort((a, b) => {
+            const indexA = (atp.items || []).findIndex((item) => item.id === a);
+            const indexB = (atp.items || []).findIndex((item) => item.id === b);
+            return indexA - indexB;
+          });
+
+          const sortedMatTpIds = matUnionTp.sort((a, b) => {
+            const indexA = (tp.items || []).findIndex((item) => item.id === a);
+            const indexB = (tp.items || []).findIndex((item) => item.id === b);
+            return indexA - indexB;
+          });
+
+          return {
+            ...mat,
+            linkedAtpItemIds: sortedMatAtpIds,
+            linkedTpIds: sortedMatTpIds,
+          };
+        });
+
+        return {
+          ...u,
+          linkedAtpItemIds: sortedAtpIds,
+          linkedTpIds: sortedTpIds,
+          materials: nextMaterials,
+        };
+      });
+    });
+
     setUnits(nextUnits);
     setHasChanges(true);
     setSelectedAnalysisActionIds(new Set());
     setAnalysisResult(null);
     setSaveSuccessNotice(false);
     setAppliedNotice(
-      'Saran terpilih telah diterapkan ke draft Pemetaan. Simpan perubahan, lalu jalankan Analisis Pemetaan kembali untuk verifikasi.'
+      'Saran penyelarasan diterapkan ke draf. Tinjau lalu analisis kembali bila diperlukan.'
     );
   };
 
@@ -1437,7 +1350,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
               }`}
             >
               <Sparkles className={`w-4 h-4 ${isAnalyzing ? 'animate-spin' : ''}`} />
-              <span>{isAnalyzing ? 'Menganalisis...' : 'Analisis Pemetaan'}</span>
+              <span>{isAnalyzing ? 'Menganalisis...' : 'Analisis & Selaraskan'}</span>
             </button>
           </div>
         </div>
@@ -1705,7 +1618,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
                             <div className="space-y-1">
                               <div className="flex items-center gap-2">
                                 <span className="px-2 py-0.5 rounded-md bg-blue-800 text-white font-bold text-xs">
-                                  + {finding.suggestedTitle || finding.action?.title}
+                                  + {finding.suggestedTitle || (finding.action?.type === 'ADD_MATERIAL_TO_UNIT' ? finding.action.title : '')}
                                 </span>
                                 {targetUnit && (
                                   <span className="text-xs text-slate-700 font-semibold">
@@ -1725,6 +1638,96 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
                               className="text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-xl border border-blue-200 shrink-0 cursor-pointer text-center"
                             >
                               {isSelected ? '✓ Terpilih' : 'Tambahkan materi ini'}
+                            </label>
+                          )}
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {/* 3.5. Aligned Existing Material Suggestions */}
+            {analysisResult.materialFindings.filter((m) => m.status === 'ALIGNABLE').length > 0 && (
+              <div className="space-y-2.5">
+                <h5 className="text-xs font-bold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4 text-indigo-700" />
+                  <span>Materi yang Dapat Diselaraskan</span>
+                </h5>
+
+                <div className="space-y-2">
+                  {analysisResult.materialFindings
+                    .filter((m) => m.status === 'ALIGNABLE')
+                    .map((finding) => {
+                      const targetUnit = units.find((u) => u.id === finding.unitId);
+                      const targetMat = (targetUnit?.materials || []).find((mat) => mat.id === finding.materialId);
+                      const isSelected = selectedAnalysisActionIds.has(finding.id);
+
+                      const recAtpId = finding.action?.type === 'ALIGN_EXISTING_MATERIAL' ? finding.action.linkedAtpItemIds[0] : null;
+                      const recAtpItem = recAtpId ? atpItemMap.get(recAtpId) : null;
+
+                      const recTpIds = finding.action?.type === 'ALIGN_EXISTING_MATERIAL' ? finding.action.linkedTpIds : [];
+                      const recTps = recTpIds.map((tpId) => (tp.items || []).find((t) => t.id === tpId)).filter(Boolean);
+
+                      return (
+                        <div
+                          key={finding.id}
+                          className={`p-3.5 rounded-xl border transition flex flex-col md:flex-row md:items-center justify-between gap-3 ${
+                            isSelected
+                              ? 'bg-indigo-50/90 border-indigo-400 ring-1 ring-indigo-300'
+                              : 'bg-white border-slate-200 hover:border-indigo-200'
+                          }`}
+                        >
+                          <div className="flex items-start gap-3 flex-1">
+                            {finding.action && (
+                              <input
+                                id={`check-${finding.id}`}
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleToggleAction(finding.id)}
+                                className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 mt-1 cursor-pointer"
+                              />
+                            )}
+                            <div className="space-y-1 flex-1">
+                              <div className="flex flex-col gap-1">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  {targetUnit && (
+                                    <span className="px-2 py-0.5 rounded-md bg-indigo-800 text-white font-bold text-[10px]">
+                                      Bab {targetUnit.order}: {targetUnit.title}
+                                    </span>
+                                  )}
+                                  <span className="font-bold text-xs text-slate-900">
+                                    Materi manual: {targetMat?.title || '(Tanpa Judul)'}
+                                  </span>
+                                </div>
+                                {recAtpItem && (
+                                  <div className="text-[11px] text-slate-700">
+                                    <span className="font-semibold">Saran ATP:</span> Langkah {recAtpItem.stepNumber || '?'}: {recAtpItem.focus || 'Fokus ATP'}
+                                  </div>
+                                )}
+                                {recTps.length > 0 && (
+                                  <div className="text-[11px] text-slate-700 flex flex-wrap gap-1.5 items-center">
+                                    <span className="font-semibold">Saran TP:</span>
+                                    {recTps.map((t) => (
+                                      <span key={t?.id} className="inline-block px-1.5 py-0.5 bg-slate-100 rounded text-slate-800 font-medium text-[10px] border border-slate-200">
+                                        {t?.code || 'TP'}: {t?.statement}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-600 leading-relaxed mt-1">
+                                {finding.reason}
+                              </p>
+                            </div>
+                          </div>
+
+                          {finding.action && (
+                            <label
+                              htmlFor={`check-${finding.id}`}
+                              className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl border border-indigo-200 shrink-0 cursor-pointer text-center"
+                            >
+                              {isSelected ? '✓ Terpilih' : 'Selaraskan materi ini'}
                             </label>
                           )}
                         </div>

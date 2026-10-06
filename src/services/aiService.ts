@@ -850,10 +850,7 @@ export interface MappingAnalysisResult {
   materialFindings: Array<{
     id: string;
 
-    status:
-      | 'SUPPORTED'
-      | 'MISSING_MATERIAL'
-      | 'MANUAL_REVIEW';
+    status: 'SUPPORTED' | 'ALIGNABLE' | 'MISSING_MATERIAL' | 'MANUAL_REVIEW';
 
     unitId: string;
     materialId?: string;
@@ -873,6 +870,12 @@ export interface MappingAnalysisResult {
       title: string;
       linkedTpIds: string[];
       linkedAtpItemIds: string[];
+    } | {
+      type: 'ALIGN_EXISTING_MATERIAL';
+      targetUnitId: string;
+      targetMaterialId: string;
+      linkedAtpItemIds: string[];
+      linkedTpIds: string[];
     };
   }>;
 }

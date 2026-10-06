@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Layers,
+  Info,
 } from 'lucide-react';
 import {
   SchoolData,
@@ -44,6 +45,7 @@ import {
   resolvePlannedMeetingCapacity,
 } from '../services/subjectScheduleService';
 import { isLearningMeetingScheduleReady } from '../services/learningMeetingScheduleService';
+import { validateATPUnitMappingCanonical } from '../services/atpUnitMappingValidationService';
 
 export interface AnnualPlanningManagerProps {
   school: SchoolData;
@@ -94,6 +96,13 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
   const sem2Plan = useMemo(() => {
     return semesterPlans.find((sp) => sp.semester === 2);
   }, [semesterPlans]);
+
+  const isKurikulumMerdeka = academicSetting.curriculumType === 'KURIKULUM_MERDEKA';
+
+  const mappingValidation = useMemo(() => {
+    if (!isKurikulumMerdeka) return null;
+    return validateATPUnitMappingCanonical(mapping, atp, tp);
+  }, [isKurikulumMerdeka, mapping, atp, tp]);
 
   // Selected semester tab in the annual planning workspace (defaults to Semester 1)
   const [activeTabSemester, setActiveTabSemester] = useState<1 | 2>(1);
@@ -537,6 +546,57 @@ export const AnnualPlanningManager: React.FC<AnnualPlanningManagerProps> = ({
     if (!s2PlannedCapacity.isReady) return 'Pola Pertemuan tersimpan tetapi kapasitas belum valid. Periksa pesan validasi Kalender/Pola Pertemuan.';
     return 'Semester 2 siap. Lanjut ke Pembagian Bab.';
   }, [s2CalendarReady, s2JpReady, s2ScheduleSaved, s2PlannedCapacity.isReady]);
+
+  if (isKurikulumMerdeka && (!mapping || !atp || !tp || !mappingValidation?.isComplete)) {
+    const xCount = mappingValidation ? mappingValidation.unitsWithoutLineage.length : 0;
+    const yCount = mappingValidation ? mappingValidation.materialsWithoutLineage.length : 0;
+    const zCount = mappingValidation ? (mappingValidation.unmappedAtpIds.length + mappingValidation.uncoveredTpIds.length) : 0;
+
+    return (
+      <div className="max-w-4xl mx-auto my-12 p-8 bg-white border border-rose-100 rounded-3xl shadow-xs space-y-6 text-center animate-fadeIn">
+        <div className="w-16 h-16 bg-rose-50 border border-rose-100 rounded-full flex items-center justify-center mx-auto">
+          <AlertCircle className="w-8 h-8 text-rose-600" />
+        </div>
+
+        <div className="space-y-2">
+          <h2 className="text-xl font-bold text-slate-900">
+            Pemetaan Bab & Lingkup Materi belum selesai diselaraskan.
+          </h2>
+          <p className="text-sm text-slate-600 max-w-xl mx-auto leading-relaxed">
+            Lengkapi pemetaan ATP/TP terlebih dahulu agar
+            Pembagian Bab, Struktur Pertemuan, Modul Ajar,
+            dan asesmen tetap konsisten.
+          </p>
+        </div>
+
+        {mappingValidation && (
+          <div className="bg-amber-50/60 p-4 rounded-2xl border border-amber-200 text-left max-w-md mx-auto space-y-2 text-xs text-amber-900">
+            <div className="font-bold flex items-center gap-1.5 text-sm">
+              <Info className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>Ringkasan Ketidaksiapan:</span>
+            </div>
+            <ul className="list-disc pl-5 space-y-1">
+              <li>{xCount} Bab belum memiliki lineage.</li>
+              <li>{yCount} Lingkup Materi belum diselaraskan.</li>
+              <li>{zCount} ATP/TP canonical belum tercakup.</li>
+            </ul>
+          </div>
+        )}
+
+        <div className="pt-4">
+          <button
+            id="btn-back-to-mapping"
+            type="button"
+            onClick={onBackToMapping}
+            className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-sm font-bold text-white bg-indigo-700 hover:bg-indigo-800 transition cursor-pointer shadow-xs"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Kembali ke Pemetaan Unit/Bab (07)</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

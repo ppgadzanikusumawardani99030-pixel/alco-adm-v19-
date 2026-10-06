@@ -37,7 +37,7 @@ export interface MappingAnalysisResult {
   materialFindings: Array<{
     id: string;
 
-    status: 'SUPPORTED' | 'MISSING_MATERIAL' | 'MANUAL_REVIEW';
+    status: 'SUPPORTED' | 'ALIGNABLE' | 'MISSING_MATERIAL' | 'MANUAL_REVIEW';
 
     unitId: string;
     materialId?: string;
@@ -57,6 +57,12 @@ export interface MappingAnalysisResult {
       title: string;
       linkedTpIds: string[];
       linkedAtpItemIds: string[];
+    } | {
+      type: 'ALIGN_EXISTING_MATERIAL';
+      targetUnitId: string;
+      targetMaterialId: string;
+      linkedAtpItemIds: string[];
+      linkedTpIds: string[];
     };
   }>;
 }
@@ -89,6 +95,17 @@ function extractSubstantiveTokens(text: string): string[] {
     .filter((t) => t.length > 2 && !INDONESIAN_STOPWORDS.has(t));
 }
 
+function getCanonicalTpsForAtpItem(atpItem: any): string[] {
+  if (!atpItem) return [];
+  if (Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0) {
+    return atpItem.linkedTpIds;
+  }
+  if (atpItem.tpId) {
+    return [atpItem.tpId];
+  }
+  return [];
+}
+
 /**
  * Builds the AI prompt for analyzing teacher's manual mapping against TP and ATP.
  */
@@ -103,11 +120,7 @@ export function buildMappingAnalysisPrompt(params: AnalyzeATPUnitMappingServerPa
 
   // Prepare ATP context using canonical linkedTpIds
   const atpContext = (atpData.items || []).map((item, idx) => {
-    const rawLinked = Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0
-      ? item.linkedTpIds
-      : item.tpId
-      ? [item.tpId]
-      : [];
+    const rawLinked = getCanonicalTpsForAtpItem(item);
 
     const linkedTps = rawLinked.map((id) => {
       const t = tpMap.get(id);
@@ -140,6 +153,7 @@ export function buildMappingAnalysisPrompt(params: AnalyzeATPUnitMappingServerPa
         order: m.order || mIdx + 1,
         title: m.title || '',
         linkedAtpItemIds: m.linkedAtpItemIds || [],
+        linkedTpIds: m.linkedTpIds || [],
       })),
     };
   });
@@ -157,12 +171,28 @@ TUGAS ANDA ADALAH MELAKUKAN ANALISIS PEMETAAN (READ-ONLY ANALYSIS) antara Bab & 
    - Membuat Bab baru (ID Bab fiktif dilarang)
    - Membuat TP fiktif atau ATP fiktif
    - Mengubah urutan langkah ATP
-3. KONTRAK CANONICAL ATP: Setiap langkah ATP dapat memiliki MULTIPLE TP pada 'linkedTps' dan DAPAT MENDUKUNG 1..n Bab/Unit. Langkah ATP tidak dibatasi hanya untuk satu Bab tunggal. Setiap Bab berhak memilih subset TP yang relevan dari ATP tersebut.
+3. KONTRAK CANONICAL ATP: Setiap langkah ATP dapat mendukung 1..n Bab/Unit. Langkah ATP tidak dibatasi hanya untuk satu Bab tunggal. Setiap Bab/Materi berhak memilih subset TP yang relevan dari ATP tersebut.
 4. ANALISIS SEMANTIK KONSERVATIF:
    - Jangan menyarankan Bab tanpa bukti keselarasan yang kuat/jelas.
    - Jika suatu langkah ATP memiliki keterkaitan ambigu ke beberapa Bab, atau tidak ada Bab yang cocok, beri status "REVIEW" tanpa action otomatis.
    - Jangan otomatis menandai ATP existing sebagai "ALIGNED" jika tidak ada keselarasan yang cukup jelas.
-   - Materi manual yang tidak didukung TP/ATP saat ini ditandai sebagai "MANUAL_REVIEW" tanpa memberikan tombol hapus otomatis.
+
+=== KETENTUAN KHUSUS UNTUK LINGKUP MATERI MANUAL (ALIGN_EXISTING_MATERIAL) ===
+Untuk setiap Lingkup Materi manual yang ada pada Bab:
+- Jika materi sudah selaras secara lengkap dan benar dengan TP/ATP: status = "SUPPORTED".
+- Jika materi manual memiliki silsilah (lineage) kosong atau belum lengkap, tetapi ada keselarasan semantik yang kuat dengan TP/ATP canonical tertentu:
+  * Berikan status "ALIGNABLE".
+  * Berikan action type "ALIGN_EXISTING_MATERIAL".
+  * Material harus memilih SUBSET TP yang benar-benar relevan dengan Lingkup Materi tersebut. JANGAN otomatis memasukkan semua TP dari ATP jika ada TP yang tidak relevan.
+  * Format action:
+    {
+      "type": "ALIGN_EXISTING_MATERIAL",
+      "targetUnitId": "id bab tempat materi berada",
+      "targetMaterialId": "id materi manual tersebut",
+      "linkedAtpItemIds": ["id ATP canonical"],
+      "linkedTpIds": ["subset id TP canonical yang relevan"]
+    }
+- Jika keselarasan ambigu, lemah, atau tidak ditemukan: status = "MANUAL_REVIEW" tanpa memberikan action.
 
 === DATA PEMBELAJARAN ===
 Mata Pelajaran: ${subject || 'Mata Pelajaran'}
@@ -176,30 +206,12 @@ ${JSON.stringify(atpContext, null, 2)}
 
 === INSTRUKSI ANALISIS ===
 1. ANALISIS ATP (atpFindings):
-   - Untuk setiap ATP dalam DAFTAR ATP:
-     A. Jika ATP BELUM DIPETAKAN (belum ada di unit manapun):
-        - Jika ada Bab existing yang jelas relevan dengan seluruh/sebagian besar TP di ATP tersebut:
-          status = "UNMAPPED", suggestedUnitId = <ID Bab existing>, strength = "STRONG"|"MODERATE", reason = <alasan singkat pedagogis>.
-          action = { type: "ASSIGN_ATP_TO_UNIT", atpItemId: <id>, targetUnitId: <existingUnitId>, targetMaterialId?: <existingMaterialId> }
-        - Jika bukti lemah / ambigu ke beberapa Bab / tidak ada Bab yang cocok:
-          status = "REVIEW", strength = "LOW", reason = <alasan perlu ditinjau guru>, (JANGAN berikan action atau suggestedUnitId).
-     B. Jika ATP SUDAH TERPETAKAN ke satu atau lebih Bab:
-        - Jika ATP mendukung lebih dari satu Bab:
-          * Periksa apakah setiap Bab memiliki subset TP non-empty dan gabungan subset TP mencakup seluruh canonical TP dari ATP tersebut:
-            - Jika valid dan lengkap: status = "ALIGNED", currentUnitId = undefined, strength = "STRONG", reason = "Pembagian TP lintas Bab valid dan lengkap."
-            - Jika belum lengkap (ada TP tertinggal atau ada Bab dengan subset kosong): status = "REVIEW", currentUnitId = undefined, strength = "LOW", reason = "Pembagian TP lintas Bab belum lengkap.", (JANGAN berikan action pindah otomatis).
-        - Jika ATP hanya berada di satu Bab:
-          status = "ALIGNED", currentUnitId = <ID Bab saat ini>, strength = "STRONG", reason = <konfirmasi keselarasan>.
-        - Jika tidak cukup bukti / ada mismatch semantik:
-          status = "REVIEW", currentUnitId = <ID Bab saat ini>, strength = "LOW", reason = "Hubungan ATP dengan Bab saat ini belum cukup kuat untuk dinyatakan selaras secara otomatis." (JANGAN buat action pindah Bab otomatis).
+   - Periksa setiap ATP dalam DAFTAR ATP. Rekomendasikan unitId jika belum dipetakan.
 
 2. ANALISIS LINGKUP MATERI (materialFindings):
-   - Periksa Lingkup Materi manual di setiap Bab:
-     - Jika materi didukung secara substantif oleh TP/ATP di Bab tersebut: status = "SUPPORTED", unitId = <unitId>, materialId = <materialId>, reason = <penjelasan>.
-     - Jika materi manual belum memiliki korelasi jelas dengan TP/ATP: status = "MANUAL_REVIEW", unitId = <unitId>, materialId = <materialId>, reason = "Belum ditemukan dukungan yang cukup jelas dari TP/ATP saat ini. Perlu ditinjau guru.".
-   - Jika ada kebutuhan kompetensi TP/ATP dalam suatu Bab yang belum terwakili oleh materi manual yang ada:
-     - status = "MISSING_MATERIAL", unitId = <existingUnitId>, suggestedTitle = <judul ringkas materi>, reason = <alasan penambahan>,
-       action = { type: "ADD_MATERIAL_TO_UNIT", targetUnitId: <existingUnitId>, title: <judul materi baru>, linkedTpIds: [<id TP terkait>], linkedAtpItemIds: [<id ATP terkait>] }.
+   - Periksa semua Lingkup Materi manual yang ada pada Bab.
+   - Untuk materi manual dengan silsilah kosong atau belum selaras, lakukan pemetaan semantik ke TP/ATP dalam Bab tersebut dengan "ALIGN_EXISTING_MATERIAL".
+   - Jika ada kebutuhan materi baru: berikan "MISSING_MATERIAL" dengan action "ADD_MATERIAL_TO_UNIT".
 
 Kembalikan respon DALAM FORMAT JSON VALID yang mematuhi skema berikut:
 {
@@ -234,7 +246,7 @@ Kembalikan respon DALAM FORMAT JSON VALID yang mematuhi skema berikut:
   "materialFindings": [
     {
       "id": "finding-mat-1",
-      "status": "SUPPORTED" | "MISSING_MATERIAL" | "MANUAL_REVIEW",
+      "status": "SUPPORTED" | "ALIGNABLE" | "MISSING_MATERIAL" | "MANUAL_REVIEW",
       "unitId": "string",
       "materialId": "string (opsional)",
       "suggestedTitle": "string (opsional)",
@@ -248,6 +260,12 @@ Kembalikan respon DALAM FORMAT JSON VALID yang mematuhi skema berikut:
         "title": "string",
         "linkedTpIds": ["string"],
         "linkedAtpItemIds": ["string"]
+      } | {
+        "type": "ALIGN_EXISTING_MATERIAL",
+        "targetUnitId": "string",
+        "targetMaterialId": "string",
+        "linkedAtpItemIds": ["string"],
+        "linkedTpIds": ["string"]
       }
     }
   ]
@@ -272,6 +290,11 @@ export function sanitizeMappingAnalysisResult(
     (u.materials || []).forEach((m) => {
       validMaterialMap.set(m.id, u.id);
     });
+  });
+
+  const atpMap = new Map<string, any>();
+  (atpData.items || []).forEach((item) => {
+    atpMap.set(item.id, item);
   });
 
   const rawAtpFindings: any[] = Array.isArray(rawResult?.atpFindings) ? rawResult.atpFindings : [];
@@ -309,7 +332,6 @@ export function sanitizeMappingAnalysisResult(
       validUnitIds.has(f.action.targetUnitId)
     ) {
       const targetMatId = f.action.targetMaterialId;
-      // targetMaterialId must strictly belong to targetUnitId
       const targetMatValid = targetMatId && validMaterialMap.get(targetMatId) === f.action.targetUnitId;
 
       action = {
@@ -327,10 +349,7 @@ export function sanitizeMappingAnalysisResult(
 
     if (mappedUnitsForAtp.length > 1) {
       const atpObj = (atpData.items || []).find((a) => a.id === atpItemId);
-      const rawAtpLinked = Array.isArray(atpObj?.linkedTpIds) && atpObj.linkedTpIds.length > 0
-        ? atpObj.linkedTpIds
-        : atpObj?.tpId ? [atpObj.tpId] : [];
-      const canonicalTpIds = rawAtpLinked.filter((id) => validTpIds.has(id));
+      const canonicalTpIds = getCanonicalTpsForAtpItem(atpObj).filter((id) => validTpIds.has(id));
 
       const unitSubsets = mappedUnitsForAtp.map((u) => {
         const subset = (u.linkedTpIds || []).filter((id: string) => canonicalTpIds.includes(id));
@@ -394,8 +413,8 @@ export function sanitizeMappingAnalysisResult(
     const unitId = String(m?.unitId || '').trim();
     if (!validUnitIds.has(unitId)) return; // Drop invalid unit reference
 
-    const status =
-      m?.status === 'SUPPORTED' || m?.status === 'MISSING_MATERIAL' || m?.status === 'MANUAL_REVIEW'
+    let status =
+      m?.status === 'SUPPORTED' || m?.status === 'ALIGNABLE' || m?.status === 'MISSING_MATERIAL' || m?.status === 'MANUAL_REVIEW'
         ? m.status
         : 'MANUAL_REVIEW';
 
@@ -411,6 +430,7 @@ export function sanitizeMappingAnalysisResult(
       .filter((id: string) => validAtpIds.has(id));
 
     let action: MappingAnalysisResult['materialFindings'][0]['action'] = undefined;
+
     if (
       status === 'MISSING_MATERIAL' &&
       m?.action &&
@@ -431,6 +451,62 @@ export function sanitizeMappingAnalysisResult(
           (id: string) => validAtpIds.has(id)
         ),
       };
+    } else if (
+      status === 'ALIGNABLE' &&
+      m?.action &&
+      m.action.type === 'ALIGN_EXISTING_MATERIAL'
+    ) {
+      const targetUnitId = String(m.action.targetUnitId || '').trim();
+      const targetMaterialId = String(m.action.targetMaterialId || '').trim();
+
+      const unitExists = validUnitIds.has(targetUnitId);
+      const matExists = validMaterialMap.has(targetMaterialId);
+      const belongsToUnit = validMaterialMap.get(targetMaterialId) === targetUnitId;
+
+      const actionAtpIds = (Array.isArray(m.action.linkedAtpItemIds) ? m.action.linkedAtpItemIds : [])
+        .map((id: any) => String(id).trim())
+        .filter((id: string) => validAtpIds.has(id));
+
+      const actionTpIds = (Array.isArray(m.action.linkedTpIds) ? m.action.linkedTpIds : [])
+        .map((id: any) => String(id).trim())
+        .filter((id: string) => validTpIds.has(id));
+
+      let allTpSupported = actionTpIds.length > 0 && actionAtpIds.length > 0;
+      for (const tpId of actionTpIds) {
+        let supported = false;
+        for (const atpId of actionAtpIds) {
+          const atpItem = atpMap.get(atpId);
+          const canonTps = getCanonicalTpsForAtpItem(atpItem);
+          if (canonTps.includes(tpId)) {
+            supported = true;
+            break;
+          }
+        }
+        if (!supported) {
+          allTpSupported = false;
+          break;
+        }
+      }
+
+      if (
+        unitExists &&
+        matExists &&
+        belongsToUnit &&
+        actionAtpIds.length > 0 &&
+        actionTpIds.length > 0 &&
+        allTpSupported
+      ) {
+        action = {
+          type: 'ALIGN_EXISTING_MATERIAL',
+          targetUnitId,
+          targetMaterialId,
+          linkedAtpItemIds: actionAtpIds,
+          linkedTpIds: actionTpIds,
+        };
+      } else {
+        status = 'MANUAL_REVIEW';
+        action = undefined;
+      }
     }
 
     materialFindings.push({
@@ -503,7 +579,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
     });
   });
 
-  // 1. Precompute Unit manual profiles (Primary Authority)
+  // Precompute Unit manual profiles (Primary Authority)
   const unitManualProfiles = units.map((u) => {
     const unitTitleTokens = extractSubstantiveTokens(u.title || '');
     const materialTitleTokens = (u.materials || []).flatMap((m) => extractSubstantiveTokens(m.title || ''));
@@ -519,11 +595,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
   const materialFindings: MappingAnalysisResult['materialFindings'] = [];
 
   atpItems.forEach((item, idx) => {
-    const rawLinked = Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0
-      ? item.linkedTpIds
-      : item.tpId
-      ? [item.tpId]
-      : [];
+    const rawLinked = getCanonicalTpsForAtpItem(item);
 
     const itemFocusTokens = extractSubstantiveTokens(item.focus || '');
     const itemTpTokens = rawLinked.flatMap((id) => {
@@ -543,35 +615,25 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
     const scores = unitManualProfiles.map((prof) => {
       const u = prof.unit;
 
-      // Primary Match: Bab title and Material titles (Manual Authority)
       let primaryScore = 0;
       const matchingTitleTokens = prof.unitTitleTokens.filter((t) => allItemTokens.includes(t));
       const matchingMatTokens = prof.materialTitleTokens.filter((t) => allItemTokens.includes(t));
       primaryScore += matchingTitleTokens.length * 3.0;
       primaryScore += matchingMatTokens.length * 3.0;
 
-      // Secondary Match: Context from OTHER ATPs in this Bab (exclude current item)
       const otherAtpIds = (u.linkedAtpItemIds || []).filter((id) => id !== item.id);
       const otherAtpItems = atpItems.filter((it) => otherAtpIds.includes(it.id));
 
       const otherAtpFocusTokens = otherAtpItems.flatMap((a) => extractSubstantiveTokens(a.focus || ''));
       const otherTpTokens = otherAtpItems.flatMap((a) => {
-        const ids = Array.isArray(a.linkedTpIds) && a.linkedTpIds.length > 0
-          ? a.linkedTpIds
-          : a.tpId
-          ? [a.tpId]
-          : [];
+        const ids = getCanonicalTpsForAtpItem(a);
         return ids.flatMap((id) => {
           const t = tpMap.get(id);
           return extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''} ${t?.competence || ''}`);
         });
       });
       const otherTpScopeCodes = otherAtpItems.flatMap((a) => {
-        const ids = Array.isArray(a.linkedTpIds) && a.linkedTpIds.length > 0
-          ? a.linkedTpIds
-          : a.tpId
-          ? [a.tpId]
-          : [];
+        const ids = getCanonicalTpsForAtpItem(a);
         return ids
           .map((id) => tpMap.get(id)?.scopeCode)
           .filter((sc): sc is string => typeof sc === 'string' && sc.trim().length > 0);
@@ -605,12 +667,8 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
 
     if (isMapped) {
       if (mappedUnits.length > 1) {
-        // Multi-Bab validation:
-        // Hitung canonical TP ATP:
         const canonicalTpIds = rawLinked.filter((id) => tpMap.has(id));
 
-        // Untuk setiap Unit yang memuat ATP tersebut:
-        // unitTpSubset = unit.linkedTpIds ∩ canonicalTpIds
         const unitSubsets = mappedUnits.map((u) => {
           const subset = (u.linkedTpIds || []).filter((id: string) => canonicalTpIds.includes(id));
           return {
@@ -620,12 +678,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
           };
         });
 
-        // 1. setiap Unit subset non-empty
         const allSubsetsNonEmpty = unitSubsets.every((s) => s.nonEmpty);
-
-        // 2. setiap TP subset benar-benar milik ATP (by intersection with canonicalTpIds)
-
-        // 3. union subset seluruh Unit yang memakai ATP mencakup seluruh canonical TP ATP
         const unionSubset = new Set<string>();
         unitSubsets.forEach((s) => s.subset.forEach((id) => unionSubset.add(id)));
         const allCanonicalCovered = canonicalTpIds.length > 0 && canonicalTpIds.every((id) => unionSubset.has(id));
@@ -664,14 +717,12 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
           });
         }
       } else {
-        // Single unit assignment - evaluate alignment conservatively
         const currentUnit = mappedUnits[0];
         const currentUnitId = currentUnit.id;
         const currentScoreInfo = scores.find((s) => s.unit.id === currentUnitId);
         const currentPrimaryScore = currentScoreInfo?.primaryScore || 0;
         const currentTotalScore = currentScoreInfo?.totalScore || 0;
 
-        // Must have substantive evidence from manual authority or strong combination with other ATPs
         const isAligned = currentPrimaryScore >= 3.0 || (currentPrimaryScore >= 2.0 && currentTotalScore >= 4.0);
 
         if (isAligned) {
@@ -697,9 +748,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
         }
       }
     } else {
-      // EVALUATE UNMAPPED ATP CONSERVATIVELY
       if (!best || best.totalScore < 3.0 || (best.primaryScore === 0 && best.totalScore < 4.0)) {
-        // No evidence or score too low -> REVIEW, NO action
         atpFindings.push({
           id: `atp-find-${idx + 1}`,
           atpItemId: item.id,
@@ -709,7 +758,6 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
           reason: 'Belum ditemukan bukti keselarasan yang cukup kuat dengan Bab yang ada sehingga perlu penentuan guru.',
         });
       } else if (second && second.totalScore > 0 && best.totalScore - second.totalScore < 1.5 && best.totalScore < 6.0) {
-        // Ambiguous match between top 2 units -> REVIEW, NO action
         atpFindings.push({
           id: `atp-find-${idx + 1}`,
           atpItemId: item.id,
@@ -719,7 +767,6 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
           reason: `Langkah ATP memiliki keterkaitan yang hampir sama dengan beberapa Bab (Bab ${best.unit.order} & Bab ${second.unit.order}) sehingga perlu penentuan guru.`,
         });
       } else {
-        // Clear winning candidate
         const matchingMat = (best.unit.materials || []).find((m) =>
           extractSubstantiveTokens(m.title || '').some((t) => allItemTokens.includes(t))
         );
@@ -775,8 +822,28 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
         return;
       }
 
-      const hasOverlap = mTokens.some((t) => unitTokens.includes(t));
-      if (hasOverlap && (unitTps.length > 0 || unitAtps.length > 0)) {
+      // Check if it already has valid lineage
+      const lineageValid = (m.linkedAtpItemIds || []).length > 0 && (m.linkedTpIds || []).length > 0;
+      let allTpSupportedInMat = lineageValid;
+      if (lineageValid) {
+        for (const tpId of m.linkedTpIds || []) {
+          let supported = false;
+          for (const atpId of m.linkedAtpItemIds || []) {
+            const atpItem = tpMap.get(tpId) ? atpItems.find((a) => a.id === atpId) : null;
+            const canonTps = getCanonicalTpsForAtpItem(atpItem);
+            if (canonTps.includes(tpId)) {
+              supported = true;
+              break;
+            }
+          }
+          if (!supported) {
+            allTpSupportedInMat = false;
+            break;
+          }
+        }
+      }
+
+      if (lineageValid && allTpSupportedInMat) {
         materialFindings.push({
           id: `mat-find-${uIdx + 1}-${mIdx + 1}`,
           status: 'SUPPORTED',
@@ -785,20 +852,85 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
           supportingTpIds: m.linkedTpIds || [],
           supportingAtpItemIds: m.linkedAtpItemIds || [],
           strength: 'STRONG',
-          reason: `Lingkup materi '${m.title}' didukung oleh substansi TP/ATP pada Bab ${u.order || uIdx + 1}.`,
+          reason: `Lingkup materi '${m.title}' didukung secara penuh oleh silsilah TP/ATP saat ini.`,
         });
-      } else {
-        materialFindings.push({
-          id: `mat-find-${uIdx + 1}-${mIdx + 1}`,
-          status: 'MANUAL_REVIEW',
-          unitId: u.id,
-          materialId: m.id,
-          supportingTpIds: m.linkedTpIds || [],
-          supportingAtpItemIds: m.linkedAtpItemIds || [],
-          strength: 'LOW',
-          reason: 'Belum ditemukan dukungan yang cukup jelas dari TP/ATP saat ini. Perlu ditinjau guru.',
-        });
+        return;
       }
+
+      // Find strong unique semantic match with ANY ATP step in parent unit
+      let bestAtpItem: any = null;
+      let bestOverlapScore = 0;
+      let secondBestOverlapScore = 0;
+
+      unitAtps.forEach((atpItem) => {
+        const atpFocusTokens = extractSubstantiveTokens(atpItem.focus || '');
+        const canonTps = getCanonicalTpsForAtpItem(atpItem);
+        const atpTpTokens = canonTps.flatMap((id) => {
+          const t = tpMap.get(id);
+          return extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''}`);
+        });
+        const combinedTokens = Array.from(new Set([...atpFocusTokens, ...atpTpTokens]));
+        const overlapCount = mTokens.filter((t) => combinedTokens.includes(t)).length;
+
+        if (overlapCount > bestOverlapScore) {
+          secondBestOverlapScore = bestOverlapScore;
+          bestOverlapScore = overlapCount;
+          bestAtpItem = atpItem;
+        } else if (overlapCount > secondBestOverlapScore) {
+          secondBestOverlapScore = overlapCount;
+        }
+      });
+
+      const hasStrongUniqueMatch =
+        bestOverlapScore >= 2 &&
+        (bestOverlapScore - secondBestOverlapScore >= 1);
+
+      if (hasStrongUniqueMatch && bestAtpItem) {
+        // Material selects SUBSET TP relevant to that Material.
+        // We select the TPs of bestAtpItem whose tokens overlap with mTokens.
+        // Fallback to the first TP of bestAtpItem if none overlap, but never expand to all.
+        const canonTps = getCanonicalTpsForAtpItem(bestAtpItem);
+        const relevantTps = canonTps.filter((tpId) => {
+          const t = tpMap.get(tpId);
+          const tTokens = extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''}`);
+          return mTokens.some((tok) => tTokens.includes(tok));
+        });
+
+        const selectedTps = relevantTps.length > 0 ? relevantTps : (canonTps.length > 0 ? [canonTps[0]] : []);
+
+        if (selectedTps.length > 0) {
+          materialFindings.push({
+            id: `mat-find-${uIdx + 1}-${mIdx + 1}`,
+            status: 'ALIGNABLE',
+            unitId: u.id,
+            materialId: m.id,
+            supportingTpIds: selectedTps,
+            supportingAtpItemIds: [bestAtpItem.id],
+            strength: bestOverlapScore >= 3 ? 'STRONG' : 'MODERATE',
+            reason: `Lingkup materi '${m.title}' dapat diselaraskan dengan langkah ATP '${bestAtpItem.focus || bestAtpItem.id}'.`,
+            action: {
+              type: 'ALIGN_EXISTING_MATERIAL',
+              targetUnitId: u.id,
+              targetMaterialId: m.id,
+              linkedAtpItemIds: [bestAtpItem.id],
+              linkedTpIds: selectedTps,
+            },
+          });
+          return;
+        }
+      }
+
+      // No alignment found
+      materialFindings.push({
+        id: `mat-find-${uIdx + 1}-${mIdx + 1}`,
+        status: 'MANUAL_REVIEW',
+        unitId: u.id,
+        materialId: m.id,
+        supportingTpIds: m.linkedTpIds || [],
+        supportingAtpItemIds: m.linkedAtpItemIds || [],
+        strength: 'LOW',
+        reason: 'Belum ditemukan keselarasan semantik yang cukup kuat. Perlu ditinjau guru.',
+      });
     });
   });
 
