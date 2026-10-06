@@ -1426,7 +1426,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
           </div>
 
           {/* Metrics Overview Pills */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className={`grid grid-cols-2 gap-3 ${analysisResult.summary.missingMaterialSuggestions > 0 ? 'sm:grid-cols-3 lg:grid-cols-6' : 'sm:grid-cols-5'}`}>
             <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3">
               <div className="text-[11px] font-bold text-emerald-800 uppercase">ATP Selaras</div>
               <div className="text-lg font-extrabold text-emerald-900 mt-0.5">
@@ -1448,12 +1448,21 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
               </div>
             </div>
 
-            <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3">
-              <div className="text-[11px] font-bold text-blue-800 uppercase">Saran Materi</div>
-              <div className="text-lg font-extrabold text-blue-900 mt-0.5">
-                {analysisResult.summary.missingMaterialSuggestions} <span className="text-xs font-normal text-blue-700">Saran</span>
+            <div className="bg-indigo-50/80 border border-indigo-200 rounded-xl p-3">
+              <div className="text-[11px] font-bold text-indigo-800 uppercase">Materi Dapat Diselaraskan</div>
+              <div className="text-lg font-extrabold text-indigo-900 mt-0.5">
+                {analysisResult.materialFindings.filter(m => m.status === 'ALIGNABLE').length} <span className="text-xs font-normal text-indigo-700">Materi</span>
               </div>
             </div>
+
+            {analysisResult.summary.missingMaterialSuggestions > 0 && (
+              <div className="bg-blue-50/80 border border-blue-200 rounded-xl p-3">
+                <div className="text-[11px] font-bold text-blue-800 uppercase">Saran Materi Baru</div>
+                <div className="text-lg font-extrabold text-blue-900 mt-0.5">
+                  {analysisResult.summary.missingMaterialSuggestions} <span className="text-xs font-normal text-blue-700">Saran</span>
+                </div>
+              </div>
+            )}
 
             <div className="bg-slate-50 border border-slate-300 rounded-xl p-3">
               <div className="text-[11px] font-bold text-slate-700 uppercase">Materi Perlu Ditinjau</div>
