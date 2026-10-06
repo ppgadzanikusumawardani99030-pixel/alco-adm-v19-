@@ -2505,7 +2505,7 @@ Kembalikan respon JSON dengan skema:
         
         // Canonical lineage validation of derived IDs
         for (const atpId of derivedAtpIds) {
-          if (!validAtpIds.has(atpId)) {
+          if (!validAtpIds.has(atpId) || !validAtpMap.has(atpId)) {
              return res.status(400).json({
                      success: false,
                      code: 'MEETING_LINEAGE_INVALID',
@@ -2515,7 +2515,7 @@ Kembalikan respon JSON dengan skema:
           }
         }
         for (const tpId of derivedTpIds) {
-          if (!validTpIds.has(tpId)) {
+          if (!validTpIds.has(tpId) || !validTpMap.has(tpId)) {
              return res.status(400).json({
                      success: false,
                      code: 'MEETING_LINEAGE_INVALID',
