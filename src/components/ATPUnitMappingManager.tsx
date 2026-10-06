@@ -275,13 +275,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         targetUnitCount: requestedTargetUnitCount,
       });
 
-      if (generated && Array.isArray(generated.units)) {
-        if (generated.units.length !== requestedTargetUnitCount) {
-          throw new Error(
-            `AI menghasilkan ${generated.units.length} Bab, sedangkan target yang ditetapkan adalah ${requestedTargetUnitCount} Bab. Draf saat ini tidak diubah. Silakan coba susun ulang.`
-          );
-        }
-
+      if (generated && Array.isArray(generated.units) && generated.units.length > 0) {
         const nextUnits = createInitialUnits(generated, atp.items || []);
         setUnits(nextUnits);
         setHasChanges(true);
@@ -292,6 +286,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         setAppliedNotice(
           'Draf Pemetaan Bab dan Lingkup Materi berhasil disusun otomatis oleh AI dari TP & ATP. Silakan tinjau dan klik "Simpan Pemetaan" untuk menyimpan.'
         );
+      } else {
+        throw new Error('AI tidak menghasilkan data pemetaan Bab yang valid.');
       }
     } catch (err: any) {
       setGenerationError(err?.message || 'Gagal menyusun pemetaan dengan AI.');
