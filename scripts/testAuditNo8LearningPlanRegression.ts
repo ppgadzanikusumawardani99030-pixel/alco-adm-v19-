@@ -6,7 +6,10 @@ import {
   invalidatePlanIfDependenciesChanged,
   validateLearningPlan,
   resolveLearningPlanAllocatedJP,
+  buildLearningPlanScopeUnits,
 } from '../src/services/learningPlanService';
+import { generateAutoDraftPlansFromCanonicalContext } from '../src/services/assessmentPlanService';
+import { resolveScheduledLearningMeetings } from '../src/services/scheduledLearningMeetingProjectionService';
 import { buildModulAjarProjection } from '../src/services/documentEngine/modulAjarProjection';
 import { generateModulAjar } from '../src/services/documentEngine/generators/modulAjarGenerator';
 import { generatePdfDocument } from '../src/services/documentEngine/renderers/pdf/pdfDocGenerators';
@@ -509,6 +512,113 @@ async function runRegressionSuite() {
   assert(
     pdfGeneratorsSource.includes('buildModulAjarProjection'),
     'pdfDocGenerators.ts must use buildModulAjarProjection for MODUL_AJAR'
+  );
+
+  // ==========================================
+  // CANONICAL MEETING & KKTP INTEGRATION TESTS (B19)
+  // ==========================================
+  console.log('\n--- Test I: buildLearningPlanScopeUnits maps meetings correctly (B19) ---');
+  const mockMapping = {
+    units: [
+      { id: 'unit-1', title: 'Bab 1: Dasar Algoritma', order: 1, linkedTpIds: ['tp-101'], linkedAtpItemIds: ['atp-201'], materials: [{ id: 'mat-1', title: 'Materi 1', order: 1, linkedAtpItemIds: ['atp-201'], linkedTpIds: ['tp-101'] }] }
+    ]
+  };
+  const mockExecutionPlan = {
+    units: [
+      {
+        unitId: 'unit-1',
+        meetings: [
+          { id: 'meet-1', title: 'Pertemuan 1', order: 1, jp: 2, linkedTpIds: ['tp-101'], linkedAtpItemIds: ['atp-201'], materialIds: ['mat-1'], unitId: 'unit-1' }
+        ]
+      }
+    ]
+  };
+  const mockSchedules = [
+    {
+      semesterPlanId: 'setting-1',
+      semester: 1,
+      schedule: {
+        semesterPlanId: 'setting-1',
+        status: 'COMPLETE',
+        entries: [
+          { meetingId: 'meet-1', date: '2026-10-12', entryMode: 'ACTUAL', semesterPlanId: 'setting-1', unitId: 'unit-1', jp: 2 }
+        ]
+      }
+    }
+  ];
+
+  const testTpData = {
+    ...mockTpData,
+    items: [mockTpData.items[0]]
+  };
+  const testAtpData = {
+    ...mockAtpData,
+    items: [mockAtpData.items[0]]
+  };
+
+  const scopes = buildLearningPlanScopeUnits({
+    academicSetting: mockSetting,
+    atpUnitMapping: mockMapping as any,
+    unitExecutionPlan: mockExecutionPlan as any,
+    learningMeetingSchedules: mockSchedules as any,
+    tp: testTpData,
+    atp: testAtpData
+  });
+
+  if (scopes.length === 0) {
+    const result = resolveScheduledLearningMeetings({
+      mapping: mockMapping as any,
+      unitExecutionPlan: mockExecutionPlan as any,
+      schedules: mockSchedules as any,
+      tp: mockTpData,
+      atp: mockAtpData
+    });
+    console.log('resolveScheduledLearningMeetings errors:', result.errors);
+  }
+
+  assert(
+    scopes.length === 1 && scopes[0].meetings && scopes[0].meetings.length === 1,
+    'buildLearningPlanScopeUnits must parse and map meetings correctly',
+    `length=${scopes.length}, meetingsCount=${scopes[0]?.meetings?.length}`
+  );
+  if (scopes[0]?.meetings?.[0]) {
+    const m = scopes[0].meetings[0];
+    assert(
+      m.meetingId === 'meet-1' && m.order === 1 && m.title === 'Pertemuan 1' && m.jp === 2,
+      'Mapped meeting fields must have correct values',
+      `id=${m.meetingId}, title=${m.title}, jp=${m.jp}`
+    );
+  }
+
+  console.log('\n--- Test J: generateAutoDraftPlansFromCanonicalContext respects embedded assessments (B19) ---');
+  const mockLpWithFormative: any = {
+    id: 'lp-with-assessment',
+    academicSettingId: 'setting-1',
+    sourceType: 'TEACHER_CREATED',
+    status: 'SIAP',
+    tpIds: ['tp-101'],
+    atpItemIds: ['atp-201'],
+    objectives: [],
+    assessmentPlan: {
+      formative: [
+        { id: 'ap-1', type: 'FORMATIVE', technique: 'Tes Tulis', description: 'Kuis formatif', linkedTpIds: ['tp-101'] }
+      ]
+    },
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  const autoDrafts = generateAutoDraftPlansFromCanonicalContext({
+    academicSetting: mockSetting,
+    tp: mockTpData,
+    learningPlans: [mockLpWithFormative],
+    existingPlans: []
+  });
+
+  assert(
+    autoDrafts.length === 1 && autoDrafts[0].tpIds && autoDrafts[0].tpIds[0] === 'tp-102',
+    'generateAutoDraftPlansFromCanonicalContext must skip tp-101 (already covered) and only draft for tp-102',
+    `autoDraftsCount=${autoDrafts.length}, firstTpId=${autoDrafts[0]?.tpIds?.[0]}`
   );
 
   console.log(`\n==========================================`);
