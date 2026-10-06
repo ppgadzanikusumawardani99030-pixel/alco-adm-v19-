@@ -10,6 +10,7 @@ import {
   ATPUnitMappingData,
   UnitExecutionPlanData,
 } from '../types';
+import { CognitiveAdaptationProfile, getCognitiveAdaptationProfile } from './cognitiveAdaptationService';
 import {
   normalizeLearningExperiencePhase,
   normalizeAIAssessmentPlan,
@@ -523,14 +524,19 @@ export interface GenerateLearningPlanParams {
   atpItems?: ATPItem[];
   topic?: string;
   allocatedJP?: number;
+  cognitiveAdaptation?: CognitiveAdaptationProfile;
 }
 
 export async function generateLearningPlanWithAI(params: GenerateLearningPlanParams): Promise<Partial<LearningPlan>> {
+  const paramsWithAdaptation = {
+    ...params,
+    cognitiveAdaptation: params.cognitiveAdaptation || getCognitiveAdaptationProfile(params.academicSetting, params.academicSetting.grade)
+  };
   try {
     const res = await aiFetch('/api/ai/generate-learning-plan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
+      body: JSON.stringify(paramsWithAdaptation),
     });
 
     if (!res.ok) {

@@ -3062,7 +3062,7 @@ function validateAILearningPlanPayload(data: any): { isValid: boolean; reason?: 
 // Endpoint: AI Generate Learning Plan (Modul Ajar DRAFT)
 app.post('/api/ai/generate-learning-plan', async (req, res) => {
   const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-  const { academicSetting, tps, atpItems, topic, allocatedJP } = req.body || {};
+  const { academicSetting, tps, atpItems, topic, allocatedJP, cognitiveAdaptation } = req.body || {};
 
   if (!tps || !Array.isArray(tps) || tps.length === 0) {
     return res.status(400).json({ error: 'Minimal satu Tujuan Pembelajaran (TP) diperlukan untuk menyusun Modul Ajar' });
@@ -3130,9 +3130,18 @@ INSTRUKSI KEGIATAN & ASESMEN:
 9. Sediakan Rencana Diferensiasi (Konten, Proses, Produk).
 10. Buat kalimat pemahaman bermakna dan pertanyaan pemantik yang relevan.
 ${
+  cognitiveAdaptation ? `11. ADAPTASI KOGNITIF (WAJIB):
+     - Tingkat Abstraksi: ${cognitiveAdaptation.abstractionLevel}
+     - Beban Bahasa: ${cognitiveAdaptation.languageLoad}
+     - Kompleksitas Instruksi: ${cognitiveAdaptation.instructionComplexity}
+     - Visual Support: ${cognitiveAdaptation.visualSupport}
+     - Scaffolding: ${cognitiveAdaptation.scaffoldingLevel}
+     - Arahan: Pertahankan kompetensi TP, namun sesuaikan bahasa, abstraksi, dan aktivitas agar sesuai dengan level perkembangan kognitif di atas. Untuk fase awal/kelas rendah, gunakan bahasa konkret dan instruksi bertahap sederhana.` : ''
+}
+${
   canonicalAllocatedJP
-    ? `11. ALOKASI WAKTU KANONIKAL: Lingkup pembelajaran ini memiliki Alokasi Waktu tepat ${canonicalAllocatedJP} JP dari pemetaan waktu semester. Rancang seluruh rangkaian kegiatan dan pengalaman belajar secara proporsional sesuai durasi ${canonicalAllocatedJP} JP tersebut. Jangan menebak, mengubah, atau menyimpulkan angka JP yang berbeda.`
-    : `11. ALOKASI WAKTU: Belum ditentukan. JANGAN mengarang atau memalsukan Alokasi JP.`
+    ? `${cognitiveAdaptation ? '12' : '11'}. ALOKASI WAKTU KANONIKAL: Lingkup pembelajaran ini memiliki Alokasi Waktu tepat ${canonicalAllocatedJP} JP dari pemetaan waktu semester. Rancang seluruh rangkaian kegiatan dan pengalaman belajar secara proporsional sesuai durasi ${canonicalAllocatedJP} JP tersebut. Jangan menebak, mengubah, atau menyimpulkan angka JP yang berbeda.`
+    : `${cognitiveAdaptation ? '12' : '11'}. ALOKASI WAKTU: Belum ditentukan. JANGAN mengarang atau memalsukan Alokasi JP.`
 }
 
 Kembalikan output JSON sesuai schema.`;

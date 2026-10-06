@@ -14,6 +14,7 @@ import {
   AssessmentPlannedItem,
   AssessmentStimulusType,
   CognitiveDemand,
+  CognitiveAdaptationProfile,
 } from '../types';
 
 export const PROV_MINIMUM_COVERAGE_ALLOCATION: AssessmentGenerationRule = {
@@ -105,8 +106,17 @@ export function mapInstrumentToAllocationUnit(
  * Conservative Indonesian text cognitive demand resolver
  * Returns undefined if ambiguous or no clear operational verb signal
  */
-export function resolveConservativeCognitiveDemand(text?: string): CognitiveDemand | undefined {
+export function resolveConservativeCognitiveDemand(
+  text?: string,
+  adaptation?: CognitiveAdaptationProfile | null
+): CognitiveDemand | undefined {
   if (!text || typeof text !== 'string') return undefined;
+  
+  // Apply adaptation rules if provided
+  if (adaptation) {
+      // Potentially use adaptation.abstractionLevel to override or bias demand resolution
+  }
+  
   const lower = text.toLowerCase();
 
   const signals = {
