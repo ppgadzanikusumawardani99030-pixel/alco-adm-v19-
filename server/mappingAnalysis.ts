@@ -659,9 +659,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
             status: 'REVIEW',
             currentUnitId: undefined,
             supportingTpIds: canonicalTpIds,
-            strength: 'MODERATE',
-            reason: reasonText,
-          });            strength: 'LOW',
+            strength: 'LOW',
             reason: reasonText,
           });
         }
