@@ -43,6 +43,7 @@ import {
   AssessmentPackage,
   SemesterJPSetting,
   AnnualJPReference,
+  StudentLearningReport,
 } from '../../types';
 import { TimePlanningManager } from './TimePlanningManager';
 import { AttendanceManager } from './AttendanceManager';
@@ -99,6 +100,7 @@ interface AdministrationHubProps {
   learningPlans?: LearningPlan[];
   assessmentPlans?: AssessmentPlan[];
   assessmentPackages?: AssessmentPackage[];
+  studentReports?: StudentLearningReport[];
   semesterJPSetting?: SemesterJPSetting;
   annualJPReference?: AnnualJPReference;
   protaSemesterAllocations?: ProtaSemesterAllocationBundle[];
@@ -111,6 +113,7 @@ interface AdministrationHubProps {
   onSaveCriteria: (criteria: AssessmentCriterion[]) => void;
   onSaveAssessment: (assessment: Assessment, results: AssessmentResult[]) => void;
   onDeleteAssessment: (assessmentId: string) => void;
+  onSaveStudentReports?: (reports: StudentLearningReport[]) => void;
   onSaveAssessmentPlan?: (plan: AssessmentPlan) => void;
   onDeleteAssessmentPlan?: (planId: string) => void;
   onSaveAssessmentPackage?: (pkg: AssessmentPackage) => void;
@@ -155,6 +158,7 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
   learningPlans = [],
   assessmentPlans = [],
   assessmentPackages = [],
+  studentReports = [],
   annualJPReference,
   protaSemesterAllocations = [],
   initialTab = 'time_planning',
@@ -166,6 +170,7 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
   onSaveCriteria,
   onSaveAssessment,
   onDeleteAssessment,
+  onSaveStudentReports,
   onSaveAssessmentPlan,
   onDeleteAssessmentPlan,
   onSaveAssessmentPackage,
@@ -585,12 +590,15 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
                 school={school}
                 profile={profile}
                 academicSetting={academicSetting}
+                semesterPlanId={workspace?.semesterPlanId}
                 tp={tp}
                 students={students}
                 assessments={assessments}
                 assessmentResults={assessmentResults}
+                studentReports={studentReports}
                 onSaveAssessment={onSaveAssessment}
                 onDeleteAssessment={onDeleteAssessment}
+                onSaveStudentReports={onSaveStudentReports}
                 onQuickAddRemedial={(record) => {
                   const updated = [...(remedials || []), record];
                   onSaveRemedials(updated);

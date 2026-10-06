@@ -617,6 +617,32 @@ export interface Student {
   name: string;
   gender?: 'L' | 'P';
   notes?: string;
+  age?: number | string;
+}
+
+export interface StudentLearningReport {
+  id: string;
+  studentId: string;
+  studentName: string;
+  academicSettingId: string;
+  semesterPlanId?: string;
+  nisn?: string;
+  className: string;
+  period?: string;
+  age?: number | string;
+  finalGrade?: number;
+  achievementStatus?: 'Sangat Baik' | 'Baik' | 'Perlu Bimbingan' | string;
+  
+  // Mandatory Content Contract
+  developmentSummary: string; // Ringkasan perkembangan
+  strengths: string[]; // Kekuatan / capaian utama
+  growthAreas: string[]; // Hal yang perlu dikembangkan
+  followUpNarrative: string; // Narasi / tindak lanjut
+  homeActivities: string[]; // Aktivitas bersama keluarga di rumah ("Ayo bermain bersama di rumah")
+
+  generatedAt: string;
+  updatedAt: string;
+  status: 'DRAFT' | 'COMPLETED';
 }
 
 // ==========================================

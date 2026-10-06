@@ -30,6 +30,7 @@ import {
   RemedialRecord,
   EnrichmentRecord,
   AppDocumentRecord,
+  StudentLearningReport,
 } from './index';
 
 /**
@@ -114,6 +115,7 @@ export interface SemesterDataStoreV5 {
   grade: SemesterScopedEntry<SemesterGradeEntry>[];
   remedial: SemesterScopedEntry<RemedialRecord[]>[];
   enrichment: SemesterScopedEntry<EnrichmentRecord[]>[];
+  studentReports?: SemesterScopedEntry<StudentLearningReport[]>[];
 }
 
 /**

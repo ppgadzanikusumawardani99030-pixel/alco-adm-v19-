@@ -3748,6 +3748,97 @@ Berikan evaluasi kualitas untuk butir-butir soal dan instrumen tersebut dalam fo
   }
 });
 
+// 6. Endpoint: AI Generate Student Learning Report (Laporan Belajar Siswa)
+app.post('/api/ai/generate-student-report', async (req, res) => {
+  const { student, academicSetting, scores, tps, finalGrade, achievementStatus } = req.body || {};
+  if (!student || !student.name) {
+    return res.status(400).json({ error: 'Data murid (student) wajib disertakan' });
+  }
+
+  const rawGrade = academicSetting?.grade || '';
+  const rawSection = academicSetting?.classSection || '';
+  const cleanGrade = /^(?:kelas|kls)\b/i.test(rawGrade.trim())
+    ? `${rawGrade.trim()} ${rawSection.trim()}`.trim()
+    : `Kelas ${rawGrade.trim()} ${rawSection.trim()}`.trim();
+
+  const apiKey = resolveApiKey(req);
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      code: 'AI_NOT_CONFIGURED',
+      error: 'Layanan AI belum dikonfigurasi pada server.',
+    });
+  }
+
+  try {
+    const ai = createAIClient(apiKey);
+    const systemInstruction = `Anda adalah Guru Pengampu Ahli Kurikulum Merdeka di Indonesia.
+Tugas Anda adalah menyusun Laporan Belajar / Rapor Perkembangan Murid yang mendalam, ramah, dan memotivasi.
+Laporan murid wajib memuat 5 dimensi kanonikal:
+1. Ringkasan perkembangan menyeluruh
+2. Kekuatan / capaian kompetensi utama
+3. Hal yang perlu bimbingan atau pengembangan lanjutan
+4. Rekomendasi narasi tindak lanjut guru di sekolah
+5. Aktivitas belajar dan bermain bersama keluarga di rumah (Ayo bermain bersama di rumah)`;
+
+    const tpList = Array.isArray(tps) && tps.length > 0
+      ? tps.map((t: any, i: number) => `${i + 1}. ${typeof t === 'string' ? t : (t.statement || t.name || '')}`).join('\n')
+      : 'Capaian materi umum semester ini';
+
+    const userPrompt = `Susun draf Laporan Belajar murid untuk:
+Nama Murid: ${student.name}
+Jenis Kelamin: ${student.gender === 'L' ? 'Laki-laki' : student.gender === 'P' ? 'Perempuan' : '-'}
+Kelas: ${cleanGrade}
+Mata Pelajaran: ${academicSetting?.subject || 'Umum'}
+Nilai Akhir: ${finalGrade !== undefined ? finalGrade : 80}
+Status Capaian: ${achievementStatus || 'Baik'}
+
+Daftar Tujuan Pembelajaran yang Dinilai:
+${tpList}
+
+Instruksi Output:
+Kembalikan JSON dengan 5 atribut kanonikal:
+- developmentSummary (paragraf narasi deskriptif perkembangan belajar)
+- strengths (array 2-3 poin capaian utama yang dikuasai dengan sangat baik)
+- growthAreas (array 1-2 poin aspek yang perlu bimbingan / latihan tambahan)
+- followUpNarrative (paragraf rencana tindak lanjut guru di kelas)
+- homeActivities (array 2-3 poin aktivitas menyenangkan bersama keluarga di rumah bertajuk 'Ayo bermain bersama di rumah')`;
+
+    const reportSchema = {
+      type: Type.OBJECT,
+      properties: {
+        developmentSummary: { type: Type.STRING },
+        strengths: { type: Type.ARRAY, items: { type: Type.STRING } },
+        growthAreas: { type: Type.ARRAY, items: { type: Type.STRING } },
+        followUpNarrative: { type: Type.STRING },
+        homeActivities: { type: Type.ARRAY, items: { type: Type.STRING } },
+      },
+      required: ['developmentSummary', 'strengths', 'growthAreas', 'followUpNarrative', 'homeActivities'],
+    };
+
+    const response = await generateContentWithRetry(ai, {
+      contents: userPrompt,
+      config: {
+        systemInstruction,
+        responseMimeType: 'application/json',
+        responseSchema: reportSchema,
+      },
+    });
+
+    if (response.text) {
+      const parsed = cleanAndParseJSON(response.text, null);
+      if (parsed && typeof parsed.developmentSummary === 'string') {
+        return res.json({ success: true, data: parsed });
+      }
+    }
+    return res.status(500).json({ error: 'Gagal parse JSON hasil Laporan Belajar AI' });
+  } catch (error: any) {
+    console.error('Gemini generate student report failed:', error);
+    const isAuth = error?.status === 401 || error?.status === 403;
+    return res.status(isAuth ? error.status : 500).json({ error: error.message || 'Gagal generate Laporan Belajar via Gemini' });
+  }
+});
+
 // Final /api 404 handler - must return JSON and never fall through to Vite static HTML fallback
 app.all('/api/*', (req, res) => {
   res.status(404).json({

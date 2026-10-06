@@ -35,6 +35,7 @@ import {
   Student,
   RemedialRecord,
   EnrichmentRecord,
+  StudentLearningReport,
 } from '../types';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
 import { resolveUnitSemesterPlacement } from './unitSemesterPlanningService';
@@ -72,6 +73,7 @@ export interface SemesterDataV5Result {
   grade: SemesterGradeEntry | undefined;
   remedial: RemedialRecord[] | undefined;
   enrichment: EnrichmentRecord[] | undefined;
+  studentReports?: StudentLearningReport[] | undefined;
 }
 
 export interface CreateYearHierarchyV5Params {
@@ -1589,6 +1591,9 @@ export function getSemesterDataV5(semesterPlanId: string): SemesterDataV5Result 
   const enrichment = state.semesterData.enrichment.find(
     (e) => e.semesterPlanId === semesterPlanId
   )?.value;
+  const studentReports = state.semesterData.studentReports?.find(
+    (e) => e.semesterPlanId === semesterPlanId
+  )?.value;
 
   return {
     semesterPlan,
@@ -1607,6 +1612,7 @@ export function getSemesterDataV5(semesterPlanId: string): SemesterDataV5Result 
     grade,
     remedial,
     enrichment,
+    studentReports,
   };
 }
 
@@ -2015,6 +2021,31 @@ export function saveEnrichmentV5(
   upsertSemesterScopedEntry(state.semesterData.enrichment, semesterPlanId, value);
   saveStorageV5(state);
   return value;
+}
+
+export function saveStudentReportsV5(
+  semesterPlanId: string,
+  value: StudentLearningReport[]
+): StudentLearningReport[] {
+  const state = loadStorageV5();
+  assertSemesterPlanAndParentExist(state, semesterPlanId);
+  if (!state.semesterData.studentReports) {
+    state.semesterData.studentReports = [];
+  }
+  upsertSemesterScopedEntry(state.semesterData.studentReports, semesterPlanId, value);
+  saveStorageV5(state);
+  return value;
+}
+
+export function deleteStudentReportsV5(semesterPlanId: string): void {
+  const state = loadStorageV5();
+  assertSemesterPlanAndParentExist(state, semesterPlanId);
+  if (state.semesterData.studentReports) {
+    const changed = deleteSemesterScopedEntry(state.semesterData.studentReports, semesterPlanId);
+    if (changed) {
+      saveStorageV5(state);
+    }
+  }
 }
 
 export function deleteAcademicCalendarV5(semesterPlanId: string): void {
