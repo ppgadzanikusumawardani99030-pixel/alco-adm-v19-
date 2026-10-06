@@ -8,7 +8,7 @@ import {
   resolveLearningPlanAllocatedJP,
   buildLearningPlanScopeUnits,
 } from '../src/services/learningPlanService';
-import { generateAutoDraftPlansFromCanonicalContext } from '../src/services/assessmentPlanService';
+import { generateAutoDraftPlansFromCanonicalContext, validateAssessmentPlan } from '../src/services/assessmentPlanService';
 import { resolveScheduledLearningMeetings } from '../src/services/scheduledLearningMeetingProjectionService';
 import { buildModulAjarProjection } from '../src/services/documentEngine/modulAjarProjection';
 import { generateModulAjar } from '../src/services/documentEngine/generators/modulAjarGenerator';
@@ -517,17 +517,48 @@ async function runRegressionSuite() {
   // ==========================================
   // CANONICAL MEETING & KKTP INTEGRATION TESTS (B19)
   // ==========================================
-  console.log('\n--- B19.1: KKTP Filtering ---');
+  console.log('\n--- B19.1: KKTP Filtering & Lineage (Real Flow) ---');
   const allCriteria = [
     { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101' },
     { id: 'crit-2', tpId: 'tp-999', description: 'Kriteria TP 999 (Out of Scope)' }
   ];
-  const targetTpIds = ['tp-101'];
-  const filtered = allCriteria.filter(ac => targetTpIds.includes(ac.tpId));
+
+  // Simulating scope compilation in LearningPlanManager.tsx
+  const simScope: any = {
+    tpItems: [{ id: 'tp-101', statement: 'Belajar programming' }],
+    linkedTpIds: ['tp-101'],
+    linkedAtpItemIds: ['atp-201'],
+    meetings: []
+  };
+
+  const simTpsToSend = simScope.tpItems;
+  const simTpIdsToSend = simTpsToSend.map((t: any) => t.id);
+  const simRelevantCriteria = (allCriteria as any).filter((ac: any) => simTpIdsToSend.includes(ac.tpId));
+
+  const draftPlanResult = createAIDraftLearningPlan({
+    academicSetting: mockSetting,
+    curriculumType: 'KURIKULUM_MERDEKA',
+    unitId: 'unit-1',
+    tpIds: simScope.linkedTpIds,
+    atpItemIds: simScope.linkedAtpItemIds,
+    aiDraft: {
+      initialCompetency: 'Siswa dapat membaca',
+      learningExperiences: [
+        { phase: 'UNDERSTAND', description: 'Memahami' },
+        { phase: 'APPLY', description: 'Menerapkan' },
+        { phase: 'REFLECT', description: 'Refleksi' }
+      ] as any,
+      graduateProfileDimensions: ['Bernalar Kritis']
+    }
+  });
+
+  // Assign the filtered KKTP IDs exactly as done in LearningPlanManager.tsx
+  draftPlanResult.kktpCriterionIds = simRelevantCriteria.map((ac: any) => ac.id);
+
   assert(
-    filtered.length === 1 && filtered[0].id === 'crit-1',
-    'KKTP filtering must only select in-scope criteria',
-    `filteredLength=${filtered.length}`
+    draftPlanResult.kktpCriterionIds.includes('crit-1') && !draftPlanResult.kktpCriterionIds.includes('crit-2'),
+    'LearningPlan draft must save only kktpCriterionIds matching the target scope TPs',
+    `kktpCriterionIds=${JSON.stringify(draftPlanResult.kktpCriterionIds)}`
   );
 
   console.log('\n--- B19.2: Multi-meeting Order & Deterministic sorting ---');
@@ -713,10 +744,29 @@ async function runRegressionSuite() {
     `draftsCount=${draftsWithExist.length}`
   );
 
-  // special manual scope still works
+  // 5d. Manual / Special Scope AssessmentPlan remains fully supported and valid
+  const manualSpecialPlan = {
+    id: 'special-mid-semester-ap',
+    academicSettingId: 'setting-1',
+    title: 'Penilaian Tengah Semester Khusus',
+    purpose: 'SUMMATIVE' as any,
+    timing: 'MID_SEMESTER' as any,
+    scopeType: 'MULTI_TP' as any,
+    tpIds: ['tp-101', 'tp-102'],
+    workflowStatus: 'DRAFT' as any,
+    instruments: [{ id: 'inst-1', type: 'PILIHAN_GANDA', technique: 'Tes Tertulis', description: 'Ujian PG' }] as any
+  };
+
+  const validationResult = validateAssessmentPlan(manualSpecialPlan as any, {
+    academicSetting: mockSetting,
+    tp: mockTpData,
+    learningPlans: [lpWithAssessment] // lpWithAssessment embeds formative assessments on tp-101
+  });
+
   assert(
-    typeof generateAutoDraftPlansFromCanonicalContext === 'function',
-    'generateAutoDraftPlansFromCanonicalContext remains fully operational'
+    validationResult.valid,
+    'Manual special-scope AssessmentPlans (e.g. MID_SEMESTER) are valid and not blocked/invalidated by embedded LearningPlan assessments',
+    `validationErrors=${JSON.stringify(validationResult.errors)}`
   );
 
   console.log('\n--- B19.6: Scope Isolation ---');

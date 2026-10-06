@@ -306,7 +306,9 @@ export function buildLearningPlanDiagnosticReport(data: {
         line('LearningMeeting IDs in scope', latestAIRequest.metadata?.learningMeetingCount),
         line('Allocated JP sent', latestAIRequest.metadata?.allocatedJP),
         line('Meeting structure sent to AI', latestAIRequest.metadata?.meetingStructureSent),
+        line('meetingStructureCount', latestAIRequest.metadata?.meetingStructureCount),
         line('KKTP sent to AI', latestAIRequest.metadata?.kktpSent),
+        line('kktpCount', latestAIRequest.metadata?.kktpCount),
       ]
     : ['- no request recorded'];
 
