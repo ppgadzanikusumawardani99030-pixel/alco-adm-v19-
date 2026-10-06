@@ -351,12 +351,14 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     const zCount = validation.unmappedAtpIds.length + validation.uncoveredTpIds.length;
 
     let summaryMessage = '';
-    if (zCount > 0) {
-      summaryMessage = 'Saran: Tambahkan Bab/Materi atau hubungkan ATP/TP yang tersisa.';
+    if (validation.isComplete) {
+      summaryMessage = 'Pemetaan siap digunakan untuk Perencanaan Tahunan.';
     } else if (!validation.isValid) {
-      summaryMessage = 'Saran: Perbaiki silsilah/lineage yang tidak valid.';
+      summaryMessage = 'Pemetaan belum siap. Perbaiki silsilah/lineage yang tidak valid.';
+    } else if (zCount > 0) {
+      summaryMessage = 'Pemetaan belum siap. Hubungkan ATP/TP canonical yang tersisa.';
     } else {
-      summaryMessage = 'Lengkap & Siap.';
+      summaryMessage = 'Pemetaan belum siap. Lengkapi Bab dan Lingkup Materi yang belum diselaraskan.';
     }
 
     return {
@@ -893,7 +895,6 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       const action = f.action!;
       const atpItemId = action.atpItemId;
       const targetUnitId = action.targetUnitId;
-      const targetMaterialId = action.targetMaterialId;
 
       nextUnits = nextUnits.map((u) => {
         if (u.id !== targetUnitId) return u;
@@ -909,27 +910,11 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
           : [];
         const nextTpIds = Array.from(new Set([...(u.linkedTpIds || []), ...itemTps]));
 
-        const nextMaterials = (u.materials || []).map((m) => {
-          if (targetMaterialId && m.id === targetMaterialId) {
-            const mNextAtp = [...(m.linkedAtpItemIds || [])];
-            if (!mNextAtp.includes(atpItemId)) {
-              mNextAtp.push(atpItemId);
-            }
-            const mNextTp = Array.from(new Set([...(m.linkedTpIds || []), ...itemTps]));
-            return {
-              ...m,
-              linkedAtpItemIds: mNextAtp,
-              linkedTpIds: mNextTp,
-            };
-          }
-          return m;
-        });
-
         return {
           ...u,
           linkedAtpItemIds: nextLinkedAtp,
           linkedTpIds: nextTpIds,
-          materials: nextMaterials,
+          materials: u.materials, // FIX 1: Preserve materials exactly as-is
         };
       });
     });
