@@ -157,7 +157,7 @@ TUGAS ANDA ADALAH MELAKUKAN ANALISIS PEMETAAN (READ-ONLY ANALYSIS) antara Bab & 
    - Membuat Bab baru (ID Bab fiktif dilarang)
    - Membuat TP fiktif atau ATP fiktif
    - Mengubah urutan langkah ATP
-3. KONTRAK CANONICAL ATP: Setiap langkah ATP dapat memiliki MULTIPLE TP pada 'linkedTps'. Anda HARUS membaca seluruh TP tertaut tersebut secara utuh (bukan hanya TP pertama).
+3. KONTRAK CANONICAL ATP: Setiap langkah ATP dapat memiliki MULTIPLE TP pada 'linkedTps' dan DAPAT MENDUKUNG 1..n Bab/Unit. Langkah ATP tidak dibatasi hanya untuk satu Bab tunggal. Setiap Bab berhak memilih subset TP yang relevan dari ATP tersebut.
 4. ANALISIS SEMANTIK KONSERVATIF:
    - Jangan menyarankan Bab tanpa bukti keselarasan yang kuat/jelas.
    - Jika suatu langkah ATP memiliki keterkaitan ambigu ke beberapa Bab, atau tidak ada Bab yang cocok, beri status "REVIEW" tanpa action otomatis.
@@ -183,7 +183,9 @@ ${JSON.stringify(atpContext, null, 2)}
           action = { type: "ASSIGN_ATP_TO_UNIT", atpItemId: <id>, targetUnitId: <existingUnitId>, targetMaterialId?: <existingMaterialId> }
         - Jika bukti lemah / ambigu ke beberapa Bab / tidak ada Bab yang cocok:
           status = "REVIEW", strength = "LOW", reason = <alasan perlu ditinjau guru>, (JANGAN berikan action atau suggestedUnitId).
-     B. Jika ATP SUDAH TERPETAKAN ke suatu Bab:
+     B. Jika ATP SUDAH TERPETAKAN ke satu atau lebih Bab:
+        - Jika ATP mendukung lebih dari satu Bab secara valid:
+          status = "ALIGNED", currentUnitId = undefined, strength = "STRONG", reason = "Langkah ATP ini mendukung beberapa Bab dengan pembagian TP yang relevan.".
         - Jika seluruh TP pada ATP tersebut terbukti selaras dengan Bab dan materi Bab:
           status = "ALIGNED", currentUnitId = <ID Bab saat ini>, strength = "STRONG", reason = <konfirmasi keselarasan>.
         - Jika tidak cukup bukti / ada mismatch semantik:
@@ -433,12 +435,14 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
   const atpItems = atpData.items || [];
 
   const assignedAtpSet = new Set<string>();
-  const atpToUnitMap = new Map<string, string>();
+  const atpToUnitsMap = new Map<string, typeof units>();
 
   units.forEach((u) => {
     (u.linkedAtpItemIds || []).forEach((id) => {
       assignedAtpSet.add(id);
-      atpToUnitMap.set(id, u.id);
+      const list = atpToUnitsMap.get(id) || [];
+      list.push(u);
+      atpToUnitsMap.set(id, list);
     });
   });
 
@@ -475,8 +479,8 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
 
     const allItemTokens = Array.from(new Set([...itemFocusTokens, ...itemTpTokens]));
 
-    const isMapped = assignedAtpSet.has(item.id);
-    const currentUnitId = atpToUnitMap.get(item.id);
+    const mappedUnits = atpToUnitsMap.get(item.id) || [];
+    const isMapped = mappedUnits.length > 0;
 
     // Compute match score against each unit while strictly EXCLUDING current ATP from unit context
     const scores = unitManualProfiles.map((prof) => {
@@ -543,35 +547,49 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
     const second = scores[1];
 
     if (isMapped) {
-      // EVALUATE EXISTING MAPPED ATP CONSERVATIVELY (NON-CIRCULAR)
-      const currentUnit = units.find((u) => u.id === currentUnitId);
-      const currentScoreInfo = scores.find((s) => s.unit.id === currentUnitId);
-      const currentPrimaryScore = currentScoreInfo?.primaryScore || 0;
-      const currentTotalScore = currentScoreInfo?.totalScore || 0;
-
-      // Must have substantive evidence from manual authority or strong combination with other ATPs
-      const isAligned = currentPrimaryScore >= 3.0 || (currentPrimaryScore >= 2.0 && currentTotalScore >= 4.0);
-
-      if (isAligned) {
+      if (mappedUnits.length > 1) {
+        const babList = mappedUnits.map((u) => `Bab ${u.order}`).join(', ');
         atpFindings.push({
           id: `atp-find-${idx + 1}`,
           atpItemId: item.id,
           status: 'ALIGNED',
-          currentUnitId,
+          currentUnitId: undefined,
           supportingTpIds: rawLinked,
-          strength: currentPrimaryScore >= 5.0 ? 'STRONG' : 'MODERATE',
-          reason: `Langkah ATP dan rumusan TP tertaut selaras dengan fokus Bab ${currentUnit?.order || ''}: '${currentUnit?.title || ''}'.`,
+          strength: 'STRONG',
+          reason: `Langkah ATP ini mendukung ${mappedUnits.length} Bab (${babList}) dengan pembagian fokus TP yang relevan.`,
         });
       } else {
-        atpFindings.push({
-          id: `atp-find-${idx + 1}`,
-          atpItemId: item.id,
-          status: 'REVIEW',
-          currentUnitId,
-          supportingTpIds: rawLinked,
-          strength: 'LOW',
-          reason: 'Hubungan ATP dengan Bab saat ini belum cukup kuat untuk dinyatakan selaras secara otomatis.',
-        });
+        // Single unit assignment - evaluate alignment conservatively
+        const currentUnit = mappedUnits[0];
+        const currentUnitId = currentUnit.id;
+        const currentScoreInfo = scores.find((s) => s.unit.id === currentUnitId);
+        const currentPrimaryScore = currentScoreInfo?.primaryScore || 0;
+        const currentTotalScore = currentScoreInfo?.totalScore || 0;
+
+        // Must have substantive evidence from manual authority or strong combination with other ATPs
+        const isAligned = currentPrimaryScore >= 3.0 || (currentPrimaryScore >= 2.0 && currentTotalScore >= 4.0);
+
+        if (isAligned) {
+          atpFindings.push({
+            id: `atp-find-${idx + 1}`,
+            atpItemId: item.id,
+            status: 'ALIGNED',
+            currentUnitId,
+            supportingTpIds: rawLinked,
+            strength: currentPrimaryScore >= 5.0 ? 'STRONG' : 'MODERATE',
+            reason: `Langkah ATP dan rumusan TP tertaut selaras dengan fokus Bab ${currentUnit?.order || ''}: '${currentUnit?.title || ''}'.`,
+          });
+        } else {
+          atpFindings.push({
+            id: `atp-find-${idx + 1}`,
+            atpItemId: item.id,
+            status: 'REVIEW',
+            currentUnitId,
+            supportingTpIds: rawLinked,
+            strength: 'LOW',
+            reason: 'Hubungan ATP dengan Bab saat ini belum cukup kuat untuk dinyatakan selaras secara otomatis.',
+          });
+        }
       }
     } else {
       // EVALUATE UNMAPPED ATP CONSERVATIVELY

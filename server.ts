@@ -1473,11 +1473,12 @@ TUGAS ANDA: Melakukan pengelompokan tematis (Semantic Clustering) butir-butir Tu
 PRINSIP & ATURAN GENERATOR CANONICAL (WAJIB DIPATUHI):
 1. KONTRAK MULTI-TP ATP: Satu langkah ATP (ATP Step) dapat menaungi SATU ATAU LEBIH (1..n) TP atomik pada 'linkedTpIds'. Anda HARUS mempertimbangkan SELURUH TP tertaut pada setiap langkah ATP secara bersamaan (bukan hanya TP pertama).
 2. KRONOLOGI & CONTINUITY: ATP adalah unit urutan dan otoritas kronologi (stepNumber). Urutan Bab harus menjaga kesinambungan kronologi langkah ATP secara logis (misal: Bab 1 memuat ATP 1,2,3; Bab 2 memuat ATP 4,5; dst).
-3. EXACTLY ONE PRIMARY BAB: Satu langkah ATP hanya boleh memiliki TEPAT SATU primary Bab. JANGAN memasukkan atau menduplikasi langkah ATP yang sama ke beberapa Bab.
-4. LINGKUP MATERI BERDASARKAN TP/ATP: Setiap Bab didekomposisi menjadi Lingkup Materi yang didukung secara autentik oleh TP/ATP terkait. Lingkup materi dapat mengakomodasi satu atau beberapa TP/ATP. JANGAN membuat materi generik kosong ("Materi 1", "Materi Pembelajaran") jika ada topik substantif.
-5. INTEGRITAS RUJUKAN: Setiap relasi linkedTpIds dan linkedAtpItemIds WAJIB menggunakan persis string ID input ([TP_ID: ...] dan [ATP_ID: ...]). JANGAN membuat TP atau ATP fiktif.
-6. JANGAN menentukan alokasi JP, semester, pertemuan, rencana asesmen, atau Modul Ajar/LearningPlan pada tahap ini.
-7. ${
+3. DUKUNGAN MULTI-BAB & SUBSET TP: Satu langkah ATP DAPAT MENDUKUNG BEBERAPA BAB (1..n Bab). Hal ini terutama diperbolehkan dan dianjurkan jika langkah ATP tersebut membawa beberapa TP dengan lingkup materi/topik yang berbeda (misalnya TP 1 dan 2 masuk Bab 2, sedangkan TP 3 masuk Bab 3). Setiap Bab memilih subset TP yang autentik dan relevan dari ATP tersebut. JANGAN menyalin seluruh TP milik suatu ATP ke semua Bab yang memuat ATP itu. ATP boleh diulang lintas Bab.
+4. CAKUPAN GLOBAL (GLOBAL LINEAGE COVERAGE): Seluruh ATP dan TP canonical harus ter-cover secara global. Setiap ATP canonical minimal harus muncul pada satu Bab, dan gabungan (union) TP dari seluruh Bab yang memuat ATP tersebut harus mencakup seluruh TP canonical milik ATP tersebut tanpa ada TP yang tertinggal.
+5. SETIAP BAB & MATERI WAJIB MEMILIKI LINEAGE: Setiap Unit/Bab WAJIB memiliki 'linkedAtpItemIds' (non-empty) dan 'linkedTpIds' (non-empty). Setiap Lingkup Materi dalam Bab WAJIB memiliki 'linkedAtpItemIds' (subset dari ATP Bab) dan 'linkedTpIds' (subset dari TP Bab yang didukung oleh ATP materi tersebut). JANGAN membuat materi generik kosong tanpa relasi TP/ATP.
+6. INTEGRITAS RUJUKAN: Setiap relasi linkedTpIds dan linkedAtpItemIds WAJIB menggunakan persis string ID input ([TP_ID: ...] dan [ATP_ID: ...]). JANGAN membuat TP atau ATP fiktif.
+7. JANGAN menentukan alokasi JP, semester, pertemuan, rencana asesmen, atau Modul Ajar/LearningPlan pada tahap ini.
+8. ${
   count
     ? `Target jumlah Bab adalah ${count} Bab sebagai panduan organisasi.`
     : `Jumlah Bab ditentukan secara alami berdasarkan kesamaan semantik (Semantic Clustering) dari materi TP/ATP tanpa memaksakan jumlah tertentu.`
@@ -1607,22 +1608,25 @@ Kembalikan respon JSON dengan skema:
           const validLinkedAtpItemIds: string[] = Array.isArray(u.linkedAtpItemIds)
             ? Array.from(new Set(u.linkedAtpItemIds.filter((id: string) => atpMap.has(id))))
             : [];
-          const validLinkedTpIds: string[] = Array.isArray(u.linkedTpIds)
-            ? Array.from(new Set(u.linkedTpIds.filter((id: string) => tpMap.has(id))))
-            : [];
 
-          // LINK CONTRACT: Ensure linkedTpIds contains all canonical resolved TPs from every linkedAtpItemId
+          const unitSupportedTpSet = new Set<string>();
           validLinkedAtpItemIds.forEach((atpId) => {
             const atpItem = atpMap.get(atpId);
             if (atpItem) {
               const resolvedTpIds = resolveCanonicalAtpTpIds(atpItem, validTpIdSet);
-              resolvedTpIds.forEach((tpId) => {
-                if (!validLinkedTpIds.includes(tpId)) {
-                  validLinkedTpIds.push(tpId);
-                }
-              });
+              resolvedTpIds.forEach((tpId) => unitSupportedTpSet.add(tpId));
             }
           });
+
+          // Sanitize linkedTpIds: preserve authentic subset chosen by AI that is supported by unit's ATPs
+          // Do NOT expand to all resolved TPs of unit's ATPs!
+          let validLinkedTpIds: string[] = Array.isArray(u.linkedTpIds)
+            ? Array.from(new Set(u.linkedTpIds.filter((id: string) => tpMap.has(id) && unitSupportedTpSet.has(id))))
+            : [];
+
+          if (validLinkedTpIds.length === 0 && validLinkedAtpItemIds.length > 0 && (!Array.isArray(u.linkedTpIds) || u.linkedTpIds.length === 0)) {
+            validLinkedTpIds = Array.from(unitSupportedTpSet);
+          }
 
           // Sanitize materials
           const rawMaterials = Array.isArray(u.materials) ? u.materials : [];
@@ -1634,29 +1638,26 @@ Kembalikan respon JSON dengan skema:
             const matAtpIds: string[] = Array.isArray(m.linkedAtpItemIds)
               ? Array.from(new Set(m.linkedAtpItemIds.filter((id: string) => atpMap.has(id) && validLinkedAtpItemIds.includes(id))))
               : [];
-            const matTpIds: string[] = Array.isArray(m.linkedTpIds)
-              ? Array.from(new Set(m.linkedTpIds.filter((id: string) => tpMap.has(id))))
-              : [];
 
-            // LINK CONTRACT: Ensure material linkedTpIds contains corresponding resolved TPs
+            const matSupportedTpSet = new Set<string>();
             matAtpIds.forEach((atpId) => {
               const atpItem = atpMap.get(atpId);
               if (atpItem) {
                 const resolvedTpIds = resolveCanonicalAtpTpIds(atpItem, validTpIdSet);
-                resolvedTpIds.forEach((tpId) => {
-                  if (!matTpIds.includes(tpId) && validLinkedTpIds.includes(tpId)) {
-                    matTpIds.push(tpId);
-                  }
-                });
+                resolvedTpIds.forEach((tpId) => matSupportedTpSet.add(tpId));
               }
             });
+
+            const matTpIds: string[] = Array.isArray(m.linkedTpIds)
+              ? Array.from(new Set(m.linkedTpIds.filter((id: string) => tpMap.has(id) && validLinkedTpIds.includes(id) && matSupportedTpSet.has(id))))
+              : [];
 
             return {
               id: finalMatId,
               title: finalMatTitle,
               order: matOrder,
-              linkedTpIds: matTpIds.length > 0 ? matTpIds : [...validLinkedTpIds],
-              linkedAtpItemIds: matAtpIds.length > 0 ? matAtpIds : [...validLinkedAtpItemIds],
+              linkedTpIds: matTpIds,
+              linkedAtpItemIds: matAtpIds,
             };
           });
 
@@ -1673,6 +1674,26 @@ Kembalikan respon JSON dengan skema:
         });
 
         sanitizedUnits.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
+
+        // Global Lineage Coverage Validation: AI output must not leave unmapped ATPs or orphan TPs
+        const allUnitsHaveLineage = sanitizedUnits.length > 0 && sanitizedUnits.every(
+          (u) => u.linkedAtpItemIds.length > 0 && u.linkedTpIds.length > 0
+        );
+        const mappedAtpIdSet = new Set<string>();
+        sanitizedUnits.forEach((u) => u.linkedAtpItemIds.forEach((id) => mappedAtpIdSet.add(id)));
+        const allAtpsCovered = validAtpItems.every((atp) => mappedAtpIdSet.has(atp.id));
+
+        const allTpsCoveredGlobally = validAtpItems.every((atp) => {
+          const canonicalTpIds = resolveCanonicalAtpTpIds(atp, validTpIdSet);
+          const unitsWithAtp = sanitizedUnits.filter((u) => u.linkedAtpItemIds.includes(atp.id));
+          const coveredTps = new Set<string>();
+          unitsWithAtp.forEach((u) => u.linkedTpIds.forEach((tpId) => coveredTps.add(tpId)));
+          return canonicalTpIds.every((tpId) => coveredTps.has(tpId));
+        });
+
+        if (!allUnitsHaveLineage || !allAtpsCovered || !allTpsCoveredGlobally) {
+          throw new Error('AI generated mapping failed global lineage coverage validation.');
+        }
 
         const canonicalResult = {
           id: existingMapping?.id || `aum-${Date.now()}`,

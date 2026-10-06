@@ -1242,21 +1242,22 @@ export function fallbackGenerateCanonicalATPUnitMapping(
   if (existingMapping && Array.isArray(existingMapping.units) && existingMapping.units.length > 0) {
     const updatedUnits = existingMapping.units.map((unit, uIdx) => {
       const order = unit.order || uIdx + 1;
-      const linkedTpIds = (unit.linkedTpIds || []).filter((id) => tpMap.has(id));
       const linkedAtpItemIds = (unit.linkedAtpItemIds || []).filter((id) => atpMap.has(id));
 
-      // Canonical multi-TP resolution for unit
+      const supportedTpIdSet = new Set<string>();
       linkedAtpItemIds.forEach((atpId) => {
         const atp = atpMap.get(atpId);
         if (atp) {
           const resolvedIds = resolveCanonicalAtpTpIds(atp, validTpIdSet);
-          resolvedIds.forEach((tpId) => {
-            if (!linkedTpIds.includes(tpId)) {
-              linkedTpIds.push(tpId);
-            }
-          });
+          resolvedIds.forEach((tpId) => supportedTpIdSet.add(tpId));
         }
       });
+
+      // Preserve explicit valid subset of TPs supported by unit ATPs (do NOT expand to all ATP TPs)
+      let linkedTpIds = (unit.linkedTpIds || []).filter((id) => tpMap.has(id) && supportedTpIdSet.has(id));
+      if (linkedTpIds.length === 0 && (unit.linkedTpIds || []).length === 0 && supportedTpIdSet.size > 0) {
+        linkedTpIds = Array.from(supportedTpIdSet);
+      }
 
       const linkedTps = linkedTpIds.map((id) => tpMap.get(id)).filter(Boolean) as Array<(typeof validTpItems)[0]>;
 
@@ -1270,20 +1271,21 @@ export function fallbackGenerateCanonicalATPUnitMapping(
       if (materials.length > 0) {
         materials = materials.map((mat, mIdx) => {
           const matOrder = mat.order || mIdx + 1;
-          const matLinkedTpIds = (mat.linkedTpIds || []).filter((id) => tpMap.has(id));
-          const matLinkedAtpItemIds = (mat.linkedAtpItemIds || []).filter((id) => atpMap.has(id));
+          const matLinkedAtpItemIds = (mat.linkedAtpItemIds || []).filter((id) => atpMap.has(id) && linkedAtpItemIds.includes(id));
 
+          const matSupportedTpSet = new Set<string>();
           matLinkedAtpItemIds.forEach((atpId) => {
             const atp = atpMap.get(atpId);
             if (atp) {
               const resolvedIds = resolveCanonicalAtpTpIds(atp, validTpIdSet);
-              resolvedIds.forEach((tpId) => {
-                if (!matLinkedTpIds.includes(tpId)) {
-                  matLinkedTpIds.push(tpId);
-                }
-              });
+              resolvedIds.forEach((tpId) => matSupportedTpSet.add(tpId));
             }
           });
+
+          // Material TPs must be subset of unit.linkedTpIds AND supported by material's ATPs
+          const matLinkedTpIds = (mat.linkedTpIds || []).filter(
+            (id) => tpMap.has(id) && linkedTpIds.includes(id) && matSupportedTpSet.has(id)
+          );
 
           let matTitle = mat.title?.trim();
           if (!matTitle) {
@@ -1297,8 +1299,8 @@ export function fallbackGenerateCanonicalATPUnitMapping(
             id: mat.id || `mat-${Date.now()}-${uIdx + 1}-${matOrder}`,
             title: matTitle,
             order: matOrder,
-            linkedTpIds: matLinkedTpIds.length > 0 ? matLinkedTpIds : [...linkedTpIds],
-            linkedAtpItemIds: matLinkedAtpItemIds.length > 0 ? matLinkedAtpItemIds : [...linkedAtpItemIds],
+            linkedTpIds: matLinkedTpIds,
+            linkedAtpItemIds: matLinkedAtpItemIds,
           };
         });
       } else {
@@ -1322,8 +1324,8 @@ export function fallbackGenerateCanonicalATPUnitMapping(
               id: `mat-${Date.now()}-${uIdx + 1}-${mIdx + 1}`,
               title: scopeTitle,
               order: mIdx + 1,
-              linkedTpIds: supportingTpIds.length > 0 ? supportingTpIds : [...linkedTpIds],
-              linkedAtpItemIds: matchingAtps.length > 0 ? matchingAtps.map((a) => a.id) : [...linkedAtpItemIds],
+              linkedTpIds: supportingTpIds,
+              linkedAtpItemIds: matchingAtps.map((a) => a.id),
             };
           });
         } else {
@@ -1332,8 +1334,8 @@ export function fallbackGenerateCanonicalATPUnitMapping(
               id: `mat-${Date.now()}-${uIdx + 1}-1`,
               title: unitTitle.replace(/^Bab\s+\d+:\s*/i, ''),
               order: 1,
-              linkedTpIds: [...linkedTpIds],
-              linkedAtpItemIds: [...linkedAtpItemIds],
+              linkedTpIds: [],
+              linkedAtpItemIds: [],
             },
           ];
         }
@@ -1602,23 +1604,24 @@ export function fallbackGenerateCanonicalATPUnitMapping(
         title,
         order: matIndex,
         linkedTpIds: matTpIds,
-        linkedAtpItemIds: finalMatAtpIds.length > 0 ? finalMatAtpIds : [...linkedAtpItemIds],
+        linkedAtpItemIds: finalMatAtpIds,
       });
       matIndex++;
     });
 
     if (materials.length === 0) {
       const nonCCTpIds = nonCCTps.map((t) => t.id);
-      const nonCCAtpIds = cluster
-        .filter((a) => resolveCanonicalAtpTpIds(a, validTpIdSet).some((id) => nonCCTpIds.includes(id)))
+      const fallbackTpIds = nonCCTpIds.length > 0 ? nonCCTpIds : linkedTpIds;
+      const fallbackAtpIds = cluster
+        .filter((a) => resolveCanonicalAtpTpIds(a, validTpIdSet).some((id) => fallbackTpIds.includes(id)))
         .map((a) => a.id);
 
       materials.push({
         id: `mat-${Date.now()}-${unitOrder}-1`,
         title: mainTopic.replace(/^(bab|unit)\s*\d*[:\-]?\s*/i, ''),
         order: 1,
-        linkedTpIds: nonCCTpIds.length > 0 ? nonCCTpIds : linkedTpIds,
-        linkedAtpItemIds: nonCCAtpIds.length > 0 ? nonCCAtpIds : linkedAtpItemIds,
+        linkedTpIds: fallbackTpIds,
+        linkedAtpItemIds: fallbackAtpIds,
       });
     }
 
@@ -1683,67 +1686,7 @@ export function enforceCanonicalMappingInvariants(
     }
   });
 
-  // 1. Enforce EXACTLY ONE Primary Unit assignment per ATP
-  const atpOccurrences = new Map<string, string[]>(); // atpId -> unitIds
-  mapping.units.forEach((unit: any) => {
-    const unitAtpIds = (Array.isArray(unit.linkedAtpItemIds) ? unit.linkedAtpItemIds : [])
-      .filter((id: string) => atpMap.has(id));
-    unitAtpIds.forEach((atpId: string) => {
-      const list = atpOccurrences.get(atpId) || [];
-      list.push(unit.id);
-      atpOccurrences.set(atpId, list);
-    });
-  });
-
-  atpOccurrences.forEach((unitIds, atpId) => {
-    if (unitIds.length > 1) {
-      // Choose single best unit:
-      // Priority 1: Unit where at least one material has this atpId
-      // Priority 2: Highest semantic overlap with unit title
-      // Priority 3: First unit chronologically
-      let bestUnitId = unitIds[0];
-      let bestScore = -1;
-
-      unitIds.forEach((uId) => {
-        const u = mapping.units.find((unit: any) => unit.id === uId);
-        if (!u) return;
-
-        let score = 0;
-        const hasMat = Array.isArray(u.materials) && u.materials.some(
-          (m: any) => Array.isArray(m.linkedAtpItemIds) && m.linkedAtpItemIds.includes(atpId)
-        );
-        if (hasMat) score += 10;
-
-        const atp = atpMap.get(atpId);
-        const resolvedTps = resolveCanonicalAtpTpIds(atp, validTpIdSet);
-        const tpKeywords = resolvedTps.flatMap((tpId) => {
-          const t = tpMap.get(tpId);
-          return (t?.statement || '').toLowerCase().split(/\s+/).filter((s: string) => s.length > 2);
-        });
-        const uKeywords = (u.title || '').toLowerCase().split(/\s+/).filter((s: string) => s.length > 2);
-        score += tpKeywords.filter((k: string) => uKeywords.includes(k)).length;
-
-        if (score > bestScore) {
-          bestScore = score;
-          bestUnitId = uId;
-        }
-      });
-
-      // Remove atpId from all other units and their materials
-      mapping.units.forEach((u: any) => {
-        if (u.id !== bestUnitId) {
-          u.linkedAtpItemIds = (u.linkedAtpItemIds || []).filter((id: string) => id !== atpId);
-          if (Array.isArray(u.materials)) {
-            u.materials.forEach((m: any) => {
-              m.linkedAtpItemIds = (m.linkedAtpItemIds || []).filter((id: string) => id !== atpId);
-            });
-          }
-        }
-      });
-    }
-  });
-
-  // 2. Missing ATP Recovery using full multi-TP resolution
+  // 1. Missing ATP Recovery: Ensure every canonical ATP appears in at least one Unit
   const coveredAtpItemIds = new Set<string>();
   mapping.units.forEach((u: any) => {
     (u.linkedAtpItemIds || []).forEach((id: string) => coveredAtpItemIds.add(id));
@@ -1862,8 +1805,7 @@ export function enforceCanonicalMappingInvariants(
     });
   }
 
-  // 3. DETERMINISTIC LINK RECOMPUTATION (Requirements 5, 6, 7)
-  // Recompute unit.linkedTpIds strictly from union of resolveCanonicalAtpTpIds(atp) for all unit.linkedAtpItemIds
+  // 2. DETERMINISTIC LINK SANITIZATION (Multi-Unit ATP Lineage & TP Subset Preservation)
   mapping.units.forEach((unit: any) => {
     // A. Sanitize unit ATP IDs
     const validUnitAtpIds = Array.from(
@@ -1875,60 +1817,65 @@ export function enforceCanonicalMappingInvariants(
     );
     unit.linkedAtpItemIds = validUnitAtpIds;
 
-    // B. Recompute unit linkedTpIds from unit ATPs
-    const unitTpIdSet = new Set<string>();
+    // B. supportedTpIds(unit) = union canonical TP of unit.linkedAtpItemIds
+    const supportedTpIdSet = new Set<string>();
     validUnitAtpIds.forEach((atpId: string) => {
       const atp = atpMap.get(atpId);
       if (atp) {
         const resolvedIds = resolveCanonicalAtpTpIds(atp, validTpIdSet);
-        resolvedIds.forEach((tpId) => unitTpIdSet.add(tpId));
+        resolvedIds.forEach((tpId) => supportedTpIdSet.add(tpId));
       }
     });
-    unit.linkedTpIds = Array.from(unitTpIdSet);
 
-    // C. Material normalization (Requirement 6 & 7)
+    // C. Preserve explicit valid subset of unit.linkedTpIds (never expand to all supportedTpIds)
+    const explicitTpIds: string[] = Array.isArray(unit.linkedTpIds) ? unit.linkedTpIds : [];
+    let sanitizedUnitTpIds = Array.from(
+      new Set<string>(
+        explicitTpIds.filter((id: string) => supportedTpIdSet.has(id))
+      )
+    );
+    if (sanitizedUnitTpIds.length === 0 && explicitTpIds.length === 0 && supportedTpIdSet.size > 0) {
+      sanitizedUnitTpIds = Array.from(supportedTpIdSet);
+    }
+    unit.linkedTpIds = sanitizedUnitTpIds;
+
+    // D. Material normalization:
+    // material.linkedAtpItemIds ⊆ unit.linkedAtpItemIds
+    // material.linkedTpIds ⊆ unit.linkedTpIds
+    // dan setiap material.linkedTpIds harus didukung ATP pada material.linkedAtpItemIds.
     if (Array.isArray(unit.materials)) {
       unit.materials.forEach((mat: any) => {
-        // Material ATPs must be valid ATPs AND must be present in unit.linkedAtpItemIds
         const validMatAtpIds = Array.from(
           new Set<string>(
             (Array.isArray(mat.linkedAtpItemIds) ? mat.linkedAtpItemIds : []).filter(
-              (id: string) => atpMap.has(id) && validUnitAtpIds.includes(id)
+              (id: string) => validUnitAtpIds.includes(id)
             )
           )
         );
         mat.linkedAtpItemIds = validMatAtpIds;
 
-        if (validMatAtpIds.length > 0) {
-          // If material has linked ATPs: derive TP strictly from those ATPs
-          const matTpIdSet = new Set<string>();
-          validMatAtpIds.forEach((atpId: string) => {
-            const atp = atpMap.get(atpId);
-            if (atp) {
-              const resolvedIds = resolveCanonicalAtpTpIds(atp, validTpIdSet);
-              resolvedIds.forEach((tpId) => {
-                if (unitTpIdSet.has(tpId)) {
-                  matTpIdSet.add(tpId);
-                }
-              });
-            }
-          });
-          mat.linkedTpIds = Array.from(matTpIdSet);
-        } else {
-          // If material has NO linked ATPs: preserve explicit TP IDs ONLY if they belong to unit.linkedTpIds
-          mat.linkedTpIds = Array.from(
-            new Set<string>(
-              (Array.isArray(mat.linkedTpIds) ? mat.linkedTpIds : []).filter((id: string) =>
-                unitTpIdSet.has(id)
-              )
+        const matSupportedTpSet = new Set<string>();
+        validMatAtpIds.forEach((atpId: string) => {
+          const atp = atpMap.get(atpId);
+          if (atp) {
+            const resolvedIds = resolveCanonicalAtpTpIds(atp, validTpIdSet);
+            resolvedIds.forEach((tpId) => matSupportedTpSet.add(tpId));
+          }
+        });
+
+        const validMatTpIds = Array.from(
+          new Set<string>(
+            (Array.isArray(mat.linkedTpIds) ? mat.linkedTpIds : []).filter(
+              (id: string) => unit.linkedTpIds.includes(id) && matSupportedTpSet.has(id)
             )
-          );
-        }
+          )
+        );
+        mat.linkedTpIds = validMatTpIds;
       });
     }
   });
 
-  // 4. Ensure each Unit has at least 1 valid material (Requirement 9)
+  // 3. Ensure each Unit has at least 1 valid material (without fabricating fake lineage)
   mapping.units.forEach((unit: any, uIdx: number) => {
     if (!Array.isArray(unit.materials) || unit.materials.length === 0) {
       const fallbackTitle = unit.title
@@ -1939,8 +1886,8 @@ export function enforceCanonicalMappingInvariants(
           id: `mat-auto-${Date.now()}-${uIdx + 1}-1`,
           title: fallbackTitle,
           order: 1,
-          linkedTpIds: [...(unit.linkedTpIds || [])],
-          linkedAtpItemIds: [...(unit.linkedAtpItemIds || [])],
+          linkedTpIds: [],
+          linkedAtpItemIds: [],
         },
       ];
     }

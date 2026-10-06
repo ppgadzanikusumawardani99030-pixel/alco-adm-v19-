@@ -120,6 +120,36 @@ export function validateUnitExecutionPlan(
     const mappingAtpItemIds = new Set(mappingUnit.linkedAtpItemIds || []);
     const mappingTpIds = new Set(mappingUnit.linkedTpIds || []);
 
+    // Canonical lineage authority: Unit must have linked ATPs and TPs
+    if (!mappingUnit.linkedAtpItemIds || mappingUnit.linkedAtpItemIds.length === 0) {
+      errors.push(`Unit '${mappingUnit.title || mappingUnit.id}' wajib memiliki minimal satu langkah ATP tertaut.`);
+    }
+    if (!mappingUnit.linkedTpIds || mappingUnit.linkedTpIds.length === 0) {
+      errors.push(`Unit '${mappingUnit.title || mappingUnit.id}' wajib memiliki minimal satu TP tertaut.`);
+    }
+
+    // Unit TPs must be supported by unit ATPs
+    if (atp && atp.items && mappingUnit.linkedAtpItemIds && mappingUnit.linkedAtpItemIds.length > 0) {
+      const unitSupportedTpSet = new Set<string>();
+      mappingUnit.linkedAtpItemIds.forEach((atpId) => {
+        const atpItem = atp.items.find((i) => i.id === atpId);
+        if (atpItem) {
+          const itemTps = Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0
+            ? atpItem.linkedTpIds
+            : atpItem.tpId ? [atpItem.tpId] : [];
+          itemTps.forEach((tId) => unitSupportedTpSet.add(tId));
+        }
+      });
+
+      for (const tpId of mappingUnit.linkedTpIds || []) {
+        if (!unitSupportedTpSet.has(tpId)) {
+          errors.push(
+            `Unit '${mappingUnit.title || mappingUnit.id}' memuat TP '${tpId}' yang tidak didukung oleh ATP pada unit tersebut.`
+          );
+        }
+      }
+    }
+
     const seenUnitOrders = new Set<number>();
 
     for (const m of planUnit.meetings || []) {
@@ -201,6 +231,27 @@ export function validateUnitExecutionPlan(
           errors.push(
             `Meeting '${m.id}' merujuk TP ID '${tpId}' yang tidak ditemukan pada TPData`
           );
+        }
+      }
+
+      // meeting TPs must be supported by meeting ATPs
+      if (atp && atp.items && (m.linkedAtpItemIds || []).length > 0) {
+        const meetingSupportedTpSet = new Set<string>();
+        (m.linkedAtpItemIds || []).forEach((atpId) => {
+          const atpItem = atp.items.find((i) => i.id === atpId);
+          if (atpItem) {
+            const itemTps = Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0
+              ? atpItem.linkedTpIds
+              : atpItem.tpId ? [atpItem.tpId] : [];
+            itemTps.forEach((tId) => meetingSupportedTpSet.add(tId));
+          }
+        });
+        for (const tpId of m.linkedTpIds || []) {
+          if (!meetingSupportedTpSet.has(tpId)) {
+            errors.push(
+              `Meeting '${m.title || m.id}' memiliki TP '${tpId}' yang tidak didukung oleh ATP pada meeting tersebut.`
+            );
+          }
         }
       }
     }
