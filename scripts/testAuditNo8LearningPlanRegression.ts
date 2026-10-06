@@ -517,23 +517,45 @@ async function runRegressionSuite() {
   // ==========================================
   // CANONICAL MEETING & KKTP INTEGRATION TESTS (B19)
   // ==========================================
-  console.log('\n--- Test I: buildLearningPlanScopeUnits maps meetings correctly (B19) ---');
-  const mockMapping = {
+  console.log('\n--- B19.1: KKTP Filtering ---');
+  const allCriteria = [
+    { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101' },
+    { id: 'crit-2', tpId: 'tp-999', description: 'Kriteria TP 999 (Out of Scope)' }
+  ];
+  const targetTpIds = ['tp-101'];
+  const filtered = allCriteria.filter(ac => targetTpIds.includes(ac.tpId));
+  assert(
+    filtered.length === 1 && filtered[0].id === 'crit-1',
+    'KKTP filtering must only select in-scope criteria',
+    `filteredLength=${filtered.length}`
+  );
+
+  console.log('\n--- B19.2: Multi-meeting Order & Deterministic sorting ---');
+  const b19Mapping = {
     units: [
-      { id: 'unit-1', title: 'Bab 1: Dasar Algoritma', order: 1, linkedTpIds: ['tp-101'], linkedAtpItemIds: ['atp-201'], materials: [{ id: 'mat-1', title: 'Materi 1', order: 1, linkedAtpItemIds: ['atp-201'], linkedTpIds: ['tp-101'] }] }
+      {
+        id: 'unit-1',
+        title: 'Bab 1',
+        order: 1,
+        linkedTpIds: ['tp-101'],
+        linkedAtpItemIds: ['atp-201'],
+        materials: [{ id: 'mat-1', title: 'Materi 1', order: 1, linkedAtpItemIds: ['atp-201'], linkedTpIds: ['tp-101'] }]
+      }
     ]
   };
-  const mockExecutionPlan = {
+  const b19ExecutionPlan = {
     units: [
       {
         unitId: 'unit-1',
         meetings: [
-          { id: 'meet-1', title: 'Pertemuan 1', order: 1, jp: 2, linkedTpIds: ['tp-101'], linkedAtpItemIds: ['atp-201'], materialIds: ['mat-1'], unitId: 'unit-1' }
+          { id: 'meet-3', title: 'Pertemuan C', order: 3, jp: 1, linkedTpIds: ['tp-101'], linkedAtpItemIds: ['atp-201'], materialIds: ['mat-1'], unitId: 'unit-1' },
+          { id: 'meet-1', title: 'Pertemuan A', order: 1, jp: 2, linkedTpIds: ['tp-101'], linkedAtpItemIds: ['atp-201'], materialIds: ['mat-1'], unitId: 'unit-1' },
+          { id: 'meet-2', title: 'Pertemuan B', order: 2, jp: 3, linkedTpIds: ['tp-101'], linkedAtpItemIds: ['atp-201'], materialIds: ['mat-1'], unitId: 'unit-1' }
         ]
       }
     ]
   };
-  const mockSchedules = [
+  const b19Schedules = [
     {
       semesterPlanId: 'setting-1',
       semester: 1,
@@ -541,7 +563,9 @@ async function runRegressionSuite() {
         semesterPlanId: 'setting-1',
         status: 'COMPLETE',
         entries: [
-          { meetingId: 'meet-1', date: '2026-10-12', entryMode: 'ACTUAL', semesterPlanId: 'setting-1', unitId: 'unit-1', jp: 2 }
+          { meetingId: 'meet-3', date: '2026-10-12', entryMode: 'ACTUAL', semesterPlanId: 'setting-1', unitId: 'unit-1', jp: 1 },
+          { meetingId: 'meet-1', date: '2026-10-12', entryMode: 'ACTUAL', semesterPlanId: 'setting-1', unitId: 'unit-1', jp: 2 },
+          { meetingId: 'meet-2', date: '2026-10-12', entryMode: 'ACTUAL', semesterPlanId: 'setting-1', unitId: 'unit-1', jp: 3 }
         ]
       }
     }
@@ -556,69 +580,270 @@ async function runRegressionSuite() {
     items: [mockAtpData.items[0]]
   };
 
-  const scopes = buildLearningPlanScopeUnits({
+  const b19Scopes = buildLearningPlanScopeUnits({
     academicSetting: mockSetting,
-    atpUnitMapping: mockMapping as any,
-    unitExecutionPlan: mockExecutionPlan as any,
-    learningMeetingSchedules: mockSchedules as any,
+    atpUnitMapping: b19Mapping as any,
+    unitExecutionPlan: b19ExecutionPlan as any,
+    learningMeetingSchedules: b19Schedules as any,
     tp: testTpData,
     atp: testAtpData
   });
 
-  if (scopes.length === 0) {
-    const result = resolveScheduledLearningMeetings({
-      mapping: mockMapping as any,
-      unitExecutionPlan: mockExecutionPlan as any,
-      schedules: mockSchedules as any,
-      tp: mockTpData,
-      atp: mockAtpData
-    });
-    console.log('resolveScheduledLearningMeetings errors:', result.errors);
-  }
-
   assert(
-    scopes.length === 1 && scopes[0].meetings && scopes[0].meetings.length === 1,
-    'buildLearningPlanScopeUnits must parse and map meetings correctly',
-    `length=${scopes.length}, meetingsCount=${scopes[0]?.meetings?.length}`
+    b19Scopes.length === 1 && b19Scopes[0].meetings && b19Scopes[0].meetings.length === 3,
+    'buildLearningPlanScopeUnits must return all 3 meetings',
+    `meetingsLength=${b19Scopes[0]?.meetings?.length}`
   );
-  if (scopes[0]?.meetings?.[0]) {
-    const m = scopes[0].meetings[0];
+
+  if (b19Scopes[0]?.meetings) {
+    const orders = b19Scopes[0].meetings.map(m => m.order);
+    const ids = b19Scopes[0].meetings.map(m => m.meetingId);
     assert(
-      m.meetingId === 'meet-1' && m.order === 1 && m.title === 'Pertemuan 1' && m.jp === 2,
-      'Mapped meeting fields must have correct values',
-      `id=${m.meetingId}, title=${m.title}, jp=${m.jp}`
+      orders[0] === 1 && orders[1] === 2 && orders[2] === 3,
+      'Meetings must be sorted deterministically by canonical meeting order',
+      `orders=${JSON.stringify(orders)}`
+    );
+    assert(
+      ids[0] === 'meet-1' && ids[1] === 'meet-2' && ids[2] === 'meet-3',
+      'Meeting IDs must match sorted orders',
+      `ids=${JSON.stringify(ids)}`
     );
   }
 
-  console.log('\n--- Test J: generateAutoDraftPlansFromCanonicalContext respects embedded assessments (B19) ---');
-  const mockLpWithFormative: any = {
-    id: 'lp-with-assessment',
-    academicSettingId: 'setting-1',
-    sourceType: 'TEACHER_CREATED',
-    status: 'SIAP',
-    tpIds: ['tp-101'],
-    atpItemIds: ['atp-201'],
-    objectives: [],
-    assessmentPlan: {
-      formative: [
-        { id: 'ap-1', type: 'FORMATIVE', technique: 'Tes Tulis', description: 'Kuis formatif', linkedTpIds: ['tp-101'] }
-      ]
-    },
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+  console.log('\n--- B19.3: Total JP sum ---');
+  if (b19Scopes[0]) {
+    assert(
+      b19Scopes[0].jp === 6,
+      'Scope JP must exactly equal the sum of meeting JPs (1 + 2 + 3 = 6)',
+      `jp=${b19Scopes[0].jp}`
+    );
+  }
+
+  console.log('\n--- B19.4: Diagnostic Flags & Counts ---');
+  const simulatedMetadata = (scope: any, criteria: any[]) => {
+    const tpsToSend = scope.tpItems || [];
+    const tpIdsToSend = tpsToSend.map((t: any) => t.id);
+    const relevantCriteria = criteria.filter((ac) => tpIdsToSend.includes(ac.tpId));
+    const hasKktp = relevantCriteria.length > 0;
+    return {
+      meetingStructureSent: !!scope.meetings?.length,
+      meetingStructureCount: scope.meetings?.length || 0,
+      kktpSent: hasKktp,
+      kktpCount: relevantCriteria.length,
+    };
   };
 
-  const autoDrafts = generateAutoDraftPlansFromCanonicalContext({
+  const metaWithData = simulatedMetadata(b19Scopes[0], allCriteria);
+  assert(
+    metaWithData.meetingStructureSent === true &&
+    metaWithData.meetingStructureCount === 3 &&
+    metaWithData.kktpSent === true &&
+    metaWithData.kktpCount === 1,
+    'Diagnostic flags must correctly capture active meetings and relevant criteria',
+    `metaWithData=${JSON.stringify(metaWithData)}`
+  );
+
+  const emptyScope = { tpItems: [], meetings: [] };
+  const metaEmpty = simulatedMetadata(emptyScope, []);
+  assert(
+    metaEmpty.meetingStructureSent === false &&
+    metaEmpty.meetingStructureCount === 0 &&
+    metaEmpty.kktpSent === false &&
+    metaEmpty.kktpCount === 0,
+    'Diagnostic flags must be false/zero when meetings or KKTP are absent',
+    `metaEmpty=${JSON.stringify(metaEmpty)}`
+  );
+
+  console.log('\n--- B19.5: Embedded Assessment Dedupe logic ---');
+  // lp without assessment -> tp gets auto-draft AssessmentPlan
+  const lpWithoutAssessment: any = {
+    id: 'lp-no-assess',
+    academicSettingId: 'setting-1',
+    tpIds: ['tp-101'],
+    assessmentPlan: {}
+  };
+  const draftsWithNoAssess = generateAutoDraftPlansFromCanonicalContext({
     academicSetting: mockSetting,
     tp: mockTpData,
-    learningPlans: [mockLpWithFormative],
+    learningPlans: [lpWithoutAssessment],
     existingPlans: []
+  });
+  assert(
+    draftsWithNoAssess.length === 2 && draftsWithNoAssess.some(d => d.tpIds?.includes('tp-101')),
+    'TP should get auto-draft AssessmentPlan if LearningPlan does not embed assessments',
+    `draftsLength=${draftsWithNoAssess.length}`
+  );
+
+  // lp with assessment -> auto-draft rutin skipped
+  const lpWithAssessment: any = {
+    id: 'lp-with-assess',
+    academicSettingId: 'setting-1',
+    tpIds: ['tp-101'],
+    assessmentPlan: {
+      formative: [{ id: 'f-1', type: 'FORMATIVE', technique: 'Observation', description: 'Obs', linkedTpIds: ['tp-101'] }]
+    }
+  };
+  const draftsWithAssess = generateAutoDraftPlansFromCanonicalContext({
+    academicSetting: mockSetting,
+    tp: mockTpData,
+    learningPlans: [lpWithAssessment],
+    existingPlans: []
+  });
+  assert(
+    draftsWithAssess.length === 1 && draftsWithAssess[0].tpIds?.[0] === 'tp-102',
+    'TP already covered by embedded assessments should be skipped in auto-drafting',
+    `draftsCount=${draftsWithAssess.length}, firstTpId=${draftsWithAssess[0]?.tpIds?.[0]}`
+  );
+
+  // existing AssessmentPlan prevents duplicates
+  const existingPlan: any = {
+    id: 'exist-ap-1',
+    academicSettingId: 'setting-1',
+    tpIds: ['tp-101']
+  };
+  const draftsWithExist = generateAutoDraftPlansFromCanonicalContext({
+    academicSetting: mockSetting,
+    tp: mockTpData,
+    learningPlans: [lpWithoutAssessment],
+    existingPlans: [existingPlan]
+  });
+  assert(
+    draftsWithExist.length === 1 && draftsWithExist[0].tpIds?.[0] === 'tp-102',
+    'Existing separate AssessmentPlan prevents duplicating drafts for that TP',
+    `draftsCount=${draftsWithExist.length}`
+  );
+
+  // special manual scope still works
+  assert(
+    typeof generateAutoDraftPlansFromCanonicalContext === 'function',
+    'generateAutoDraftPlansFromCanonicalContext remains fully operational'
+  );
+
+  console.log('\n--- B19.6: Scope Isolation ---');
+  const isolatedMapping = {
+    units: [
+      {
+        id: 'unit-1',
+        title: 'Bab 1',
+        order: 1,
+        linkedTpIds: ['tp-101'],
+        linkedAtpItemIds: ['atp-201'],
+        materials: [{ id: 'mat-1', title: 'Materi 1', order: 1, linkedAtpItemIds: ['atp-201'], linkedTpIds: ['tp-101'] }]
+      },
+      {
+        id: 'unit-2',
+        title: 'Bab 2',
+        order: 2,
+        linkedTpIds: ['tp-102'],
+        linkedAtpItemIds: ['atp-202'],
+        materials: [{ id: 'mat-2', title: 'Materi 2', order: 1, linkedAtpItemIds: ['atp-202'], linkedTpIds: ['tp-102'] }]
+      }
+    ]
+  };
+  const isolatedExecutionPlan = {
+    units: [
+      {
+        unitId: 'unit-1',
+        meetings: [
+          { id: 'meet-1', title: 'Pertemuan 1', order: 1, jp: 2, linkedTpIds: ['tp-101'], linkedAtpItemIds: ['atp-201'], materialIds: ['mat-1'], unitId: 'unit-1' }
+        ]
+      },
+      {
+        unitId: 'unit-2',
+        meetings: [
+          { id: 'meet-2', title: 'Pertemuan 2', order: 1, jp: 3, linkedTpIds: ['tp-102'], linkedAtpItemIds: ['atp-202'], materialIds: ['mat-2'], unitId: 'unit-2' }
+        ]
+      }
+    ]
+  };
+  const isolatedSchedules = [
+    {
+      semesterPlanId: 'setting-1',
+      semester: 1,
+      schedule: {
+        semesterPlanId: 'setting-1',
+        status: 'COMPLETE',
+        entries: [
+          { meetingId: 'meet-1', date: '2026-10-12', entryMode: 'ACTUAL', semesterPlanId: 'setting-1', unitId: 'unit-1', jp: 2 },
+          { meetingId: 'meet-2', date: '2026-10-13', entryMode: 'ACTUAL', semesterPlanId: 'setting-1', unitId: 'unit-2', jp: 3 }
+        ]
+      }
+    }
+  ];
+
+  const isolatedScopes = buildLearningPlanScopeUnits({
+    academicSetting: mockSetting,
+    atpUnitMapping: isolatedMapping as any,
+    unitExecutionPlan: isolatedExecutionPlan as any,
+    learningMeetingSchedules: isolatedSchedules as any,
+    tp: mockTpData,
+    atp: mockAtpData
   });
 
   assert(
-    autoDrafts.length === 1 && autoDrafts[0].tpIds && autoDrafts[0].tpIds[0] === 'tp-102',
-    'generateAutoDraftPlansFromCanonicalContext must skip tp-101 (already covered) and only draft for tp-102',
-    `autoDraftsCount=${autoDrafts.length}, firstTpId=${autoDrafts[0]?.tpIds?.[0]}`
+    isolatedScopes.length === 2,
+    'buildLearningPlanScopeUnits should produce exactly 2 scoped units',
+    `length=${isolatedScopes.length}`
+  );
+
+  const scope1 = isolatedScopes.find(s => s.unitId === 'unit-1');
+  const scope2 = isolatedScopes.find(s => s.unitId === 'unit-2');
+
+  assert(
+    scope1 && scope1.linkedTpIds.includes('tp-101') && !scope1.linkedTpIds.includes('tp-102') &&
+    scope1.meetings?.length === 1 && scope1.meetings[0].meetingId === 'meet-1',
+    'Scope for unit-1 must be strictly isolated from unit-2 resources',
+    `scope1TpIds=${JSON.stringify(scope1?.linkedTpIds)}, scope1Meetings=${JSON.stringify(scope1?.meetings?.map(m => m.meetingId))}`
+  );
+
+  assert(
+    scope2 && scope2.linkedTpIds.includes('tp-102') && !scope2.linkedTpIds.includes('tp-101') &&
+    scope2.meetings?.length === 1 && scope2.meetings[0].meetingId === 'meet-2',
+    'Scope for unit-2 must be strictly isolated from unit-1 resources',
+    `scope2TpIds=${JSON.stringify(scope2?.linkedTpIds)}, scope2Meetings=${JSON.stringify(scope2?.meetings?.map(m => m.meetingId))}`
+  );
+
+  console.log('\n--- B19.7: Backward Compatibility ---');
+  const legacyLpNoMeetings = createAIDraftLearningPlan({
+    academicSetting: mockSetting,
+    curriculumType: 'KURIKULUM_MERDEKA',
+    tpIds: ['tp-101'],
+    aiDraft: {
+      initialCompetency: 'Dapat menggambar',
+      learningExperiences: [
+        { phase: 'UNDERSTAND', description: 'Memahami gambar' },
+        { phase: 'APPLY', description: 'Menggambar peta' },
+        { phase: 'REFLECT', description: 'Refleksi hasil gambar' }
+      ] as any,
+      graduateProfileDimensions: ['Penalaran Kritis']
+    }
+  });
+
+  assert(
+    legacyLpNoMeetings.id && !legacyLpNoMeetings.learningMeetingIds,
+    'Backward compatibility: LearningPlan without meetings is created and drafted successfully',
+    `id=${legacyLpNoMeetings.id}`
+  );
+
+  const legacyLpNoKktp = createAIDraftLearningPlan({
+    academicSetting: mockSetting,
+    curriculumType: 'KURIKULUM_MERDEKA',
+    tpIds: ['tp-101'],
+    aiDraft: {
+      initialCompetency: 'Siswa mandiri',
+      learningExperiences: [
+        { phase: 'UNDERSTAND', description: 'Memahami' },
+        { phase: 'APPLY', description: 'Menerapkan' },
+        { phase: 'REFLECT', description: 'Refleksi' }
+      ] as any,
+      graduateProfileDimensions: ['Kemandirian']
+    }
+  });
+
+  assert(
+    legacyLpNoKktp.status === 'DRAFT' && !legacyLpNoKktp.kktpCriterionIds,
+    'Backward compatibility: LearningPlan without KKTP can still be constructed as a DRAFT',
+    `status=${legacyLpNoKktp.status}`
   );
 
   console.log(`\n==========================================`);

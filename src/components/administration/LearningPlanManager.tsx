@@ -490,7 +490,8 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
 
     const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
     const tpIdsToSend = tpsToSend.map((t) => t.id);
-    const hasKktp = (assessmentCriteria || []).some((ac) => tpIdsToSend.includes(ac.tpId));
+    const relevantCriteria = (assessmentCriteria || []).filter((ac) => tpIdsToSend.includes(ac.tpId));
+    const hasKktp = relevantCriteria.length > 0;
 
     try {
       recordDiagnosticEvent({
@@ -504,7 +505,9 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
           learningMeetingCount: scope.learningMeetingIds?.length || 0,
           allocatedJP: scope.jp || 0,
           meetingStructureSent: !!scope.meetings?.length,
+          meetingStructureCount: scope.meetings?.length || 0,
           kktpSent: hasKktp,
+          kktpCount: relevantCriteria.length,
         },
       });
       const draftPlan = await generateAIDraftPlanForScope(scope);
@@ -697,7 +700,8 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       try {
         const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
         const tpIdsToSend = tpsToSend.map((t) => t.id);
-        const hasKktp = (assessmentCriteria || []).some((ac) => tpIdsToSend.includes(ac.tpId));
+        const relevantCriteria = (assessmentCriteria || []).filter((ac) => tpIdsToSend.includes(ac.tpId));
+        const hasKktp = relevantCriteria.length > 0;
 
         recordDiagnosticEvent({
           scope: 'LEARNING_PLAN',
@@ -710,7 +714,9 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
             learningMeetingCount: scope.learningMeetingIds?.length || 0,
             allocatedJP: scope.jp || 0,
             meetingStructureSent: !!scope.meetings?.length,
+            meetingStructureCount: scope.meetings?.length || 0,
             kktpSent: hasKktp,
+            kktpCount: relevantCriteria.length,
           },
         });
         const draftPlan = await generateAIDraftPlanForScope(scope);
