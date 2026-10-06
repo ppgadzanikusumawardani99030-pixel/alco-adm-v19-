@@ -151,6 +151,8 @@ export function validateATPUnitMappingCanonical(
       }
       if (!supported) {
         unitHasLineage = false;
+        result.isValid = false;
+        result.invalidReferenceCount++;
         result.issues.push(`TP '${tpId}' pada Bab '${u.title || u.id}' tidak didukung oleh langkah ATP mana pun di Bab tersebut.`);
       }
     }
@@ -213,6 +215,8 @@ export function validateATPUnitMappingCanonical(
         }
         if (!supported) {
           matHasLineage = false;
+          result.isValid = false;
+          result.invalidReferenceCount++;
           result.issues.push(`TP '${tpId}' pada Lingkup Materi '${m.title || m.id}' tidak didukung oleh langkah ATP mana pun di materi tersebut.`);
         }
       }

@@ -463,28 +463,30 @@ export function sanitizeMappingAnalysisResult(
       const matExists = validMaterialMap.has(targetMaterialId);
       const belongsToUnit = validMaterialMap.get(targetMaterialId) === targetUnitId;
 
-      const actionAtpIds = (Array.isArray(m.action.linkedAtpItemIds) ? m.action.linkedAtpItemIds : [])
-        .map((id: any) => String(id).trim())
-        .filter((id: string) => validAtpIds.has(id));
+      const rawAtpIds = (Array.isArray(m.action.linkedAtpItemIds) ? m.action.linkedAtpItemIds : [])
+        .map((id: any) => String(id).trim());
+      const rawTpIds = (Array.isArray(m.action.linkedTpIds) ? m.action.linkedTpIds : [])
+        .map((id: any) => String(id).trim());
 
-      const actionTpIds = (Array.isArray(m.action.linkedTpIds) ? m.action.linkedTpIds : [])
-        .map((id: any) => String(id).trim())
-        .filter((id: string) => validTpIds.has(id));
+      const allAtpIdsValid = rawAtpIds.length > 0 && rawAtpIds.every((id) => validAtpIds.has(id));
+      const allTpIdsValid = rawTpIds.length > 0 && rawTpIds.every((id) => validTpIds.has(id));
 
-      let allTpSupported = actionTpIds.length > 0 && actionAtpIds.length > 0;
-      for (const tpId of actionTpIds) {
-        let supported = false;
-        for (const atpId of actionAtpIds) {
-          const atpItem = atpMap.get(atpId);
-          const canonTps = getCanonicalTpsForAtpItem(atpItem);
-          if (canonTps.includes(tpId)) {
-            supported = true;
+      let allTpSupported = allAtpIdsValid && allTpIdsValid;
+      if (allTpSupported) {
+        for (const tpId of rawTpIds) {
+          let supported = false;
+          for (const atpId of rawAtpIds) {
+            const atpItem = atpMap.get(atpId);
+            const canonTps = getCanonicalTpsForAtpItem(atpItem);
+            if (canonTps.includes(tpId)) {
+              supported = true;
+              break;
+            }
+          }
+          if (!supported) {
+            allTpSupported = false;
             break;
           }
-        }
-        if (!supported) {
-          allTpSupported = false;
-          break;
         }
       }
 
@@ -492,16 +494,14 @@ export function sanitizeMappingAnalysisResult(
         unitExists &&
         matExists &&
         belongsToUnit &&
-        actionAtpIds.length > 0 &&
-        actionTpIds.length > 0 &&
         allTpSupported
       ) {
         action = {
           type: 'ALIGN_EXISTING_MATERIAL',
           targetUnitId,
           targetMaterialId,
-          linkedAtpItemIds: actionAtpIds,
-          linkedTpIds: actionTpIds,
+          linkedAtpItemIds: rawAtpIds,
+          linkedTpIds: rawTpIds,
         };
       } else {
         status = 'MANUAL_REVIEW';
@@ -896,7 +896,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
           return mTokens.some((tok) => tTokens.includes(tok));
         });
 
-        const selectedTps = relevantTps.length > 0 ? relevantTps : (canonTps.length > 0 ? [canonTps[0]] : []);
+        const selectedTps = relevantTps;
 
         if (selectedTps.length > 0) {
           materialFindings.push({

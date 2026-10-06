@@ -347,12 +347,17 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     };
     const validation = validateATPUnitMappingCanonical(tempMappingData, atp, tp);
 
-    // Compute Z
+    // C6: Readiness Summary
     const zCount = validation.unmappedAtpIds.length + validation.uncoveredTpIds.length;
 
-    const summaryMessage = validation.isComplete
-      ? 'Pemetaan Bab dan Lingkup Materi lengkap.'
-      : 'Pemetaan belum siap digunakan.';
+    let summaryMessage = '';
+    if (zCount > 0) {
+      summaryMessage = 'Saran: Tambahkan Bab/Materi atau hubungkan ATP/TP yang tersisa.';
+    } else if (!validation.isValid) {
+      summaryMessage = 'Saran: Perbaiki silsilah/lineage yang tidak valid.';
+    } else {
+      summaryMessage = 'Lengkap & Siap.';
+    }
 
     return {
       isComplete: validation.isComplete,
@@ -1225,17 +1230,33 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
           </div>
         )}
 
-        {/* Structural Status Summary Banner */}
+        {/* Structural Status Summary Banner (Readiness Summary C6) */}
         <div className="mt-3">
           {localValidation.isComplete ? (
             <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2">
               <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Pemetaan Bab dan Lingkup Materi lengkap.</span>
+              <span>{localValidation.summaryMessage}</span>
             </div>
           ) : (
-            <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs font-medium flex items-center gap-2">
-              <Info className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>{localValidation.summaryMessage}</span>
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 space-y-2">
+              <div className="flex items-center gap-2 text-xs font-bold">
+                <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>{localValidation.summaryMessage}</span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 px-6">
+                <div className="text-[10px] flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${localValidation.unitsWithoutLineageCount > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                  <span>{localValidation.unitsWithoutLineageCount} Bab belum memiliki lineage</span>
+                </div>
+                <div className="text-[10px] flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${localValidation.materialsWithoutLineageCount > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                  <span>{localValidation.materialsWithoutLineageCount} Materi belum diselaraskan</span>
+                </div>
+                <div className="text-[10px] flex items-center gap-1.5">
+                  <span className={`w-1.5 h-1.5 rounded-full ${localValidation.unmappedAtpAndUncoveredTpCount > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                  <span>{localValidation.unmappedAtpAndUncoveredTpCount} ATP/TP canonical tersisa (Z)</span>
+                </div>
+              </div>
             </div>
           )}
         </div>
