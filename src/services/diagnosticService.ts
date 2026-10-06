@@ -13,7 +13,10 @@ import {
 } from '../types';
 import { APP_BUILD_ID } from '../config/buildInfo';
 import { normalizePhaseCode, TPValidationDetails } from './cpWorkflowService';
-import { UnitExecutionPlanValidationResult } from './unitExecutionPlanService';
+import {
+  UnitExecutionPlanValidationResult,
+  resolveUnitSemesterPlacement,
+} from './unitSemesterPlanningService';
 import { AIMeetingDiagnostic } from './aiService';
 import { UnitSemesterPlacementValidation } from './unitSemesterPlanningService';
 
@@ -515,19 +518,31 @@ export function buildUnitExecutionPlanAIDiagnosticReport(data: {
         ? data.capacityContext.semester1LastUnitId
         : (plan?.semesterPlacement?.semester1LastUnitId ?? null));
 
-  const s1UnitIds = diag?.semester1UnitIds || [];
-  const s2UnitIds = diag?.semester2UnitIds || [];
+  let s1UnitIds = diag?.semester1UnitIds || [];
+  let s2UnitIds = diag?.semester2UnitIds || [];
+
+  if (!diag && mapping && plan) {
+     const placementValidation = resolveUnitSemesterPlacement(plan, mapping);
+     s1UnitIds = placementValidation.semester1UnitIds || [];
+     s2UnitIds = placementValidation.semester2UnitIds || [];
+  }
 
   // Capacity calculations
+  const capS1Target = data.capacityContext?.semester1?.targetMeetingCount ?? 0;
+  const capS2Target = data.capacityContext?.semester2?.targetMeetingCount ?? 0;
+
+  const capS1Existing = s1UnitIds.flatMap(id => (plan?.units?.find(u => u.unitId === id)?.meetings || [])).length;
+  const capS2Existing = s2UnitIds.flatMap(id => (plan?.units?.find(u => u.unitId === id)?.meetings || [])).length;
+
   const capS1 = diag?.capacity?.semester1 || {
-    target: data.capacityContext?.semester1?.targetMeetingCount ?? 0,
-    existing: 0,
-    requestedNew: 0,
+    target: capS1Target,
+    existing: capS1Existing,
+    requestedNew: Math.max(0, capS1Target - capS1Existing),
   };
   const capS2 = diag?.capacity?.semester2 || {
-    target: data.capacityContext?.semester2?.targetMeetingCount ?? 0,
-    existing: 0,
-    requestedNew: 0,
+    target: capS2Target,
+    existing: capS2Existing,
+    requestedNew: Math.max(0, capS2Target - capS2Existing),
   };
 
   // Current plan meeting count per unit

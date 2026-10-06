@@ -2180,6 +2180,13 @@ RULES WAJIB:
 10. Semua missingCoverage yang tertera wajib tercakup sepenuhnya dalam tambahan Pertemuan yang Anda buat.
 11. Judul Pertemuan harus substantif, kreatif, dan berbeda secara pedagogis. Hindari judul generik seperti "Pertemuan 1", "Pertemuan 2", atau "Pembelajaran materi X".
 12. Setiap Pertemuan yang diusulkan wajib memiliki minimal satu referensi canonical (tidak boleh ketiganya: materialIds, linkedAtpItemIds, dan linkedTpIds kosong).
+13. Setia Pertemuan WAJIB memiliki Material + ATP + TP. Jika suatu Material digunakan, seluruh ATP dan TP canonical milik Material tersebut wajib dicantumkan pada Pertemuan.
+14. Setiap TP pada Pertemuan wajib didukung oleh minimal satu ATP yang juga tercantum pada Pertemuan tersebut.
+15. Setia Pertemuan harus mengikuti aturan:
+    - materialIds non-empty
+    - linkedAtpItemIds non-empty
+    - linkedTpIds non-empty
+    - Semua ID wajib milik Unit yang sama.
 
 DATA KONTEKS UNIT:
 ${JSON.stringify(unitsContext, null, 2)}
@@ -2493,6 +2500,54 @@ Kembalikan respon JSON dengan skema:
             });
           }
           cov.tps.add(tpId);
+        }
+
+        // Lineage Check: Material ATP ⊆ Meeting ATP, Material TP ⊆ Meeting TP
+        const atpSet = new Set(m.linkedAtpItemIds);
+        const tpSet = new Set(m.linkedTpIds);
+        for (const matId of m.materialIds) {
+          const mat = canonicalUnit.materials.find((x: any) => x.id === matId);
+          if (mat) {
+             for (const matAtpId of mat.linkedAtpItemIds || []) {
+                if (!atpSet.has(matAtpId)) {
+                   return res.status(400).json({
+                     success: false,
+                     code: 'MEETING_LINEAGE_INVALID',
+                     error: `Pertemuan '${title}' menggunakan material '${mat.title || matId}' tetapi ATP '${matAtpId}' yang diwajibkan material tersebut tidak terdapat pada pertemuan.`,
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, invalidId: matAtpId } }),
+                   });
+                }
+             }
+             for (const matTpId of mat.linkedTpIds || []) {
+                if (!tpSet.has(matTpId)) {
+                   return res.status(400).json({
+                     success: false,
+                     code: 'MEETING_LINEAGE_INVALID',
+                     error: `Pertemuan '${title}' menggunakan material '${mat.title || matId}' tetapi TP '${matTpId}' yang diwajibkan material tersebut tidak terdapat pada pertemuan.`,
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, invalidId: matTpId } }),
+                   });
+                }
+             }
+          }
+        }
+        // TP Support Check
+        const meetingSupportedTpSet = new Set<string>();
+        for (const atpId of m.linkedAtpItemIds) {
+           const atpItem = validAtpMap.get(atpId);
+           if (atpItem) {
+              const tps = Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0 ? atpItem.linkedTpIds : atpItem.tpId ? [atpItem.tpId] : [];
+              tps.forEach((tId: string) => meetingSupportedTpSet.add(tId));
+           }
+        }
+        for (const tpId of m.linkedTpIds) {
+           if (!meetingSupportedTpSet.has(tpId)) {
+              return res.status(400).json({
+                     success: false,
+                     code: 'MEETING_LINEAGE_INVALID',
+                     error: `TP '${tpId}' pada pertemuan '${title}' tidak didukung oleh ATP pertemuan tersebut.`,
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, invalidId: tpId } }),
+                   });
+           }
         }
 
         if (m.materialIds.length + m.linkedAtpItemIds.length + m.linkedTpIds.length === 0) {
