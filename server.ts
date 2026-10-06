@@ -2415,11 +2415,11 @@ Kembalikan respon JSON dengan skema:
           });
         }
 
-        if (!Array.isArray(m.materialIds) || !Array.isArray(m.linkedAtpItemIds) || !Array.isArray(m.linkedTpIds)) {
+        if (!Array.isArray(m.materialIds)) {
           return res.status(400).json({
             success: false,
             code: 'AI_FORMAT_INVALID',
-            error: `Array referensi kosong atau salah tipe pada unit '${uId}'.`,
+            error: `Format pertemuan tidak valid pada unit '${uId}'.`,
             diagnostic: buildDiagnostic({
               stage: 'MEETING_VALIDATION',
               code: 'AI_FORMAT_INVALID',
@@ -2479,21 +2479,76 @@ Kembalikan respon JSON dengan skema:
 
           const mat = canonicalUnit.materials.find((x: any) => x.id === matId);
           if (mat) {
-             if ((mat.linkedAtpItemIds || []).length === 0 || (mat.linkedTpIds || []).length === 0) {
+             const matAtpIds = mat.linkedAtpItemIds || [];
+             const matTpIds = mat.linkedTpIds || [];
+             
+             if (matAtpIds.length === 0) {
                return res.status(400).json({
                      success: false,
                      code: 'MEETING_LINEAGE_INVALID',
-                     error: `Material '${mat.title || matId}' tidak memiliki ATP atau TP canonical.`,
-                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title } }),
+                     error: `Material '${mat.title || matId}' tidak memiliki ATP canonical.`,
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedAtpItemIds' } }),
                    });
              }
-             (mat.linkedAtpItemIds || []).forEach((atpId: string) => derivedAtpIds.add(atpId));
-             (mat.linkedTpIds || []).forEach((tpId: string) => derivedTpIds.add(tpId));
+             if (matTpIds.length === 0) {
+               return res.status(400).json({
+                     success: false,
+                     code: 'MEETING_LINEAGE_INVALID',
+                     error: `Material '${mat.title || matId}' tidak memiliki TP canonical.`,
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds' } }),
+                   });
+             }
+             matAtpIds.forEach((atpId: string) => derivedAtpIds.add(atpId));
+             matTpIds.forEach((tpId: string) => derivedTpIds.add(tpId));
           }
         }
         
-        m.linkedAtpItemIds = Array.from(derivedAtpIds);
-        m.linkedTpIds = Array.from(derivedTpIds);
+        // Canonical lineage validation of derived IDs
+        for (const atpId of derivedAtpIds) {
+          if (!validAtpIds.has(atpId)) {
+             return res.status(400).json({
+                     success: false,
+                     code: 'MEETING_LINEAGE_INVALID',
+                     error: `Derivasi ATP '${atpId}' tidak valid untuk unit '${uId}'.`,
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedAtpItemIds', invalidId: atpId } }),
+                   });
+          }
+        }
+        for (const tpId of derivedTpIds) {
+          if (!validTpIds.has(tpId)) {
+             return res.status(400).json({
+                     success: false,
+                     code: 'MEETING_LINEAGE_INVALID',
+                     error: `Derivasi TP '${tpId}' tidak valid untuk unit '${uId}'.`,
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds', invalidId: tpId } }),
+                   });
+          }
+        }
+
+        // Canonical order
+        m.linkedAtpItemIds = (canonicalUnit.linkedAtpItemIds || []).filter(id => derivedAtpIds.has(id));
+        m.linkedTpIds = (canonicalUnit.linkedTpIds || []).filter(id => derivedTpIds.has(id));
+        
+        // Check for TP support
+        const meetingSupportedTpSet = new Set<string>();
+        m.linkedAtpItemIds.forEach((atpId: string) => {
+            const atpItem = validAtpMap.get(atpId);
+            if (atpItem) {
+                const tps = Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0 ? atpItem.linkedTpIds : atpItem.tpId ? [atpItem.tpId] : [];
+                tps.forEach((tId: string) => meetingSupportedTpSet.add(tId));
+            }
+        });
+        
+        for (const tpId of m.linkedTpIds) {
+           if (!meetingSupportedTpSet.has(tpId)) {
+              return res.status(400).json({
+                     success: false,
+                     code: 'MEETING_LINEAGE_INVALID',
+                     error: `TP '${tpId}' pada pertemuan '${title}' tidak didukung oleh ATP pertemuan tersebut.`,
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds', invalidId: tpId } }),
+                   });
+           }
+        }
         
         m.linkedAtpItemIds.forEach(id => cov.atpItems.add(id));
         m.linkedTpIds.forEach(id => cov.tps.add(id));
