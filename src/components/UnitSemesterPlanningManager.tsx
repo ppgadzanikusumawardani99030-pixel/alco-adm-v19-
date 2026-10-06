@@ -8,6 +8,7 @@ import {
   resolveUnitSemesterPlacement,
   suggestSemesterBoundary,
 } from '../services/unitSemesterPlanningService';
+import { createEmptyUnitExecutionPlanData } from '../services/unitExecutionPlanService';
 import { buildUnitSemesterPlanningDiagnosticReport } from '../services/diagnosticService';
 import {
   Layers,
@@ -48,6 +49,27 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
     type: 'success' | 'error' | 'warning';
     message: string;
   } | null>(null);
+  const [isSyncModalOpen, setIsSyncModalOpen] = useState(false);
+
+  const handleSyncMapping = () => {
+    const freshPlan = createEmptyUnitExecutionPlanData(mapping);
+    const success = onSave(freshPlan);
+    if (success) {
+      setIsSyncModalOpen(false);
+      setPlacementDraft(undefined);
+      setSaveNotice({
+        type: 'success',
+        message: 'Struktur Pertemuan berhasil disinkronkan dengan Pemetaan terbaru. Tetapkan kembali pembagian Semester 1 dan Semester 2.',
+      });
+      setTimeout(() => setSaveNotice(null), 6000);
+    } else {
+      setSaveNotice({
+        type: 'error',
+        message: 'Gagal melakukan sinkronisasi.',
+      });
+      setTimeout(() => setSaveNotice(null), 4000);
+    }
+  };
 
   // Sync draft only when persisted placement genuinely changes (stable scalar dependency)
   useEffect(() => {
@@ -328,7 +350,43 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
         </div>
       )}
 
+      {/* Sync Modal */}
+      {isSyncModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-sm w-full space-y-4">
+            <h3 className="font-bold text-lg text-slate-900">Sinkronisasi Pemetaan</h3>
+            <p className="text-sm text-slate-600">
+              Sinkronisasi akan:
+              <br/>- membuat struktur Unit sesuai Pemetaan terbaru
+              <br/>- menghapus Struktur Pertemuan lama
+              <br/>- menghapus pembagian semester lama
+              <br/>- tidak mengubah Waktu Semester 1 & 2
+              <br/><br/>Lanjutkan?
+            </p>
+            <div className="flex gap-2 justify-end">
+              <button onClick={() => setIsSyncModalOpen(false)} className="px-4 py-2 text-sm font-bold text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer">Batal</button>
+              <button onClick={handleSyncMapping} className="px-4 py-2 text-sm font-bold bg-blue-600 text-white hover:bg-blue-500 rounded-xl cursor-pointer">Lanjutkan</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Warnings / Errors */}
+      {validation.isStale && (
+        <div className="mx-5 mt-4 p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 flex items-center justify-between gap-4 text-xs">
+          <p>
+            <strong>Pemetaan Unit/Bab telah berubah.</strong><br/>
+            Struktur Pertemuan masih menggunakan versi lama. Sinkronkan terlebih dahulu sebelum menyimpan pembagian semester.
+          </p>
+          <button
+            type="button"
+            onClick={() => setIsSyncModalOpen(true)}
+            className="px-4 py-2 rounded-xl font-bold bg-amber-600 text-white hover:bg-amber-500 transition cursor-pointer shrink-0"
+          >
+            Sinkronkan dengan Pemetaan Terbaru
+          </button>
+        </div>
+      )}
       {validation.errors.length > 0 && (
         <div className="mx-5 mt-4 p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs">
           <ul className="list-disc pl-5 space-y-0.5">
