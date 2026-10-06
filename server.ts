@@ -1620,13 +1620,9 @@ Kembalikan respon JSON dengan skema:
 
           // Sanitize linkedTpIds: preserve authentic subset chosen by AI that is supported by unit's ATPs
           // Do NOT expand to all resolved TPs of unit's ATPs!
-          let validLinkedTpIds: string[] = Array.isArray(u.linkedTpIds)
+          const validLinkedTpIds: string[] = Array.isArray(u.linkedTpIds)
             ? Array.from(new Set(u.linkedTpIds.filter((id: string) => tpMap.has(id) && unitSupportedTpSet.has(id))))
             : [];
-
-          if (validLinkedTpIds.length === 0 && validLinkedAtpItemIds.length > 0 && (!Array.isArray(u.linkedTpIds) || u.linkedTpIds.length === 0)) {
-            validLinkedTpIds = Array.from(unitSupportedTpSet);
-          }
 
           // Sanitize materials
           const rawMaterials = Array.isArray(u.materials) ? u.materials : [];
@@ -1675,10 +1671,41 @@ Kembalikan respon JSON dengan skema:
 
         sanitizedUnits.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
 
-        // Global Lineage Coverage Validation: AI output must not leave unmapped ATPs or orphan TPs
+        // Strict Canonical Lineage Validation: AI output must satisfy unit, material, and global coverage contracts
         const allUnitsHaveLineage = sanitizedUnits.length > 0 && sanitizedUnits.every(
           (u) => u.linkedAtpItemIds.length > 0 && u.linkedTpIds.length > 0
         );
+
+        const allMaterialsHaveLineage = sanitizedUnits.every((u) => {
+          if (!Array.isArray(u.materials) || u.materials.length === 0) return false;
+          return u.materials.every((m: any) => {
+            if (!Array.isArray(m.linkedAtpItemIds) || m.linkedAtpItemIds.length === 0) return false;
+            if (!Array.isArray(m.linkedTpIds) || m.linkedTpIds.length === 0) return false;
+
+            // material.linkedAtpItemIds ⊆ unit.linkedAtpItemIds
+            const atpInUnit = m.linkedAtpItemIds.every((id: string) => u.linkedAtpItemIds.includes(id));
+            if (!atpInUnit) return false;
+
+            // material.linkedTpIds ⊆ unit.linkedTpIds
+            const tpInUnit = m.linkedTpIds.every((id: string) => u.linkedTpIds.includes(id));
+            if (!tpInUnit) return false;
+
+            // material.linkedTpIds ⊆ TP supported by material.linkedAtpItemIds
+            const matSupportedTpSet = new Set<string>();
+            m.linkedAtpItemIds.forEach((atpId: string) => {
+              const atp = atpMap.get(atpId);
+              if (atp) {
+                const resolved = resolveCanonicalAtpTpIds(atp, validTpIdSet);
+                resolved.forEach((tpId) => matSupportedTpSet.add(tpId));
+              }
+            });
+            const tpSupported = m.linkedTpIds.every((id: string) => matSupportedTpSet.has(id));
+            if (!tpSupported) return false;
+
+            return true;
+          });
+        });
+
         const mappedAtpIdSet = new Set<string>();
         sanitizedUnits.forEach((u) => u.linkedAtpItemIds.forEach((id) => mappedAtpIdSet.add(id)));
         const allAtpsCovered = validAtpItems.every((atp) => mappedAtpIdSet.has(atp.id));
@@ -1691,8 +1718,8 @@ Kembalikan respon JSON dengan skema:
           return canonicalTpIds.every((tpId) => coveredTps.has(tpId));
         });
 
-        if (!allUnitsHaveLineage || !allAtpsCovered || !allTpsCoveredGlobally) {
-          throw new Error('AI generated mapping failed global lineage coverage validation.');
+        if (!allUnitsHaveLineage || !allMaterialsHaveLineage || !allAtpsCovered || !allTpsCoveredGlobally) {
+          throw new Error('AI generated mapping failed canonical lineage validation.');
         }
 
         const canonicalResult = {

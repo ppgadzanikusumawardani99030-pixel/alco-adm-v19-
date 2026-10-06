@@ -1254,10 +1254,7 @@ export function fallbackGenerateCanonicalATPUnitMapping(
       });
 
       // Preserve explicit valid subset of TPs supported by unit ATPs (do NOT expand to all ATP TPs)
-      let linkedTpIds = (unit.linkedTpIds || []).filter((id) => tpMap.has(id) && supportedTpIdSet.has(id));
-      if (linkedTpIds.length === 0 && (unit.linkedTpIds || []).length === 0 && supportedTpIdSet.size > 0) {
-        linkedTpIds = Array.from(supportedTpIdSet);
-      }
+      const linkedTpIds = (unit.linkedTpIds || []).filter((id) => tpMap.has(id) && supportedTpIdSet.has(id));
 
       const linkedTps = linkedTpIds.map((id) => tpMap.get(id)).filter(Boolean) as Array<(typeof validTpItems)[0]>;
 
@@ -1829,14 +1826,11 @@ export function enforceCanonicalMappingInvariants(
 
     // C. Preserve explicit valid subset of unit.linkedTpIds (never expand to all supportedTpIds)
     const explicitTpIds: string[] = Array.isArray(unit.linkedTpIds) ? unit.linkedTpIds : [];
-    let sanitizedUnitTpIds = Array.from(
+    const sanitizedUnitTpIds = Array.from(
       new Set<string>(
         explicitTpIds.filter((id: string) => supportedTpIdSet.has(id))
       )
     );
-    if (sanitizedUnitTpIds.length === 0 && explicitTpIds.length === 0 && supportedTpIdSet.size > 0) {
-      sanitizedUnitTpIds = Array.from(supportedTpIdSet);
-    }
     unit.linkedTpIds = sanitizedUnitTpIds;
 
     // D. Material normalization:

@@ -150,6 +150,62 @@ export function validateUnitExecutionPlan(
       }
     }
 
+    // Canonical material validation before meetings:
+    for (const mat of mappingUnit.materials || []) {
+      const matAtpIds = mat.linkedAtpItemIds || [];
+      const matTpIds = mat.linkedTpIds || [];
+
+      if (matAtpIds.length === 0) {
+        errors.push(
+          `Lingkup Materi '${mat.title || mat.id}' pada Unit '${mappingUnit.title || mappingUnit.id}' wajib memiliki minimal satu langkah ATP tertaut.`
+        );
+      }
+      if (matTpIds.length === 0) {
+        errors.push(
+          `Lingkup Materi '${mat.title || mat.id}' pada Unit '${mappingUnit.title || mappingUnit.id}' wajib memiliki minimal satu TP tertaut.`
+        );
+      }
+
+      // material ATP ⊆ Unit ATP
+      for (const id of matAtpIds) {
+        if (!mappingAtpItemIds.has(id)) {
+          errors.push(
+            `Lingkup Materi '${mat.title || mat.id}' merujuk ATP '${id}' di luar langkah ATP Unit '${mappingUnit.title || mappingUnit.id}'.`
+          );
+        }
+      }
+
+      // material TP ⊆ Unit TP
+      for (const id of matTpIds) {
+        if (!mappingTpIds.has(id)) {
+          errors.push(
+            `Lingkup Materi '${mat.title || mat.id}' merujuk TP '${id}' di luar TP Unit '${mappingUnit.title || mappingUnit.id}'.`
+          );
+        }
+      }
+
+      // material TP didukung oleh material ATP
+      if (atp && atp.items && matAtpIds.length > 0) {
+        const matSupportedTpSet = new Set<string>();
+        matAtpIds.forEach((atpId) => {
+          const atpItem = atp.items.find((i) => i.id === atpId);
+          if (atpItem) {
+            const itemTps = Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0
+              ? atpItem.linkedTpIds
+              : atpItem.tpId ? [atpItem.tpId] : [];
+            itemTps.forEach((tId) => matSupportedTpSet.add(tId));
+          }
+        });
+        for (const id of matTpIds) {
+          if (!matSupportedTpSet.has(id)) {
+            errors.push(
+              `Lingkup Materi '${mat.title || mat.id}' memuat TP '${id}' yang tidak didukung oleh ATP materi tersebut.`
+            );
+          }
+        }
+      }
+    }
+
     const seenUnitOrders = new Set<number>();
 
     for (const m of planUnit.meetings || []) {
@@ -197,12 +253,55 @@ export function validateUnitExecutionPlan(
         errors.push(`Meeting '${m.id}' mengandung duplikasi ID pada linkedTpIds`);
       }
 
+      // Fail-closed meeting lineage: no material-only, ATP-only, or TP-only meeting
+      const mMatIds = m.materialIds || [];
+      const mAtpIds = m.linkedAtpItemIds || [];
+      const mTpIds = m.linkedTpIds || [];
+
+      const hasAnyLineage = mMatIds.length > 0 || mAtpIds.length > 0 || mTpIds.length > 0;
+      if (hasAnyLineage) {
+        if (mMatIds.length === 0) {
+          errors.push(
+            `Meeting '${m.title || m.id}' memiliki relasi ATP/TP namun materialIds kosong (wajib memilih Lingkup Materi).`
+          );
+        }
+        if (mAtpIds.length === 0) {
+          errors.push(
+            `Meeting '${m.title || m.id}' memiliki materi/TP namun linkedAtpItemIds kosong (wajib memiliki minimal satu ATP).`
+          );
+        }
+        if (mTpIds.length === 0) {
+          errors.push(
+            `Meeting '${m.title || m.id}' memiliki materi/ATP namun linkedTpIds kosong (wajib memiliki minimal satu TP).`
+          );
+        }
+      }
+
       // materialIds refer to materials within same unit
-      for (const matId of m.materialIds || []) {
+      for (const matId of mMatIds) {
         if (!mappingMaterialIds.has(matId)) {
           errors.push(
             `Meeting '${m.id}' merujuk materialId '${matId}' yang tidak ada pada unit '${mappingUnit.id}'`
           );
+        } else {
+          // Meeting lineage must cover the ATP and TP of the materials used
+          const mat = mappingUnit.materials.find((x) => x.id === matId);
+          if (mat) {
+            for (const matAtpId of mat.linkedAtpItemIds || []) {
+              if (!mAtpIds.includes(matAtpId)) {
+                errors.push(
+                  `Meeting '${m.title || m.id}' menggunakan materi '${mat.title || mat.id}' yang memerlukan ATP '${matAtpId}', tetapi ATP tersebut tidak ada pada meeting.`
+                );
+              }
+            }
+            for (const matTpId of mat.linkedTpIds || []) {
+              if (!mTpIds.includes(matTpId)) {
+                errors.push(
+                  `Meeting '${m.title || m.id}' menggunakan materi '${mat.title || mat.id}' yang memerlukan TP '${matTpId}', tetapi TP tersebut tidak ada pada meeting.`
+                );
+              }
+            }
+          }
         }
       }
 
@@ -297,10 +396,18 @@ export function validateUnitExecutionPlan(
     const missingTpIds = (mappingUnit.linkedTpIds || [])
       .filter((id) => !meetingTpIds.has(id));
 
+    const hasAnyEmptyMeeting = (planUnit?.meetings || []).some(
+      (m) =>
+        (m.materialIds || []).length === 0 ||
+        (m.linkedAtpItemIds || []).length === 0 ||
+        (m.linkedTpIds || []).length === 0
+    );
+
     if (
       missingMaterialIds.length > 0 ||
       missingAtpItemIds.length > 0 ||
-      missingTpIds.length > 0
+      missingTpIds.length > 0 ||
+      hasAnyEmptyMeeting
     ) {
       allCoverageComplete = false;
     }

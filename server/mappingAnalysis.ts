@@ -184,9 +184,11 @@ ${JSON.stringify(atpContext, null, 2)}
         - Jika bukti lemah / ambigu ke beberapa Bab / tidak ada Bab yang cocok:
           status = "REVIEW", strength = "LOW", reason = <alasan perlu ditinjau guru>, (JANGAN berikan action atau suggestedUnitId).
      B. Jika ATP SUDAH TERPETAKAN ke satu atau lebih Bab:
-        - Jika ATP mendukung lebih dari satu Bab secara valid:
-          status = "ALIGNED", currentUnitId = undefined, strength = "STRONG", reason = "Langkah ATP ini mendukung beberapa Bab dengan pembagian TP yang relevan.".
-        - Jika seluruh TP pada ATP tersebut terbukti selaras dengan Bab dan materi Bab:
+        - Jika ATP mendukung lebih dari satu Bab:
+          * Periksa apakah setiap Bab memiliki subset TP non-empty dan gabungan subset TP mencakup seluruh canonical TP dari ATP tersebut:
+            - Jika valid dan lengkap: status = "ALIGNED", currentUnitId = undefined, strength = "STRONG", reason = "Pembagian TP lintas Bab valid dan lengkap."
+            - Jika belum lengkap (ada TP tertinggal atau ada Bab dengan subset kosong): status = "REVIEW", currentUnitId = undefined, strength = "LOW", reason = "Pembagian TP lintas Bab belum lengkap.", (JANGAN berikan action pindah otomatis).
+        - Jika ATP hanya berada di satu Bab:
           status = "ALIGNED", currentUnitId = <ID Bab saat ini>, strength = "STRONG", reason = <konfirmasi keselarasan>.
         - Jika tidak cukup bukti / ada mismatch semantik:
           status = "REVIEW", currentUnitId = <ID Bab saat ini>, strength = "LOW", reason = "Hubungan ATP dengan Bab saat ini belum cukup kuat untuk dinyatakan selaras secara otomatis." (JANGAN buat action pindah Bab otomatis).
@@ -316,6 +318,61 @@ export function sanitizeMappingAnalysisResult(
         targetUnitId: f.action.targetUnitId,
         targetMaterialId: targetMatValid ? targetMatId : undefined,
       };
+    }
+
+    // Multi-Bab subset validation check
+    const mappedUnitsForAtp = (currentMapping.units || []).filter((u) =>
+      (u.linkedAtpItemIds || []).includes(atpItemId)
+    );
+
+    if (mappedUnitsForAtp.length > 1) {
+      const atpObj = (atpData.items || []).find((a) => a.id === atpItemId);
+      const rawAtpLinked = Array.isArray(atpObj?.linkedTpIds) && atpObj.linkedTpIds.length > 0
+        ? atpObj.linkedTpIds
+        : atpObj?.tpId ? [atpObj.tpId] : [];
+      const canonicalTpIds = rawAtpLinked.filter((id) => validTpIds.has(id));
+
+      const unitSubsets = mappedUnitsForAtp.map((u) => {
+        const subset = (u.linkedTpIds || []).filter((id: string) => canonicalTpIds.includes(id));
+        return { unit: u, subset, nonEmpty: subset.length > 0 };
+      });
+
+      const allSubsetsNonEmpty = unitSubsets.every((s) => s.nonEmpty);
+      const unionSubset = new Set<string>();
+      unitSubsets.forEach((s) => s.subset.forEach((id) => unionSubset.add(id)));
+      const allCanonicalCovered = canonicalTpIds.length > 0 && canonicalTpIds.every((id) => unionSubset.has(id));
+
+      const isMultiBabValid = allSubsetsNonEmpty && allCanonicalCovered;
+      if (isMultiBabValid) {
+        atpFindings.push({
+          id: f?.id ? String(f.id) : `finding-atp-${idx + 1}`,
+          atpItemId,
+          status: 'ALIGNED',
+          currentUnitId: undefined,
+          suggestedUnitId: undefined,
+          suggestedMaterialId: undefined,
+          supportingTpIds: canonicalTpIds,
+          strength: 'STRONG',
+          reason: f?.reason && typeof f.reason === 'string' && f.reason.trim().length > 0
+            ? f.reason.trim()
+            : 'Pembagian TP lintas Bab valid dan lengkap.',
+          action: undefined,
+        });
+      } else {
+        atpFindings.push({
+          id: f?.id ? String(f.id) : `finding-atp-${idx + 1}`,
+          atpItemId,
+          status: 'REVIEW',
+          currentUnitId: undefined,
+          suggestedUnitId: undefined,
+          suggestedMaterialId: undefined,
+          supportingTpIds: canonicalTpIds,
+          strength: 'LOW',
+          reason: 'Pembagian TP lintas Bab belum lengkap atau ada subset TP kosong sehingga perlu peninjauan guru.',
+          action: undefined,
+        });
+      }
+      return;
     }
 
     atpFindings.push({
@@ -548,16 +605,64 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
 
     if (isMapped) {
       if (mappedUnits.length > 1) {
-        const babList = mappedUnits.map((u) => `Bab ${u.order}`).join(', ');
-        atpFindings.push({
-          id: `atp-find-${idx + 1}`,
-          atpItemId: item.id,
-          status: 'ALIGNED',
-          currentUnitId: undefined,
-          supportingTpIds: rawLinked,
-          strength: 'STRONG',
-          reason: `Langkah ATP ini mendukung ${mappedUnits.length} Bab (${babList}) dengan pembagian fokus TP yang relevan.`,
+        // Multi-Bab validation:
+        // Hitung canonical TP ATP:
+        const canonicalTpIds = rawLinked.filter((id) => tpMap.has(id));
+
+        // Untuk setiap Unit yang memuat ATP tersebut:
+        // unitTpSubset = unit.linkedTpIds ∩ canonicalTpIds
+        const unitSubsets = mappedUnits.map((u) => {
+          const subset = (u.linkedTpIds || []).filter((id: string) => canonicalTpIds.includes(id));
+          return {
+            unit: u,
+            subset,
+            nonEmpty: subset.length > 0,
+          };
         });
+
+        // 1. setiap Unit subset non-empty
+        const allSubsetsNonEmpty = unitSubsets.every((s) => s.nonEmpty);
+
+        // 2. setiap TP subset benar-benar milik ATP (by intersection with canonicalTpIds)
+
+        // 3. union subset seluruh Unit yang memakai ATP mencakup seluruh canonical TP ATP
+        const unionSubset = new Set<string>();
+        unitSubsets.forEach((s) => s.subset.forEach((id) => unionSubset.add(id)));
+        const allCanonicalCovered = canonicalTpIds.length > 0 && canonicalTpIds.every((id) => unionSubset.has(id));
+
+        const isValidMultiBab = allSubsetsNonEmpty && allCanonicalCovered;
+        const babList = mappedUnits.map((u) => `Bab ${u.order}`).join(', ');
+
+        if (isValidMultiBab) {
+          atpFindings.push({
+            id: `atp-find-${idx + 1}`,
+            atpItemId: item.id,
+            status: 'ALIGNED',
+            currentUnitId: undefined,
+            supportingTpIds: canonicalTpIds,
+            strength: 'STRONG',
+            reason: `Langkah ATP ini mendukung ${mappedUnits.length} Bab (${babList}) dengan pembagian subset TP yang valid dan lengkap.`,
+          });
+        } else {
+          const missingCount = canonicalTpIds.filter((id) => !unionSubset.has(id)).length;
+          const emptyUnits = unitSubsets.filter((s) => !s.nonEmpty).map((s) => `Bab ${s.unit.order}`).join(', ');
+          let reasonText = `Pembagian TP untuk langkah ATP ini lintas Bab (${babList}) belum lengkap atau belum valid.`;
+          if (missingCount > 0) {
+            reasonText += ` Terdapat ${missingCount} TP canonical yang belum dicakup oleh Bab mana pun.`;
+          }
+          if (emptyUnits) {
+            reasonText += ` ${emptyUnits} memuat ATP ini tetapi memiliki subset TP kosong.`;
+          }
+          atpFindings.push({
+            id: `atp-find-${idx + 1}`,
+            atpItemId: item.id,
+            status: 'REVIEW',
+            currentUnitId: undefined,
+            supportingTpIds: canonicalTpIds,
+            strength: 'LOW',
+            reason: reasonText,
+          });
+        }
       } else {
         // Single unit assignment - evaluate alignment conservatively
         const currentUnit = mappedUnits[0];
