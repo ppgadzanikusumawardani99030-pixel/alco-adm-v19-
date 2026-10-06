@@ -96,17 +96,17 @@ export type CognitiveScaffoldingLevel = 'HIGH' | 'MODERATE' | 'LOW';
 export interface CognitiveAdaptationProfile {
   grade: number;
   phase?: string;
-  abstractionLevel: CognitiveAbstractionLevel;
-  languageLoad: CognitiveLanguageLoad;
-  instructionComplexity: CognitiveInstructionComplexity;
-  visualSupport: CognitiveVisualSupport;
-  scaffoldingLevel: CognitiveScaffoldingLevel;
+  abstractionLevel: 'CONCRETE' | 'CONCRETE_TO_ABSTRACT' | 'ABSTRACT_ALLOWED';
+  languageLoad: 'VERY_LOW' | 'LOW' | 'MODERATE' | 'HIGH';
+  instructionComplexity: 'SINGLE_STEP_PREFERRED' | 'LIMITED_MULTI_STEP' | 'MULTI_STEP_ALLOWED';
+  visualSupport: 'STRONGLY_CONSIDER' | 'CONSIDER' | 'AS_NEEDED';
+  scaffoldingLevel: 'HIGH' | 'MODERATE' | 'LOW';
   contextPreference?: string;
   pedagogicalGuidelines?: string[];
 
   // Compatibility aliases for assessment grade calibration:
-  readingLoad: CognitiveLanguageLoad;
-  instructionLoad: CognitiveInstructionComplexity;
+  readingLoad?: 'VERY_LOW' | 'LOW' | 'MODERATE' | 'HIGH';
+  instructionLoad?: 'SINGLE_STEP_PREFERRED' | 'LIMITED_MULTI_STEP' | 'MULTI_STEP_ALLOWED';
 }
 
 /**
