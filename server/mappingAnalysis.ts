@@ -7,6 +7,7 @@ export interface MappingAnalysisResult {
     unmappedAtp: number;
     alignedAtp: number;
     reviewAtp: number;
+    alignableMaterials: number;
     missingMaterialSuggestions: number;
     manualMaterialReview: number;
   };
@@ -153,12 +154,15 @@ function findDeterministicMaterialAlignment(params: {
 
   // Tier 1: Parent unit candidates
   const unitAtpIds = unit.linkedAtpItemIds || [];
+  const unitTpIds = unit.linkedTpIds || [];
   const unitAtps = atpItems.filter(it => unitAtpIds.includes(it.id));
   const tier1 = evaluateCandidates(unitAtps);
 
   if (tier1.bestItem && tier1.bestScore >= 2 && (tier1.bestScore - tier1.secondBestScore >= 1)) {
     const canonTps = getCanonicalTpsForAtpItem(tier1.bestItem);
+    // C6: Restrict to unit's TP coverage
     const relevantTps = canonTps.filter((tpId) => {
+      if (!unitTpIds.includes(tpId)) return false;
       const t = tpMap.get(tpId);
       const tTokens = extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''}`);
       return mTokens.some((tok) => tTokens.includes(tok));
@@ -177,8 +181,16 @@ function findDeterministicMaterialAlignment(params: {
   // Tier 2: Global candidates (Search all canonical ATPs)
   const tier2 = evaluateCandidates(atpItems);
   if (tier2.bestItem && tier2.bestScore >= 3 && (tier2.bestScore - tier2.secondBestScore >= 1.5)) {
+    // C2: Allow global matching if parent unit has no lineage
+    // Cross-Bab lineage guard: global candidate must belong to the parent unit
+    if (unitAtpIds.length > 0 && !unitAtpIds.includes(tier2.bestItem.id)) {
+      return null;
+    }
+
     const canonTps = getCanonicalTpsForAtpItem(tier2.bestItem);
+    // C6: Restrict to unit's TP coverage only if unit already has TPs
     const relevantTps = canonTps.filter((tpId) => {
+      if (unitTpIds.length > 0 && !unitTpIds.includes(tpId)) return false;
       const t = tpMap.get(tpId);
       const tTokens = extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''}`);
       return mTokens.some((tok) => tTokens.includes(tok));
@@ -279,8 +291,7 @@ WAJIB (C1):
 Untuk setiap Lingkup Materi manual yang ada pada Bab:
 - Jika materi sudah selaras secara lengkap dan benar dengan TP/ATP (silsilah lengkap dan valid terhadap Bab induk): status = "SUPPORTED".
 - Jika materi manual memiliki silsilah (lineage) kosong atau belum lengkap, tetapi ada keselarasan semantik yang kuat dengan TP/ATP canonical tertentu:
-  * Prioritaskan TP/ATP yang sudah ada pada Bab tersebut.
-  * JIKA Bab belum memiliki ATP/TP yang cocok, ANDA DIPERBOLEHKAN mencari ke seluruh daftar ATP/TP canonical.
+  * Prioritaskan pencarian TP/ATP pada langkah ATP yang sudah terdaftar pada Bab induk (unitId). Namun, jika Bab induk belum memiliki ATP (lineage kosong) atau tidak ditemukan kecocokan di Bab induk, diperbolehkan mencari ke seluruh daftar ATP canonical.
   * Berikan status "ALIGNABLE".
   * Berikan action type "ALIGN_EXISTING_MATERIAL".
   * Material harus memilih SUBSET TP yang benar-benar relevan dengan Lingkup Materi tersebut. JANGAN otomatis memasukkan semua TP dari ATP jika ada TP yang tidak relevan.
@@ -579,6 +590,10 @@ export function sanitizeMappingAnalysisResult(
       const matExists = validMaterialMap.has(targetMaterialId);
       const belongsToUnit = validMaterialMap.get(targetMaterialId) === targetUnitId;
 
+      const targetUnit = (currentMapping.units || []).find(u => u.id === targetUnitId);
+      const unitAtpIds = targetUnit?.linkedAtpItemIds || [];
+      const unitTpIds = targetUnit?.linkedTpIds || [];
+
       const rawAtpIds = (Array.isArray(m.action.linkedAtpItemIds) ? m.action.linkedAtpItemIds : [])
         .map((id: any) => String(id).trim());
       const rawTpIds = (Array.isArray(m.action.linkedTpIds) ? m.action.linkedTpIds : [])
@@ -587,7 +602,13 @@ export function sanitizeMappingAnalysisResult(
       const allAtpIdsValid = rawAtpIds.length > 0 && rawAtpIds.every((id) => validAtpIds.has(id));
       const allTpIdsValid = rawTpIds.length > 0 && rawTpIds.every((id) => validTpIds.has(id));
 
-      let allTpSupported = allAtpIdsValid && allTpIdsValid;
+      // C2: Cross-Bab lineage guard: allow global matching if unit has no lineage
+      const allAtpInUnit = rawAtpIds.every(id => unitAtpIds.includes(id));
+      const allTpInUnit = rawTpIds.every(id => unitTpIds.includes(id));
+      
+      const allowGlobal = unitAtpIds.length === 0;
+
+      let allTpSupported = allAtpIdsValid && allTpIdsValid && (allowGlobal || (allAtpInUnit && allTpInUnit));
       if (allTpSupported) {
         for (const tpId of rawTpIds) {
           let supported = false;
@@ -790,6 +811,7 @@ export function sanitizeMappingAnalysisResult(
   const unmappedAtp = totalAtpCount - mappedAtp;
   const alignedAtp = atpFindings.filter((f) => f.status === 'ALIGNED').length;
   const reviewAtp = atpFindings.filter((f) => f.status === 'REVIEW').length;
+  const alignableMaterials = materialFindings.filter((f) => f.status === 'ALIGNABLE').length;
   const missingMaterialSuggestions = materialFindings.filter((f) => f.status === 'MISSING_MATERIAL').length;
   const manualMaterialReview = materialFindings.filter((f) => f.status === 'MANUAL_REVIEW').length;
 
@@ -800,6 +822,7 @@ export function sanitizeMappingAnalysisResult(
       unmappedAtp,
       alignedAtp,
       reviewAtp,
+      alignableMaterials,
       missingMaterialSuggestions,
       manualMaterialReview,
     },

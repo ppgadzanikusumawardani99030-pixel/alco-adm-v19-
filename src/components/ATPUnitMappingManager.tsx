@@ -1451,7 +1451,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
             <div className="bg-indigo-50/80 border border-indigo-200 rounded-xl p-3">
               <div className="text-[11px] font-bold text-indigo-800 uppercase">Materi Dapat Diselaraskan</div>
               <div className="text-lg font-extrabold text-indigo-900 mt-0.5">
-                {analysisResult.materialFindings.filter(m => m.status === 'ALIGNABLE').length} <span className="text-xs font-normal text-indigo-700">Materi</span>
+                {analysisResult.summary.alignableMaterials} <span className="text-xs font-normal text-indigo-700">Materi</span>
               </div>
             </div>
 

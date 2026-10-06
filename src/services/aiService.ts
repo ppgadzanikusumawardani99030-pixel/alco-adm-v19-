@@ -820,6 +820,7 @@ export interface MappingAnalysisResult {
     unmappedAtp: number;
     alignedAtp: number;
     reviewAtp: number;
+    alignableMaterials: number;
     missingMaterialSuggestions: number;
     manualMaterialReview: number;
   };
