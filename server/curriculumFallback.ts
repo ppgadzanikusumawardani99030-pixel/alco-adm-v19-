@@ -1435,36 +1435,53 @@ export function fallbackGenerateCanonicalATPUnitMapping(
     }
   }
 
-  // Place cross-cutting ATP items into EXACTLY ONE best primary cluster (maintaining chronology)
+  // Place cross-cutting ATP items into one or multiple relevant substantive clusters
   crossCuttingAtpItems.forEach((ccAtp) => {
     const ccTps = getAtpTps(ccAtp);
-    let bestClusterIdx = 0;
-    let maxSim = -1;
 
-    semanticClusters.forEach((cluster, cIdx) => {
+    // Calculate semantic and context similarity for each cluster
+    const clusterScores = semanticClusters.map((cluster, cIdx) => {
       const clusterTps = cluster.flatMap((a) => getAtpTps(a));
       let sim = 0;
       ccTps.forEach((ccTp) => {
         clusterTps.forEach((cTp) => {
           if (areTpsSemanticallyRelated(ccTp, cTp)) sim += 3;
+          const kwCC = extractKeywords(`${ccTp.contentScope || ''} ${ccTp.statement || ''}`);
+          const kwC = extractKeywords(`${cTp.contentScope || ''} ${cTp.statement || ''}`);
+          sim += kwCC.filter((k) => kwC.includes(k)).length;
         });
       });
 
-      // Tie breaker based on chronological step number
+      // Tie breaker based on chronological step number proximity
       const avgStep = cluster.reduce((sum, a) => sum + (a.stepNumber || 1), 0) / Math.max(1, cluster.length);
       const stepDiff = Math.abs(avgStep - (ccAtp.stepNumber || 1));
-      sim -= stepDiff * 0.1;
+      const adjustedSim = sim - stepDiff * 0.05;
 
-      if (sim > maxSim) {
-        maxSim = sim;
-        bestClusterIdx = cIdx;
+      return { cIdx, sim, adjustedSim };
+    });
+
+    clusterScores.sort((a, b) => b.adjustedSim - a.adjustedSim);
+    const bestScore = clusterScores[0];
+
+    const targetClusterIndices = new Set<number>();
+    if (bestScore && bestScore.cIdx !== undefined) {
+      targetClusterIndices.add(bestScore.cIdx);
+    }
+
+    // Allow placement in multiple clusters if they have sufficient contextual relevance
+    clusterScores.forEach((cs) => {
+      if (cs.sim >= 3 && cs.sim >= (bestScore?.sim || 0) * 0.6) {
+        targetClusterIndices.add(cs.cIdx);
       }
     });
 
-    if (semanticClusters[bestClusterIdx]) {
-      semanticClusters[bestClusterIdx].push(ccAtp);
-      semanticClusters[bestClusterIdx].sort((a, b) => (a.stepNumber || 0) - (b.stepNumber || 0));
-    }
+    targetClusterIndices.forEach((cIdx) => {
+      const targetCluster = semanticClusters[cIdx];
+      if (targetCluster && !targetCluster.some((a) => a.id === ccAtp.id)) {
+        targetCluster.push(ccAtp);
+        targetCluster.sort((a, b) => (a.stepNumber || 0) - (b.stepNumber || 0));
+      }
+    });
   });
 
   // Build Bab units from the semantic clusters
