@@ -15,10 +15,14 @@ import { APP_BUILD_ID } from '../config/buildInfo';
 import { normalizePhaseCode, TPValidationDetails } from './cpWorkflowService';
 import {
   UnitExecutionPlanValidationResult,
+} from './unitExecutionPlanService';
+
+import {
   resolveUnitSemesterPlacement,
+  UnitSemesterPlacementValidation,
 } from './unitSemesterPlanningService';
+
 import { AIMeetingDiagnostic } from './aiService';
-import { UnitSemesterPlacementValidation } from './unitSemesterPlanningService';
 
 export type DiagnosticScope =
   | 'TP'

@@ -2453,6 +2453,46 @@ Kembalikan respon JSON dengan skema:
           });
         }
 
+        if (m.materialIds.length === 0) {
+          return res.status(400).json({
+            success: false,
+            code: 'MEETING_LINEAGE_INVALID',
+            error: `Pertemuan '${title}' tidak memiliki materialIds.`,
+            diagnostic: buildDiagnostic({
+              stage: 'REFERENCE_VALIDATION',
+              code: 'MEETING_LINEAGE_INVALID',
+              perUnitMap: perUnitDiagnosticMap,
+              issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'materialIds' },
+            }),
+          });
+        }
+        if (m.linkedAtpItemIds.length === 0) {
+          return res.status(400).json({
+            success: false,
+            code: 'MEETING_LINEAGE_INVALID',
+            error: `Pertemuan '${title}' tidak memiliki linkedAtpItemIds.`,
+            diagnostic: buildDiagnostic({
+              stage: 'REFERENCE_VALIDATION',
+              code: 'MEETING_LINEAGE_INVALID',
+              perUnitMap: perUnitDiagnosticMap,
+              issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedAtpItemIds' },
+            }),
+          });
+        }
+        if (m.linkedTpIds.length === 0) {
+          return res.status(400).json({
+            success: false,
+            code: 'MEETING_LINEAGE_INVALID',
+            error: `Pertemuan '${title}' tidak memiliki linkedTpIds.`,
+            diagnostic: buildDiagnostic({
+              stage: 'REFERENCE_VALIDATION',
+              code: 'MEETING_LINEAGE_INVALID',
+              perUnitMap: perUnitDiagnosticMap,
+              issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds' },
+            }),
+          });
+        }
+
         for (const matId of m.materialIds) {
           if (!validMatIds.has(matId)) {
             return res.status(400).json({
