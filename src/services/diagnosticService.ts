@@ -667,8 +667,14 @@ export function buildUnitSemesterPlanningDiagnosticReport(data: {
 
   const isStale = validation.isStale;
 
-  const mode = unitExecutionPlan.semesterPlacement?.mode || 'CONTIGUOUS_BOUNDARY';
-  const semester1LastUnitId = unitExecutionPlan.semesterPlacement?.semester1LastUnitId;
+  const placement = unitExecutionPlan.semesterPlacement;
+  const mode = placement?.mode ?? 'UNSET';
+  const semester1LastUnitId =
+    placement === undefined
+      ? 'UNSET'
+      : placement.semester1LastUnitId === null
+      ? 'null (all S2)'
+      : placement.semester1LastUnitId;
 
   return [
     'ADMINISTRASI GURU AI - UNIT SEMESTER PLANNING DIAGNOSTIC',

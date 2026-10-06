@@ -179,7 +179,7 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
     }
   };
 
-  const handleCopyDiagnostic = () => {
+  const handleCopyDiagnostic = async () => {
     try {
       const report = buildUnitSemesterPlanningDiagnosticReport({
         mapping,
@@ -188,7 +188,23 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
         s1AvailableJP,
         s2AvailableJP,
       });
-      navigator.clipboard.writeText(report);
+
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(report);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = report;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(area);
+        if (!copied) {
+          throw new Error('Clipboard fallback gagal.');
+        }
+      }
+
       setSaveNotice({
         type: 'success',
         message: 'Diagnostik Pembagian Bab berhasil disalin.',
@@ -199,6 +215,7 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
         type: 'error',
         message: `Gagal menyalin diagnostik: ${err?.message || err}`,
       });
+      setTimeout(() => setSaveNotice(null), 4000);
     }
   };
 
