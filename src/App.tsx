@@ -34,7 +34,6 @@ import {
   UnitExecutionPlanData,
   SubjectWeeklySchedule,
   LearningMeetingScheduleData,
-  StudentLearningReport,
 } from './types';
 import { getSubjectJP, resolveSemesterCapacityV5 } from './services/jpEngine';
 import {
@@ -79,7 +78,6 @@ import {
   saveAttendanceV5,
   saveRemedialV5,
   saveEnrichmentV5,
-  saveStudentReportsV5,
 } from './services/storageV5';
 import { getRuntimeContextV5 } from './services/runtimeV5';
 import {
@@ -1125,25 +1123,6 @@ export function App() {
     }
   };
 
-  const handleSaveStudentReports = (reportList: StudentLearningReport[]) => {
-    if (!activeSemesterPlan) {
-      setAppNotice({
-        type: 'error',
-        message: 'Pilih Semester aktif terlebih dahulu sebelum menyimpan laporan belajar siswa.',
-      });
-      return;
-    }
-    try {
-      saveStudentReportsV5(activeSemesterPlan.id, reportList);
-      refreshV5();
-    } catch (err: any) {
-      setAppNotice({
-        type: 'error',
-        message: err instanceof Error ? err.message : 'Gagal menyimpan laporan belajar siswa.',
-      });
-    }
-  };
-
   const handleSaveAttendance = (session: AttendanceSession, records: AttendanceRecord[]) => {
     if (!activeSemesterPlan) {
       setAppNotice({
@@ -1798,12 +1777,10 @@ export function App() {
               learningPlans={runtimeContext.semesterData?.learningPlan || []}
               assessmentPlans={runtimeContext.semesterData?.assessmentPlan || []}
               assessmentPackages={runtimeContext.semesterData?.assessmentPackage || []}
-              studentReports={runtimeContext.semesterData?.studentReports || []}
               onSaveCalendar={handleSaveCalendar}
               onSaveSemesterJPSetting={handleSaveSemesterJPSetting}
               onSaveTimeAllocations={handleSaveTimeAllocations}
               onSaveStudents={handleSaveStudents}
-              onSaveStudentReports={handleSaveStudentReports}
               onSaveAttendance={handleSaveAttendance}
               onSaveCriteria={handleSaveCriteria}
               onSaveAssessment={handleSaveAssessment}

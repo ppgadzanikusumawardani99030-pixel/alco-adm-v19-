@@ -21,24 +21,19 @@ import {
   TeacherProfile,
   SchoolData,
   TPData,
-  StudentLearningReport,
 } from '../../types';
 import { generateDaftarNilai } from '../../services/documentEngine';
-import { StudentReportManager } from './StudentReportManager';
 
 interface AssessmentGradeManagerProps {
   school: SchoolData;
   profile: TeacherProfile;
   academicSetting: AcademicSetting;
-  semesterPlanId?: string;
   tp?: TPData;
   students: Student[];
   assessments: Assessment[];
   assessmentResults: AssessmentResult[];
-  studentReports?: StudentLearningReport[];
   onSaveAssessment: (assessment: Assessment, results: AssessmentResult[]) => void;
   onDeleteAssessment: (assessmentId: string) => void;
-  onSaveStudentReports?: (reports: StudentLearningReport[]) => void;
   onQuickAddRemedial?: (record: RemedialRecord) => void;
   onQuickAddEnrichment?: (record: EnrichmentRecord) => void;
 }
@@ -47,15 +42,12 @@ export const AssessmentGradeManager: React.FC<AssessmentGradeManagerProps> = ({
   school,
   profile,
   academicSetting,
-  semesterPlanId,
   tp,
   students = [],
   assessments = [],
   assessmentResults = [],
-  studentReports = [],
   onSaveAssessment,
   onDeleteAssessment,
-  onSaveStudentReports,
   onQuickAddRemedial,
   onQuickAddEnrichment,
 }) => {
@@ -75,7 +67,7 @@ export const AssessmentGradeManager: React.FC<AssessmentGradeManagerProps> = ({
 
   const [notification, setNotification] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  const [viewMode, setViewMode] = useState<'assessment_scores' | 'matrix_gradebook' | 'student_reports'>('assessment_scores');
+  const [viewMode, setViewMode] = useState<'assessment_scores' | 'matrix_gradebook'>('assessment_scores');
 
   const selectedAssessment = assessmentList.find((a) => a.id === selectedAssessmentId);
 
@@ -280,17 +272,6 @@ export const AssessmentGradeManager: React.FC<AssessmentGradeManagerProps> = ({
             }`}
           >
             Matriks Rekapitulasi Rapor
-          </button>
-          <button
-            type="button"
-            onClick={() => setViewMode('student_reports')}
-            className={`px-4 py-2 text-xs font-bold border-b-2 transition-colors ${
-              viewMode === 'student_reports'
-                ? 'border-indigo-600 text-indigo-700'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            Laporan Belajar Siswa ({(studentReports || []).length} Selesai)
           </button>
         </div>
       </div>
@@ -643,22 +624,6 @@ export const AssessmentGradeManager: React.FC<AssessmentGradeManagerProps> = ({
             </table>
           </div>
         </div>
-      )}
-
-      {/* Mode 3: Student Learning Reports (Laporan Belajar Siswa) */}
-      {viewMode === 'student_reports' && (
-        <StudentReportManager
-          school={school}
-          profile={profile}
-          academicSetting={academicSetting}
-          semesterPlanId={semesterPlanId}
-          tp={tp}
-          students={students}
-          assessments={assessmentList}
-          assessmentResults={resultsList}
-          studentReports={studentReports || []}
-          onSaveStudentReports={onSaveStudentReports || (() => {})}
-        />
       )}
     </div>
   );

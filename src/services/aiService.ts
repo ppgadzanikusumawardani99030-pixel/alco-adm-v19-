@@ -1124,30 +1124,4 @@ export async function requestMeetingReconciliationAI(
   }
 }
 
-export async function generateStudentReportWithAI(params: {
-  student: Student;
-  academicSetting: AcademicSetting;
-  scores?: { title: string; score: number; type: string }[];
-  tps?: string[];
-  finalGrade?: number;
-  achievementStatus?: string;
-}): Promise<any> {
-  const res = await aiFetch('/api/ai/generate-student-report', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    if (errData.code === 'AI_NOT_CONFIGURED') {
-      throw new Error('AI_NOT_CONFIGURED');
-    }
-    throw new Error(errData.error || `Gagal menyusun Laporan Belajar AI (Status ${res.status})`);
-  }
-
-  const data = await res.json();
-  return data.data;
-}
-
 
