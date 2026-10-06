@@ -523,42 +523,60 @@ async function runRegressionSuite() {
     { id: 'crit-2', tpId: 'tp-999', description: 'Kriteria TP 999 (Out of Scope)' }
   ];
 
-  // Simulating scope compilation in LearningPlanManager.tsx
+  // Helper function simulating the exact scope draft compilation sequence from LearningPlanManager.tsx
+  function compileDraftLearningPlanForScope(
+    scope: any,
+    globalCriteria: any[],
+    aiDraftResult: any
+  ): LearningPlan {
+    const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
+    const tpIdsToSend = tpsToSend.map((t: any) => t.id);
+    const relevantCriteria = globalCriteria.filter((ac) => tpIdsToSend.includes(ac.tpId));
+
+    const draftPlan = createAIDraftLearningPlan({
+      academicSetting: mockSetting,
+      curriculumType: 'KURIKULUM_MERDEKA',
+      unitId: scope.unitId,
+      learningMeetingIds: scope.learningMeetingIds,
+      tpIds: scope.linkedTpIds || tpIdsToSend,
+      atpItemIds: scope.linkedAtpItemIds || [],
+      allocatedJP: scope.jp,
+      aiDraft: {
+        ...aiDraftResult,
+        title: aiDraftResult.title || (scope.unitTitle ? `Modul Ajar: ${scope.unitTitle}` : undefined),
+      },
+      context: { tp: mockTpData, atp: mockAtpData },
+    });
+
+    draftPlan.kktpCriterionIds = relevantCriteria.map((ac) => ac.id);
+    return draftPlan;
+  }
+
+  // Real world simulation: scope built and passed into compilation sequence
   const simScope: any = {
+    unitId: 'unit-1',
+    unitTitle: 'Bab 1',
     tpItems: [{ id: 'tp-101', statement: 'Belajar programming' }],
     linkedTpIds: ['tp-101'],
     linkedAtpItemIds: ['atp-201'],
-    meetings: []
+    meetings: [],
+    jp: 6
   };
 
-  const simTpsToSend = simScope.tpItems;
-  const simTpIdsToSend = simTpsToSend.map((t: any) => t.id);
-  const simRelevantCriteria = (allCriteria as any).filter((ac: any) => simTpIdsToSend.includes(ac.tpId));
-
-  const draftPlanResult = createAIDraftLearningPlan({
-    academicSetting: mockSetting,
-    curriculumType: 'KURIKULUM_MERDEKA',
-    unitId: 'unit-1',
-    tpIds: simScope.linkedTpIds,
-    atpItemIds: simScope.linkedAtpItemIds,
-    aiDraft: {
-      initialCompetency: 'Siswa dapat membaca',
-      learningExperiences: [
-        { phase: 'UNDERSTAND', description: 'Memahami' },
-        { phase: 'APPLY', description: 'Menerapkan' },
-        { phase: 'REFLECT', description: 'Refleksi' }
-      ] as any,
-      graduateProfileDimensions: ['Bernalar Kritis']
-    }
+  const compiledPlanResult = compileDraftLearningPlanForScope(simScope, allCriteria, {
+    initialCompetency: 'Siswa dapat membaca',
+    learningExperiences: [
+      { phase: 'UNDERSTAND', description: 'Memahami' },
+      { phase: 'APPLY', description: 'Menerapkan' },
+      { phase: 'REFLECT', description: 'Refleksi' }
+    ] as any,
+    graduateProfileDimensions: ['Bernalar Kritis']
   });
 
-  // Assign the filtered KKTP IDs exactly as done in LearningPlanManager.tsx
-  draftPlanResult.kktpCriterionIds = simRelevantCriteria.map((ac: any) => ac.id);
-
   assert(
-    draftPlanResult.kktpCriterionIds.includes('crit-1') && !draftPlanResult.kktpCriterionIds.includes('crit-2'),
+    compiledPlanResult.kktpCriterionIds.includes('crit-1') && !compiledPlanResult.kktpCriterionIds.includes('crit-2'),
     'LearningPlan draft must save only kktpCriterionIds matching the target scope TPs',
-    `kktpCriterionIds=${JSON.stringify(draftPlanResult.kktpCriterionIds)}`
+    `kktpCriterionIds=${JSON.stringify(compiledPlanResult.kktpCriterionIds)}`
   );
 
   console.log('\n--- B19.2: Multi-meeting Order & Deterministic sorting ---');
