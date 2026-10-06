@@ -2554,7 +2554,7 @@ Kembalikan respon JSON dengan skema:
                      success: false,
                      code: 'MEETING_LINEAGE_INVALID',
                      error: `Pertemuan '${title}' menggunakan material '${mat.title || matId}' tetapi ATP '${matAtpId}' yang diwajibkan material tersebut tidak terdapat pada pertemuan.`,
-                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, invalidId: matAtpId } }),
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedAtpItemIds', invalidId: matAtpId } }),
                    });
                 }
              }
@@ -2564,7 +2564,7 @@ Kembalikan respon JSON dengan skema:
                      success: false,
                      code: 'MEETING_LINEAGE_INVALID',
                      error: `Pertemuan '${title}' menggunakan material '${mat.title || matId}' tetapi TP '${matTpId}' yang diwajibkan material tersebut tidak terdapat pada pertemuan.`,
-                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, invalidId: matTpId } }),
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds', invalidId: matTpId } }),
                    });
                 }
              }
@@ -2585,7 +2585,7 @@ Kembalikan respon JSON dengan skema:
                      success: false,
                      code: 'MEETING_LINEAGE_INVALID',
                      error: `TP '${tpId}' pada pertemuan '${title}' tidak didukung oleh ATP pertemuan tersebut.`,
-                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, invalidId: tpId } }),
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds', invalidId: tpId } }),
                    });
            }
         }
