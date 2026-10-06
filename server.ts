@@ -2179,14 +2179,12 @@ RULES WAJIB:
 9. Dilarang menciptakan ID baru atau Materi canonical baru yang tidak terdaftar di konteks unit.
 10. Semua missingCoverage yang tertera wajib tercakup sepenuhnya dalam tambahan Pertemuan yang Anda buat.
 11. Judul Pertemuan harus substantif, kreatif, dan berbeda secara pedagogis. Hindari judul generik seperti "Pertemuan 1", "Pertemuan 2", atau "Pembelajaran materi X".
-12. Setiap Pertemuan yang diusulkan wajib memiliki minimal satu referensi canonical (tidak boleh ketiganya: materialIds, linkedAtpItemIds, dan linkedTpIds kosong).
-13. Setia Pertemuan WAJIB memiliki Material + ATP + TP. Jika suatu Material digunakan, seluruh ATP dan TP canonical milik Material tersebut wajib dicantumkan pada Pertemuan.
-14. Setiap TP pada Pertemuan wajib didukung oleh minimal satu ATP yang juga tercantum pada Pertemuan tersebut.
-15. Setia Pertemuan harus mengikuti aturan:
-    - materialIds non-empty
-    - linkedAtpItemIds non-empty
-    - linkedTpIds non-empty
-    - Semua ID wajib milik Unit yang sama.
+12. Setiap Pertemuan yang diusulkan wajib memilih minimal satu Material.
+13. Server akan otomatis menentukan ATP dan TP berdasarkan Material yang dipilih. Jangan hasilkan ATP ID atau TP ID dalam respon.
+14. Material boleh digunakan ulang pada beberapa Pertemuan jika secara pedagogis diperlukan.
+15. Dilarang menciptakan ID baru atau Materi canonical baru yang tidak terdaftar di konteks unit.
+16. Semua missingCoverage yang tertera wajib tercakup sepenuhnya dalam tambahan Pertemuan yang Anda buat.
+17. Judul Pertemuan harus substantif, kreatif, dan berbeda secara pedagogis.
 
 DATA KONTEKS UNIT:
 ${JSON.stringify(unitsContext, null, 2)}
@@ -2199,9 +2197,7 @@ Kembalikan respon JSON dengan skema:
       "meetings": [
         {
           "title": "...",
-          "materialIds": ["EXACT_ID"],
-          "linkedAtpItemIds": ["EXACT_ID"],
-          "linkedTpIds": ["EXACT_ID"]
+          "materialIds": ["EXACT_ID"]
         }
       ]
     }
@@ -2228,10 +2224,8 @@ Kembalikan respon JSON dengan skema:
                       properties: {
                         title: { type: Type.STRING },
                         materialIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        linkedAtpItemIds: { type: Type.ARRAY, items: { type: Type.STRING } },
-                        linkedTpIds: { type: Type.ARRAY, items: { type: Type.STRING } },
                       },
-                      required: ['title', 'materialIds', 'linkedAtpItemIds', 'linkedTpIds'],
+                      required: ['title', 'materialIds'],
                     },
                   },
                 },
@@ -2436,14 +2430,12 @@ Kembalikan respon JSON dengan skema:
         }
 
         const uniqMatIds = new Set(m.materialIds);
-        const uniqAtpIds = new Set(m.linkedAtpItemIds);
-        const uniqTpIds = new Set(m.linkedTpIds);
 
-        if (uniqMatIds.size !== m.materialIds.length || uniqAtpIds.size !== m.linkedAtpItemIds.length || uniqTpIds.size !== m.linkedTpIds.length) {
+        if (uniqMatIds.size !== m.materialIds.length) {
           return res.status(400).json({
             success: false,
             code: 'INVALID_REFERENCE',
-            error: `AI menghasilkan referensi ganda dalam satu array pada unit '${uId}'.`,
+            error: `AI menghasilkan referensi ganda material dalam satu array pada unit '${uId}'.`,
             diagnostic: buildDiagnostic({
               stage: 'REFERENCE_VALIDATION',
               code: 'INVALID_REFERENCE',
@@ -2466,33 +2458,9 @@ Kembalikan respon JSON dengan skema:
             }),
           });
         }
-        if (m.linkedAtpItemIds.length === 0) {
-          return res.status(400).json({
-            success: false,
-            code: 'MEETING_LINEAGE_INVALID',
-            error: `Pertemuan '${title}' tidak memiliki linkedAtpItemIds.`,
-            diagnostic: buildDiagnostic({
-              stage: 'REFERENCE_VALIDATION',
-              code: 'MEETING_LINEAGE_INVALID',
-              perUnitMap: perUnitDiagnosticMap,
-              issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedAtpItemIds' },
-            }),
-          });
-        }
-        if (m.linkedTpIds.length === 0) {
-          return res.status(400).json({
-            success: false,
-            code: 'MEETING_LINEAGE_INVALID',
-            error: `Pertemuan '${title}' tidak memiliki linkedTpIds.`,
-            diagnostic: buildDiagnostic({
-              stage: 'REFERENCE_VALIDATION',
-              code: 'MEETING_LINEAGE_INVALID',
-              perUnitMap: perUnitDiagnosticMap,
-              issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds' },
-            }),
-          });
-        }
 
+        const derivedAtpIds = new Set<string>();
+        const derivedTpIds = new Set<string>();
         for (const matId of m.materialIds) {
           if (!validMatIds.has(matId)) {
             return res.status(400).json({
@@ -2508,87 +2476,27 @@ Kembalikan respon JSON dengan skema:
             });
           }
           cov.materials.add(matId);
-        }
-        for (const atpId of m.linkedAtpItemIds) {
-          if (!validAtpIds.has(atpId)) {
-            return res.status(400).json({
-              success: false,
-              code: 'INVALID_REFERENCE',
-              error: `AI merujuk atpId '${atpId}' yang tidak valid/bukan milik unit '${uId}'.`,
-              diagnostic: buildDiagnostic({
-                stage: 'REFERENCE_VALIDATION',
-                code: 'INVALID_REFERENCE',
-                perUnitMap: perUnitDiagnosticMap,
-                issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedAtpItemIds', invalidId: atpId },
-              }),
-            });
-          }
-          cov.atpItems.add(atpId);
-        }
-        for (const tpId of m.linkedTpIds) {
-          if (!validTpIds.has(tpId)) {
-            return res.status(400).json({
-              success: false,
-              code: 'INVALID_REFERENCE',
-              error: `AI merujuk tpId '${tpId}' yang tidak valid/bukan milik unit '${uId}'.`,
-              diagnostic: buildDiagnostic({
-                stage: 'REFERENCE_VALIDATION',
-                code: 'INVALID_REFERENCE',
-                perUnitMap: perUnitDiagnosticMap,
-                issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds', invalidId: tpId },
-              }),
-            });
-          }
-          cov.tps.add(tpId);
-        }
 
-        // Lineage Check: Material ATP ⊆ Meeting ATP, Material TP ⊆ Meeting TP
-        const atpSet = new Set(m.linkedAtpItemIds);
-        const tpSet = new Set(m.linkedTpIds);
-        for (const matId of m.materialIds) {
           const mat = canonicalUnit.materials.find((x: any) => x.id === matId);
           if (mat) {
-             for (const matAtpId of mat.linkedAtpItemIds || []) {
-                if (!atpSet.has(matAtpId)) {
-                   return res.status(400).json({
+             if ((mat.linkedAtpItemIds || []).length === 0 || (mat.linkedTpIds || []).length === 0) {
+               return res.status(400).json({
                      success: false,
                      code: 'MEETING_LINEAGE_INVALID',
-                     error: `Pertemuan '${title}' menggunakan material '${mat.title || matId}' tetapi ATP '${matAtpId}' yang diwajibkan material tersebut tidak terdapat pada pertemuan.`,
-                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedAtpItemIds', invalidId: matAtpId } }),
+                     error: `Material '${mat.title || matId}' tidak memiliki ATP atau TP canonical.`,
+                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title } }),
                    });
-                }
              }
-             for (const matTpId of mat.linkedTpIds || []) {
-                if (!tpSet.has(matTpId)) {
-                   return res.status(400).json({
-                     success: false,
-                     code: 'MEETING_LINEAGE_INVALID',
-                     error: `Pertemuan '${title}' menggunakan material '${mat.title || matId}' tetapi TP '${matTpId}' yang diwajibkan material tersebut tidak terdapat pada pertemuan.`,
-                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds', invalidId: matTpId } }),
-                   });
-                }
-             }
+             (mat.linkedAtpItemIds || []).forEach((atpId: string) => derivedAtpIds.add(atpId));
+             (mat.linkedTpIds || []).forEach((tpId: string) => derivedTpIds.add(tpId));
           }
         }
-        // TP Support Check
-        const meetingSupportedTpSet = new Set<string>();
-        for (const atpId of m.linkedAtpItemIds) {
-           const atpItem = validAtpMap.get(atpId);
-           if (atpItem) {
-              const tps = Array.isArray(atpItem.linkedTpIds) && atpItem.linkedTpIds.length > 0 ? atpItem.linkedTpIds : atpItem.tpId ? [atpItem.tpId] : [];
-              tps.forEach((tId: string) => meetingSupportedTpSet.add(tId));
-           }
-        }
-        for (const tpId of m.linkedTpIds) {
-           if (!meetingSupportedTpSet.has(tpId)) {
-              return res.status(400).json({
-                     success: false,
-                     code: 'MEETING_LINEAGE_INVALID',
-                     error: `TP '${tpId}' pada pertemuan '${title}' tidak didukung oleh ATP pertemuan tersebut.`,
-                     diagnostic: buildDiagnostic({ stage: 'REFERENCE_VALIDATION', code: 'MEETING_LINEAGE_INVALID', perUnitMap: perUnitDiagnosticMap, issue: { unitId: uId, suggestionIndex: mIdx + 1, title, field: 'linkedTpIds', invalidId: tpId } }),
-                   });
-           }
-        }
+        
+        m.linkedAtpItemIds = Array.from(derivedAtpIds);
+        m.linkedTpIds = Array.from(derivedTpIds);
+        
+        m.linkedAtpItemIds.forEach(id => cov.atpItems.add(id));
+        m.linkedTpIds.forEach(id => cov.tps.add(id));
 
         if (m.materialIds.length + m.linkedAtpItemIds.length + m.linkedTpIds.length === 0) {
           return res.status(400).json({
