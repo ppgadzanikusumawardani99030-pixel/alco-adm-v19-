@@ -1294,6 +1294,22 @@ function extractKeywords(text: string): string[] {
 function isCrossCuttingTp(tp?: any): boolean {
   if (!tp) return false;
   const full = `${tp.statement || ''} ${tp.contentScope || ''} ${tp.elementName || ''}`.toLowerCase();
+
+  // Independent substantive topics must NOT be treated as cross-cutting:
+  // e.g. kesehatan, keselamatan diri, pertolongan pertama, privasi tubuh, nutrisi, kebersihan
+  const isExplicitSubstantiveTopic =
+    full.includes('keselamatan diri') ||
+    full.includes('pertolongan pertama') ||
+    full.includes('privasi tubuh') ||
+    full.includes('kesehatan reproduksi') ||
+    full.includes('kebersihan diri') ||
+    full.includes('pola makan sehat') ||
+    full.includes('penyakit menular');
+
+  if (isExplicitSubstantiveTopic) {
+    return false;
+  }
+
   return (
     full.includes('profil pelajar pancasila') ||
     full.includes('profil lulusan') ||
@@ -1302,7 +1318,9 @@ function isCrossCuttingTp(tp?: any): boolean {
     full.includes('refleksi') ||
     full.includes('evaluasi diri') ||
     full.includes('sikap') ||
-    full.includes('kolaborasi')
+    full.includes('kolaborasi') ||
+    full.includes('gotong royong') ||
+    full.includes('akhlak')
   );
 }
 
@@ -1613,7 +1631,7 @@ Kembalikan respon JSON dengan skema:
         // SERVER-SIDE DETERMINISTIC MERGE SAFETY & SANITIZATION
         const rawUnits = parsed.units;
 
-        const sanitizedUnits = rawUnits.map((u: any, uIdx: number) => {
+        let sanitizedUnits = rawUnits.map((u: any, uIdx: number) => {
           const unitOrder = u.order || uIdx + 1;
           const finalTitle = (u.title || `Bab ${unitOrder}`).trim();
           const finalUnitId = u.id || `unit-${Date.now()}-${unitOrder}`;
@@ -1681,6 +1699,143 @@ Kembalikan respon JSON dengan skema:
             linkedAtpItemIds: validLinkedAtpItemIds,
             materials: sanitizedMaterials,
           };
+        });
+
+        // POST-AI SANITIZATION: Integrate cross-cutting-only units into relevant substantive units
+        const isUnitCrossCuttingOnly = (u: any): boolean => {
+          if (!Array.isArray(u.linkedTpIds) || u.linkedTpIds.length === 0) return false;
+          return u.linkedTpIds.every((tpId: string) => {
+            const tp = tpMap.get(tpId);
+            return isCrossCuttingTp(tp);
+          });
+        };
+
+        const substantiveUnits = sanitizedUnits.filter((u) => !isUnitCrossCuttingOnly(u));
+        const crossCuttingOnlyUnits = sanitizedUnits.filter((u) => isUnitCrossCuttingOnly(u));
+
+        if (substantiveUnits.length > 0 && crossCuttingOnlyUnits.length > 0) {
+          crossCuttingOnlyUnits.forEach((ccUnit) => {
+            const ccTps = ccUnit.linkedTpIds.map((id: string) => tpMap.get(id)).filter(Boolean);
+
+            // Rank substantive units by similarity
+            const scoredSubstantive = substantiveUnits.map((subUnit, sIdx) => {
+              const subTps = subUnit.linkedTpIds.map((id: string) => tpMap.get(id)).filter(Boolean);
+              let sim = 0;
+
+              ccTps.forEach((ccTp: any) => {
+                subTps.forEach((sTp: any) => {
+                  if (ccTp.scopeCode && sTp.scopeCode && ccTp.scopeCode.trim().toUpperCase() === sTp.scopeCode.trim().toUpperCase()) {
+                    sim += 5;
+                  }
+                  const ccScope = (ccTp.contentScope || '').toLowerCase().trim();
+                  const sScope = (sTp.contentScope || '').toLowerCase().trim();
+                  if (ccScope && sScope && (ccScope.includes(sScope) || sScope.includes(ccScope))) {
+                    sim += 4;
+                  }
+                  const kwCC = extractKeywords(`${ccTp.contentScope || ''} ${ccTp.statement || ''}`);
+                  const kwS = extractKeywords(`${sTp.contentScope || ''} ${sTp.statement || ''}`);
+                  sim += kwCC.filter((k) => kwS.includes(k)).length;
+                });
+              });
+
+              // Chronology step proximity
+              const subAtpSteps = subUnit.linkedAtpItemIds.map((id: string) => atpMap.get(id)?.stepNumber || 1);
+              const avgSubStep = subAtpSteps.reduce((a: number, b: number) => a + b, 0) / Math.max(1, subAtpSteps.length);
+              const ccAtpSteps = ccUnit.linkedAtpItemIds.map((id: string) => atpMap.get(id)?.stepNumber || 1);
+              const avgCcStep = ccAtpSteps.reduce((a: number, b: number) => a + b, 0) / Math.max(1, ccAtpSteps.length);
+              const stepDiff = Math.abs(avgSubStep - avgCcStep);
+              const adjustedSim = sim - stepDiff * 0.05;
+
+              return { subUnit, sIdx, sim, adjustedSim };
+            });
+
+            scoredSubstantive.sort((a, b) => b.adjustedSim - a.adjustedSim);
+            const bestTarget = scoredSubstantive[0];
+
+            // Select targets: always best, plus any strongly relevant ones
+            const targetUnits: any[] = [];
+            if (bestTarget) {
+              targetUnits.push(bestTarget.subUnit);
+            }
+            scoredSubstantive.slice(1).forEach((st) => {
+              if (st.sim >= 3 && st.sim >= (bestTarget?.sim || 0) * 0.6) {
+                targetUnits.push(st.subUnit);
+              }
+            });
+
+            // Integrate ccUnit lineages into each target unit
+            targetUnits.forEach((tUnit) => {
+              // Merge linkedAtpItemIds
+              ccUnit.linkedAtpItemIds.forEach((atpId: string) => {
+                if (!tUnit.linkedAtpItemIds.includes(atpId)) {
+                  tUnit.linkedAtpItemIds.push(atpId);
+                }
+              });
+
+              // Merge linkedTpIds
+              ccUnit.linkedTpIds.forEach((tpId: string) => {
+                if (!tUnit.linkedTpIds.includes(tpId)) {
+                  tUnit.linkedTpIds.push(tpId);
+                }
+              });
+
+              // Integrate into materials: assign each cross-cutting TP/ATP to a matching or first material
+              ccUnit.linkedTpIds.forEach((ccTpId: string) => {
+                const ccTp = tpMap.get(ccTpId);
+                if (!ccTp) return;
+
+                // Find supporting ATP for this TP that is in tUnit.linkedAtpItemIds
+                const supportingAtpIds = tUnit.linkedAtpItemIds.filter((atpId: string) => {
+                  const atp = atpMap.get(atpId);
+                  return atp && resolveCanonicalAtpTpIds(atp, validTpIdSet).includes(ccTpId);
+                });
+
+                if (supportingAtpIds.length === 0) return;
+
+                // Find best material in tUnit
+                let bestMat = tUnit.materials?.[0];
+                let bestMatSim = -1;
+
+                (tUnit.materials || []).forEach((m: any) => {
+                  let matSim = 0;
+                  const kwCC = extractKeywords(`${ccTp.contentScope || ''} ${ccTp.statement || ''}`);
+                  const kwM = extractKeywords(m.title || '');
+                  matSim += kwCC.filter((k) => kwM.includes(k)).length;
+                  if (matSim > bestMatSim) {
+                    bestMatSim = matSim;
+                    bestMat = m;
+                  }
+                });
+
+                if (bestMat) {
+                  if (!bestMat.linkedTpIds.includes(ccTpId)) {
+                    bestMat.linkedTpIds.push(ccTpId);
+                  }
+                  supportingAtpIds.forEach((atpId: string) => {
+                    if (!bestMat.linkedAtpItemIds.includes(atpId)) {
+                      bestMat.linkedAtpItemIds.push(atpId);
+                    }
+                  });
+                }
+              });
+            });
+          });
+
+          // Replace sanitizedUnits with substantiveUnits
+          sanitizedUnits = substantiveUnits;
+        }
+
+        // Re-sort order to 1..n and normalize prefix titles
+        sanitizedUnits.forEach((u: any, idx: number) => {
+          const newOrder = idx + 1;
+          u.order = newOrder;
+
+          const cleanTitle = (u.title || '').replace(/^(bab|unit)\s*\d*[:\-]?\s*/i, '').trim();
+          u.title = `Bab ${newOrder}: ${cleanTitle || `Pembelajaran ${newOrder}`}`;
+
+          (u.materials || []).forEach((m: any, mIdx: number) => {
+            m.order = mIdx + 1;
+          });
         });
 
         sanitizedUnits.sort((a: any, b: any) => (a.order || 0) - (b.order || 0));
