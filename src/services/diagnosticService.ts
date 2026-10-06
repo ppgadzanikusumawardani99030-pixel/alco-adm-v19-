@@ -15,6 +15,7 @@ import { APP_BUILD_ID } from '../config/buildInfo';
 import { normalizePhaseCode, TPValidationDetails } from './cpWorkflowService';
 import { UnitExecutionPlanValidationResult } from './unitExecutionPlanService';
 import { AIMeetingDiagnostic } from './aiService';
+import { UnitSemesterPlacementValidation } from './unitSemesterPlanningService';
 
 export type DiagnosticScope =
   | 'TP'
@@ -635,5 +636,84 @@ export function buildUnitExecutionPlanAIDiagnosticReport(data: {
     '',
     'Recent UNIT_EXECUTION_PLAN events:',
     ...formatEvents('UNIT_EXECUTION_PLAN'),
+  ].join('\n');
+}
+
+export function buildUnitSemesterPlanningDiagnosticReport(data: {
+  mapping: ATPUnitMappingData;
+  unitExecutionPlan: UnitExecutionPlanData;
+  validation: UnitSemesterPlacementValidation;
+  s1AvailableJP: number | null;
+  s2AvailableJP: number | null;
+}): string {
+  const { mapping, unitExecutionPlan, validation, s1AvailableJP, s2AvailableJP } = data;
+
+  const mappingUnits = mapping.units || [];
+  const planUnits = unitExecutionPlan.units || [];
+
+  const mappingUnitLines = mappingUnits.map(
+    (u) => `  - Order: ${u.order} | id: ${u.id} | title: "${u.title}" | ATP count: ${u.linkedAtpItemIds?.length || 0} | TP count: ${u.linkedTpIds?.length || 0} | material count: ${u.materials?.length || 0}`
+  );
+
+  const planUnitLines = planUnits.map((pu) => `  - unitId: ${pu.unitId}`);
+
+  const missingInPlan = mappingUnits
+    .filter((u) => !planUnits.some((pu) => pu.unitId === u.id))
+    .map((u) => u.id);
+
+  const orphanInPlan = planUnits
+    .filter((pu) => !mappingUnits.some((u) => u.id === pu.unitId))
+    .map((pu) => pu.unitId);
+
+  const isStale = validation.isStale;
+
+  const mode = unitExecutionPlan.semesterPlacement?.mode || 'CONTIGUOUS_BOUNDARY';
+  const semester1LastUnitId = unitExecutionPlan.semesterPlacement?.semester1LastUnitId;
+
+  return [
+    'ADMINISTRASI GURU AI - UNIT SEMESTER PLANNING DIAGNOSTIC',
+    '',
+    `Build ID: ${APP_BUILD_ID}`,
+    `Generated At: ${new Date().toISOString()}`,
+    '',
+    'MAPPING',
+    `- mappingId: ${mapping.id || '-'}`,
+    `- mappingUpdatedAt: ${mapping.updatedAt || '-'}`,
+    `- unitsCount: ${mappingUnits.length}`,
+    ...mappingUnitLines,
+    '',
+    'UNIT EXECUTION PLAN',
+    `- planId: ${unitExecutionPlan.id || '-'}`,
+    `- planUpdatedAt: ${unitExecutionPlan.updatedAt || '-'}`,
+    `- basedOnMappingUpdatedAt: ${unitExecutionPlan.basedOnMappingUpdatedAt || '-'}`,
+    `- unitsCount: ${planUnits.length}`,
+    ...planUnitLines,
+    `- stale: ${isStale}`,
+    '',
+    'MAPPING ↔ PLAN CONSISTENCY',
+    `- mappingUnitIds: ${mappingUnits.map((u) => u.id).join(', ') || '-'}`,
+    `- planUnitIds: ${planUnits.map((pu) => pu.unitId).join(', ') || '-'}`,
+    `- missingInPlan: ${missingInPlan.join(', ') || '- none'}`,
+    `- orphanInPlan: ${orphanInPlan.join(', ') || '- none'}`,
+    `- countMismatch: ${mappingUnits.length !== planUnits.length}`,
+    '',
+    'SEMESTER PLACEMENT',
+    `- mode: ${mode}`,
+    `- semester1LastUnitId: ${semester1LastUnitId === null ? 'null (all S2)' : (semester1LastUnitId || '-')}`,
+    `- valid: ${validation.isValid}`,
+    `- complete: ${validation.isComplete}`,
+    `- stale: ${validation.isStale}`,
+    `- errors: ${validation.errors.join(', ') || '- none'}`,
+    `- warnings: ${validation.warnings.join(', ') || '- none'}`,
+    '',
+    'RESOLVED PLACEMENT',
+    `- semester1UnitIds: ${validation.semester1UnitIds.join(', ') || '-'} (count: ${validation.semester1UnitIds.length})`,
+    `- semester2UnitIds: ${validation.semester2UnitIds.join(', ') || '-'} (count: ${validation.semester2UnitIds.length})`,
+    `- totalResolved: ${validation.resolvedUnits?.length || 0}`,
+    `- mappingUnitsCount: ${mappingUnits.length}`,
+    '',
+    'CAPACITY',
+    `- s1AvailableJP: ${s1AvailableJP === null ? '-' : s1AvailableJP}`,
+    `- s2AvailableJP: ${s2AvailableJP === null ? '-' : s2AvailableJP}`,
   ].join('\n');
 }

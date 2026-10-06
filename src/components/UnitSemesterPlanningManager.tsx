@@ -8,6 +8,7 @@ import {
   resolveUnitSemesterPlacement,
   suggestSemesterBoundary,
 } from '../services/unitSemesterPlanningService';
+import { buildUnitSemesterPlanningDiagnosticReport } from '../services/diagnosticService';
 import {
   Layers,
   Sparkles,
@@ -178,6 +179,29 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
     }
   };
 
+  const handleCopyDiagnostic = () => {
+    try {
+      const report = buildUnitSemesterPlanningDiagnosticReport({
+        mapping,
+        unitExecutionPlan: draftPlan,
+        validation,
+        s1AvailableJP,
+        s2AvailableJP,
+      });
+      navigator.clipboard.writeText(report);
+      setSaveNotice({
+        type: 'success',
+        message: 'Diagnostik Pembagian Bab berhasil disalin.',
+      });
+      setTimeout(() => setSaveNotice(null), 4000);
+    } catch (err: any) {
+      setSaveNotice({
+        type: 'error',
+        message: `Gagal menyalin diagnostik: ${err?.message || err}`,
+      });
+    }
+  };
+
   // Separate units into S1 and S2 based on validation resolvedUnits if placementDraft is set
   const sem1Units = useMemo(() => {
     if (!placementDraft) return [];
@@ -215,7 +239,7 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           {validation.isComplete ? (
             <span className="inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
               <CheckCircle2 className="w-3.5 h-3.5" /> PENEMPATAN LENGKAP
@@ -225,6 +249,14 @@ export const UnitSemesterPlanningManager: React.FC<UnitSemesterPlanningManagerPr
               <AlertCircle className="w-3.5 h-3.5" /> BELUM DITETAPKAN
             </span>
           )}
+
+          <button
+            type="button"
+            onClick={handleCopyDiagnostic}
+            className="px-4 py-2.5 rounded-xl font-bold text-xs flex items-center gap-2 transition-all cursor-pointer bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700"
+          >
+            <span>Salin Diagnostik</span>
+          </button>
 
           <button
             type="button"

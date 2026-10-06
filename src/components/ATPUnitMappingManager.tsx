@@ -192,7 +192,6 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     createInitialUnits(mapping, atp.items || [])
   );
   const [hasChanges, setHasChanges] = useState(false);
-  const [hasExplicitTargetUnitCount, setHasExplicitTargetUnitCount] = useState(false);
   const [saveSuccessNotice, setSaveSuccessNotice] = useState(false);
   const [saveErrorNotice, setSaveErrorNotice] = useState<string | null>(null);
   const [localValidationNotice, setLocalValidationNotice] = useState<string | null>(null);
@@ -261,6 +260,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     setAnalysisError(null);
     setAppliedNotice(null);
 
+    const requestedTargetUnitCount = units.length;
+
     try {
       const generated = await generateCanonicalATPUnitMappingWithAI({
         academicSettingId: academicSetting?.id || atp.academicSettingId,
@@ -269,10 +270,16 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         phase: academicSetting?.phase,
         tpData: tp,
         atpData: atp,
-        targetUnitCount: hasExplicitTargetUnitCount ? units.length : undefined,
+        targetUnitCount: requestedTargetUnitCount,
       });
 
-      if (generated && Array.isArray(generated.units) && generated.units.length > 0) {
+      if (generated && Array.isArray(generated.units)) {
+        if (generated.units.length !== requestedTargetUnitCount) {
+          throw new Error(
+            `AI menghasilkan ${generated.units.length} Bab, sedangkan target yang ditetapkan adalah ${requestedTargetUnitCount} Bab. Draf saat ini tidak diubah. Silakan coba susun ulang.`
+          );
+        }
+
         const nextUnits = createInitialUnits(generated, atp.items || []);
         setUnits(nextUnits);
         setHasChanges(true);
@@ -524,7 +531,6 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   };
 
   const handleAddEmptyBab = () => {
-    setHasExplicitTargetUnitCount(true);
     const nextOrder = units.length + 1;
     const newUnit: ATPUnitMapping = {
       id: `unit-${Date.now()}-${nextOrder}-${Math.random().toString(36).substring(2, 6)}`,
@@ -557,7 +563,6 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   };
 
   const handleTargetCountChange = (newCount: number) => {
-    setHasExplicitTargetUnitCount(true);
     const clamped = Math.max(1, Math.min(15, newCount));
     if (clamped > units.length) {
       const toAdd = clamped - units.length;
