@@ -1343,25 +1343,37 @@ export function App() {
     }
   };
 
-  const handleDeleteLearningPlan = (planId: string) => {
+  const handleDeleteLearningPlan = (planId: string): boolean => {
     if (!activeSemesterPlan) {
       setAppNotice({
         type: 'error',
         message: 'Pilih Semester aktif terlebih dahulu sebelum menghapus modul ajar.',
       });
-      return;
+      return false;
     }
 
     try {
-      const existing = runtimeContext.semesterData?.learningPlan || [];
+      const state = loadStorageV5();
+      const existing =
+        state.semesterData.learningPlan.find(
+          (e) => e.semesterPlanId === activeSemesterPlan.id
+        )?.value || [];
+
+      const found = existing.some((p) => p.id === planId);
+      if (!found) {
+        return false;
+      }
+
       const nextPlans = existing.filter((p) => p.id !== planId);
       saveLearningPlansV5(activeSemesterPlan.id, nextPlans);
       refreshV5();
+      return true;
     } catch (err: any) {
       setAppNotice({
         type: 'error',
         message: err instanceof Error ? err.message : 'Gagal menghapus modul ajar.',
       });
+      return false;
     }
   };
   const handleSaveAssessmentPlan = (plan: AssessmentPlan) => {

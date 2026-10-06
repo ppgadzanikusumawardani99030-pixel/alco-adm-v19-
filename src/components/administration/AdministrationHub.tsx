@@ -121,7 +121,7 @@ interface AdministrationHubProps {
   onSaveK13KKM: (kkm: K13KKM) => void;
   onSaveLearningPlan?: (plan: LearningPlan) => boolean;
   onSaveBulkLearningPlans?: (plans: LearningPlan[]) => void;
-  onDeleteLearningPlan?: (planId: string) => void;
+  onDeleteLearningPlan?: (planId: string) => boolean;
   onBackToStep: (stepId: any) => void;
   onUpdateDocuments?: (updatedDocs: AppDocumentRecord[]) => void;
 }
@@ -485,7 +485,7 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
             learningPlans={learningPlans || []}
             onSavePlan={onSaveLearningPlan || (() => false)}
             onSaveBulkPlans={onSaveBulkLearningPlans}
-            onDeletePlan={onDeleteLearningPlan || (() => {})}
+            onDeletePlan={onDeleteLearningPlan || (() => false)}
           />
         )}
 

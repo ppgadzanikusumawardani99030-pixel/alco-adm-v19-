@@ -102,7 +102,7 @@ interface LearningPlanManagerProps {
   learningPlans: LearningPlan[];
   onSavePlan: (plan: LearningPlan) => boolean;
   onSaveBulkPlans?: (plans: LearningPlan[]) => void;
-  onDeletePlan: (planId: string) => void;
+  onDeletePlan: (planId: string) => boolean;
 }
 
 export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
@@ -132,6 +132,9 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
   const [isExporting, setIsExporting] = useState<string | null>(null);
   const [isGeneratingAI, setIsGeneratingAI] = useState<boolean>(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+
+  type PendingAction = 'REGENERATE' | 'DELETE' | null;
+  const [pendingAction, setPendingAction] = useState<PendingAction>(null);
 
   const isK13Curriculum = academicSetting.curriculumType === 'K13' || academicSetting.curriculum?.includes('2013');
 
@@ -545,11 +548,6 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     const scope = resolveCanonicalScopeOfActivePlan();
     if (!scope) {
       showNotification('error', 'Scope aktif untuk modul ajar ini tidak ditemukan.');
-      return;
-    }
-
-    const confirmed = window.confirm('Regenerate akan mengganti isi draf Modul Ajar ini dengan hasil AI baru. Lanjutkan?');
-    if (!confirmed) {
       return;
     }
 
@@ -1194,7 +1192,8 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
                 <div className="flex items-center gap-2 pb-2">
                   {!isK13Curriculum && activePlan.sourceType === 'AI_DRAFT' && (
                     <button
-                      onClick={handleRegenerateAI}
+                      type="button"
+                      onClick={() => setPendingAction('REGENERATE')}
                       disabled={isGeneratingAI}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg shadow-sm disabled:opacity-50 cursor-pointer"
                       title="Regenerate draf modul ajar ini dengan hasil AI baru"
@@ -1204,30 +1203,37 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
                     </button>
                   )}
                   <button
+                    type="button"
                     onClick={handleExportDocx}
                     disabled={isExporting !== null}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg shadow-sm"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg shadow-sm cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5" />
                     Word (.docx)
                   </button>
                   <button
+                    type="button"
                     onClick={handleExportPdf}
                     disabled={isExporting !== null}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-sm cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5" />
                     PDF
                   </button>
                   <button
+                    type="button"
                     onClick={() => {
-                      if (window.confirm('Hapus rencana pembelajaran ini?')) {
-                        onDeletePlan(activePlan.id);
-                        setSelectedPlanId(null);
-                        showNotification('info', 'Rancangan pembelajaran dihapus.');
+                      if (!activePlan) return;
+                      const isReferenced = (assessmentPlans || []).some(
+                        (p) => p.learningPlanIds && p.learningPlanIds.includes(activePlan.id)
+                      );
+                      if (isReferenced) {
+                        showNotification('error', 'Modul Ajar tidak dapat dihapus karena masih digunakan sebagai rujukan rencana asesmen (AssessmentPlan).');
+                        return;
                       }
+                      setPendingAction('DELETE');
                     }}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors ml-1"
+                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors ml-1 cursor-pointer"
                     title="Hapus Rencana"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -2128,6 +2134,63 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
                 className="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 font-medium hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
               >
                 Batal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Dialog: Action Confirmation Modal */}
+      {pendingAction && activePlan && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-md w-full border border-slate-200 shadow-xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+            <div className="p-6">
+              <h3 className="text-base font-bold text-slate-900">
+                {pendingAction === 'REGENERATE' ? 'Konfirmasi Regenerate AI' : 'Konfirmasi Hapus Modul Ajar'}
+              </h3>
+              <p className="text-sm text-slate-500 mt-2 leading-relaxed">
+                {pendingAction === 'REGENERATE'
+                  ? 'Regenerate akan mengganti isi draf Modul Ajar ini dengan hasil AI baru. Lanjutkan?'
+                  : `Apakah Anda yakin ingin menghapus Modul Ajar "${activePlan.title || activePlan.topic || 'ini'}"? Tindakan ini tidak dapat dibatalkan.`}
+              </p>
+            </div>
+            <div className="bg-slate-50 px-6 py-4 flex items-center justify-end gap-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setPendingAction(null)}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingAction === 'REGENERATE') {
+                    setPendingAction(null);
+                    handleRegenerateAI();
+                  } else if (pendingAction === 'DELETE') {
+                    const deletingId = activePlan.id;
+                    setPendingAction(null);
+
+                    const deleted = onDeletePlan(deletingId);
+
+                    if (!deleted) {
+                      showNotification('error', 'Modul Ajar gagal dihapus.');
+                      return;
+                    }
+
+                    const remaining = learningPlans.filter((p) => p.id !== deletingId);
+                    setSelectedPlanId(remaining[0]?.id || null);
+                    showNotification('success', 'Modul Ajar berhasil dihapus.');
+                  }
+                }}
+                className={`px-4 py-2 text-xs font-semibold text-white rounded-lg transition-colors cursor-pointer ${
+                  pendingAction === 'REGENERATE'
+                    ? 'bg-indigo-600 hover:bg-indigo-700'
+                    : 'bg-rose-600 hover:bg-rose-700'
+                }`}
+              >
+                Konfirmasi
               </button>
             </div>
           </div>
