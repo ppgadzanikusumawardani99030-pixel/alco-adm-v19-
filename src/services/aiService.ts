@@ -619,6 +619,10 @@ export async function generateLearningPlanWithAI(params: GenerateLearningPlanPar
       delete data.data.allocatedJP;
     }
 
+    if (paramsWithAdaptation.cognitiveAdaptation && !data.data.cognitiveAdaptation) {
+      data.data.cognitiveAdaptation = paramsWithAdaptation.cognitiveAdaptation;
+    }
+
     return data.data;
   } catch (err) {
     throw new Error(formatAIErrorMessage(err, 'menyusun Modul Ajar / RPP'));

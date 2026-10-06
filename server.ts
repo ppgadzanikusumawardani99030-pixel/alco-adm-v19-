@@ -3145,10 +3145,13 @@ ${
      - Dukungan Visual (Visual Support): ${activeCognitiveAdaptation.visualSupport}
      - Derajat Scaffolding: ${activeCognitiveAdaptation.scaffoldingLevel}
      - Preferensi Konteks: ${activeCognitiveAdaptation.contextPreference || 'Kontekstual'}
-     - ATURAN ADAPTASI KOGNITIF WAJIB:
-       a. Pertahankan kompetensi dan tuntutan TP secara penuh.
-       b. JANGAN MENURUNKAN proses kognitif TP hanya karena kelas rendah (misal: jika TP menuntut proses kognitif bernalar/menganalisis/mengevaluasi, tuntutan kognitif tersebut TETAP dipertahankan melalui observasi konkret, manipulatif benda nyata, eksperimen sederhana, atau perbandingan terarah, BUKAN diturunkan menjadi sekadar hafalan/recall).
-       c. Sesuaikan tingkat abstraksi, beban bahasa/membaca, kompleksitas instruksi, dukungan visual, dan derajat scaffolding secara ketat sesuai profil adaptasi kognitif di atas.` : ''
+     - ATURAN ADAPTASI KOGNITIF:
+       1) Pertahankan tuntutan kompetensi TP secara utuh.
+       2) Grade/fase tidak boleh otomatis menurunkan level kognitif (jangan menurunkan tuntutan proses kognitif hanya karena kelas rendah).
+       3) Sesuaikan abstraksi, bahasa, instruksi, scaffolding, aktivitas, dan bukti belajar sesuai tingkat perkembangan kognitif di atas.
+       4) ANALYZE pada kelas awal dapat berupa mengamati, mencoba, membandingkan, memilih, dan memberikan alasan sederhana (BUKAN diturunkan menjadi sekadar hafalan/recall).
+       5) Jangan memaksakan HOTS jika tidak sesuai dengan kompetensi TP atau kapasitas perkembangan murid.
+       6) Gunakan bahasa, judul, dan rancangan kegiatan yang natural sesuai usia.` : ''
 }
 ${
   canonicalAllocatedJP
