@@ -28,6 +28,10 @@ import {
   fallbackAnalyzeMapping,
 } from './server/mappingAnalysis';
 import { validateGraduateProfileDimensions } from './src/constants/graduateProfileDimensions';
+import {
+  getCognitiveAdaptationProfile,
+  CognitiveAdaptationProfile,
+} from './src/services/cognitiveAdaptationService';
 
 dotenv.config();
 
@@ -3083,6 +3087,10 @@ app.post('/api/ai/generate-learning-plan', async (req, res) => {
     const grade = academicSetting?.grade || '';
     const phase = academicSetting?.phase || '';
 
+    const activeCognitiveAdaptation: CognitiveAdaptationProfile | undefined =
+      cognitiveAdaptation ||
+      (academicSetting ? getCognitiveAdaptationProfile(academicSetting, grade) : undefined);
+
     const canonicalAllocatedJP =
       typeof allocatedJP === 'number' && Number.isFinite(allocatedJP) && allocatedJP > 0
         ? allocatedJP
@@ -3130,18 +3138,22 @@ INSTRUKSI KEGIATAN & ASESMEN:
 9. Sediakan Rencana Diferensiasi (Konten, Proses, Produk).
 10. Buat kalimat pemahaman bermakna dan pertanyaan pemantik yang relevan.
 ${
-  cognitiveAdaptation ? `11. ADAPTASI KOGNITIF (WAJIB):
-     - Tingkat Abstraksi: ${cognitiveAdaptation.abstractionLevel}
-     - Beban Bahasa: ${cognitiveAdaptation.languageLoad}
-     - Kompleksitas Instruksi: ${cognitiveAdaptation.instructionComplexity}
-     - Visual Support: ${cognitiveAdaptation.visualSupport}
-     - Scaffolding: ${cognitiveAdaptation.scaffoldingLevel}
-     - Arahan: Pertahankan kompetensi TP, namun sesuaikan bahasa, abstraksi, dan aktivitas agar sesuai dengan level perkembangan kognitif di atas. Untuk fase awal/kelas rendah, gunakan bahasa konkret dan instruksi bertahap sederhana.` : ''
+  activeCognitiveAdaptation ? `11. ADAPTASI KOGNITIF (WAJIB & KAIDAH TUNGGAL):
+     - Tingkat Abstraksi: ${activeCognitiveAdaptation.abstractionLevel}
+     - Beban Bahasa (Language/Reading Load): ${activeCognitiveAdaptation.languageLoad}
+     - Kompleksitas Instruksi: ${activeCognitiveAdaptation.instructionComplexity}
+     - Dukungan Visual (Visual Support): ${activeCognitiveAdaptation.visualSupport}
+     - Derajat Scaffolding: ${activeCognitiveAdaptation.scaffoldingLevel}
+     - Preferensi Konteks: ${activeCognitiveAdaptation.contextPreference || 'Kontekstual'}
+     - ATURAN ADAPTASI KOGNITIF WAJIB:
+       a. Pertahankan kompetensi dan tuntutan TP secara penuh.
+       b. JANGAN MENURUNKAN proses kognitif TP hanya karena kelas rendah (misal: jika TP menuntut proses kognitif bernalar/menganalisis/mengevaluasi, tuntutan kognitif tersebut TETAP dipertahankan melalui observasi konkret, manipulatif benda nyata, eksperimen sederhana, atau perbandingan terarah, BUKAN diturunkan menjadi sekadar hafalan/recall).
+       c. Sesuaikan tingkat abstraksi, beban bahasa/membaca, kompleksitas instruksi, dukungan visual, dan derajat scaffolding secara ketat sesuai profil adaptasi kognitif di atas.` : ''
 }
 ${
   canonicalAllocatedJP
-    ? `${cognitiveAdaptation ? '12' : '11'}. ALOKASI WAKTU KANONIKAL: Lingkup pembelajaran ini memiliki Alokasi Waktu tepat ${canonicalAllocatedJP} JP dari pemetaan waktu semester. Rancang seluruh rangkaian kegiatan dan pengalaman belajar secara proporsional sesuai durasi ${canonicalAllocatedJP} JP tersebut. Jangan menebak, mengubah, atau menyimpulkan angka JP yang berbeda.`
-    : `${cognitiveAdaptation ? '12' : '11'}. ALOKASI WAKTU: Belum ditentukan. JANGAN mengarang atau memalsukan Alokasi JP.`
+    ? `${activeCognitiveAdaptation ? '12' : '11'}. ALOKASI WAKTU KANONIKAL: Lingkup pembelajaran ini memiliki Alokasi Waktu tepat ${canonicalAllocatedJP} JP dari pemetaan waktu semester. Rancang seluruh rangkaian kegiatan dan pengalaman belajar secara proporsional sesuai durasi ${canonicalAllocatedJP} JP tersebut. Jangan menebak, mengubah, atau menyimpulkan angka JP yang berbeda.`
+    : `${activeCognitiveAdaptation ? '12' : '11'}. ALOKASI WAKTU: Belum ditentukan. JANGAN mengarang atau memalsukan Alokasi JP.`
 }
 
 Kembalikan output JSON sesuai schema.`;
@@ -3309,6 +3321,10 @@ Kembalikan output JSON sesuai schema.`;
 
     if (canonicalAllocatedJP) {
       parsed.allocatedJP = canonicalAllocatedJP;
+    }
+
+    if (activeCognitiveAdaptation) {
+      parsed.cognitiveAdaptation = activeCognitiveAdaptation;
     }
 
     return res.json({ success: true, data: parsed, engine: 'gemini' });

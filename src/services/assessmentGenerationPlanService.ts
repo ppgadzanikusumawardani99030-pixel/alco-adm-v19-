@@ -16,6 +16,7 @@ import {
   CognitiveDemand,
   CognitiveAdaptationProfile,
 } from '../types';
+import { getCognitiveAdaptationProfile } from './cognitiveAdaptationService';
 
 export const PROV_MINIMUM_COVERAGE_ALLOCATION: AssessmentGenerationRule = {
   id: 'APP-DEFAULT-MINIMUM-COVERAGE',
@@ -406,8 +407,12 @@ export function resolveAssessmentGenerationPlan(
         ? `${obj.text} ${targetCritObj.name} ${targetCritObj.description || ''}`
         : obj.text;
 
+      const activeAdaptation = params.generationSpec?.generationProfile?.grade
+        ? getCognitiveAdaptationProfile(null, params.generationSpec.generationProfile.grade)
+        : undefined;
+
       const cognitiveDemand =
-        resolveConservativeCognitiveDemand(textToAnalyze);
+        resolveConservativeCognitiveDemand(textToAnalyze, activeAdaptation);
 
       if (cognitiveDemand) {
         baseUnitProvenance.push(

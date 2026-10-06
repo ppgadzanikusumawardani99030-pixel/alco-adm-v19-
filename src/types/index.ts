@@ -98,7 +98,8 @@ export interface SubjectWeeklySchedule {
 }
 
 export type { AssessmentPackageValidationContext } from '../services/assessmentPackageService';
-export type { CognitiveAdaptationProfile } from '../services/cognitiveAdaptationService';
+import type { CognitiveAdaptationProfile } from '../services/cognitiveAdaptationService';
+export type { CognitiveAdaptationProfile };
 
 export * from './jpEngine';
 
@@ -1032,6 +1033,7 @@ export interface LearningPlan {
    */
   p3Dimensions?: string[];
   allocatedJP?: number;
+  cognitiveAdaptation?: CognitiveAdaptationProfile;
 
   createdAt: string;
   updatedAt: string;

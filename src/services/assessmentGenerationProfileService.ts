@@ -5,93 +5,15 @@ import {
   AssessmentReferenceProgression,
   AssessmentGenerationRule,
 } from '../types';
-import { getPhaseForGrade } from '../data/curriculum/resolver';
+import {
+  resolveGrade,
+  resolvePhaseForGrade,
+  getCognitiveAdaptationProfile,
+  CognitiveAdaptationProfile,
+} from './cognitiveAdaptationService';
 
-const ROMAN_GRADE_MAP: Record<string, number> = {
-  I: 1,
-  II: 2,
-  III: 3,
-  IV: 4,
-  V: 5,
-  VI: 6,
-  VII: 7,
-  VIII: 8,
-  IX: 9,
-  X: 10,
-  XI: 11,
-  XII: 12,
-};
-
-function parseGradeString(str: string): number | undefined {
-  const trimmed = str.trim();
-  if (!trimmed) return undefined;
-
-  // Tolak format rentang atau karakter pembagi yang ambigu (misal: "4-5", "4/5", "10A-11A")
-  if (/[-/,_]/.test(trimmed)) {
-    return undefined;
-  }
-
-  // 1. Pola angka Arab: opsional prefix kata (kelas|kls|grade|tingkat), lalu angka integer 1..12 secara eksak
-  const arabicMatch = trimmed.match(/^(?:(?:kelas|kls|grade|tingkat)\s+)?([1-9]|1[0-2])$/i);
-  if (arabicMatch) {
-    const num = parseInt(arabicMatch[1], 10);
-    if (!isNaN(num) && num >= 1 && num <= 12) {
-      return num;
-    }
-  }
-
-  // 2. Pola angka Romawi: opsional prefix kata (kelas|kls|grade|tingkat), lalu angka Romawi I..XII secara eksak
-  const romanMatch = trimmed.match(/^(?:(?:kelas|kls|grade|tingkat)\s+)?(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)$/i);
-  if (romanMatch) {
-    const romanKey = romanMatch[1].toUpperCase();
-    if (romanKey in ROMAN_GRADE_MAP) {
-      return ROMAN_GRADE_MAP[romanKey];
-    }
-  }
-
-  return undefined;
-}
-
-/**
- * Resolusi nilai kelas (grade) secara aman dan deterministik.
- * Nilai wajib berupa bilangan bulat 1 s.d. 12.
- * Jika tidak valid atau ambigu, mengembalikan undefined (FAIL-CLOSED, tanpa fallback tebakan).
- */
-export function resolveGrade(
-  setting?: AcademicSetting | null,
-  inputGrade?: number | string
-): number | undefined {
-  if (inputGrade !== undefined && inputGrade !== null) {
-    if (typeof inputGrade === 'number' && Number.isInteger(inputGrade) && inputGrade >= 1 && inputGrade <= 12) {
-      return inputGrade;
-    }
-    if (typeof inputGrade === 'string') {
-      return parseGradeString(inputGrade);
-    }
-    return undefined;
-  }
-
-  if (setting && typeof setting.grade === 'number' && Number.isInteger(setting.grade) && setting.grade >= 1 && setting.grade <= 12) {
-    return setting.grade;
-  }
-
-  if (setting && typeof setting.grade === 'string') {
-    return parseGradeString(setting.grade);
-  }
-
-  return undefined;
-}
-
-/**
- * Resolusi fase kurikulum resmi berdasarkan grade.
- * Menggunakan canonical getPhaseForGrade dari curriculum resolver.
- * Mengembalikan undefined jika grade tidak terdefinisi pada fase resmi.
- */
-export function resolvePhaseForGrade(grade: number): string | undefined {
-  const phaseCode = getPhaseForGrade(grade);
-  if (!phaseCode) return undefined;
-  return `Fase ${phaseCode}`;
-}
+export { resolveGrade, resolvePhaseForGrade, getCognitiveAdaptationProfile };
+export type { CognitiveAdaptationProfile };
 
 /**
  * Resolusi progresi kerangka rujukan resmi AKM (Pusmendik BSKAP).
@@ -118,9 +40,20 @@ export function resolveAKMProgression(grade: number): AssessmentReferenceProgres
 
 /**
  * Profil kalibrasi perkembangan kognitif dan beban bacaan per jenjang kelas.
- * Bertindak sebagai panduan (guidance), bukan aturan mutlak atau template bahasa kaku.
+ * Bertindak sebagai panduan (guidance), mendelegasikan ke SSOT Cognitive Adaptation.
  */
 export function getGradeCalibrationProfile(grade: number): AssessmentGradeCalibrationProfile {
+  const adaptation = getCognitiveAdaptationProfile(null, grade) || {
+    grade,
+    readingLoad: 'HIGH' as const,
+    languageLoad: 'HIGH' as const,
+    instructionLoad: 'MULTI_STEP_ALLOWED' as const,
+    instructionComplexity: 'MULTI_STEP_ALLOWED' as const,
+    abstractionLevel: 'ABSTRACT_ALLOWED' as const,
+    visualSupport: 'AS_NEEDED' as const,
+    scaffoldingLevel: 'LOW' as const,
+  };
+
   const rules: AssessmentGenerationRule[] = [
     {
       id: `RULE-GRADE-CALIB-${grade}`,
@@ -130,56 +63,12 @@ export function getGradeCalibrationProfile(grade: number): AssessmentGradeCalibr
     },
   ];
 
-  if (grade <= 2) {
-    return {
-      grade,
-      readingLoad: 'VERY_LOW',
-      instructionLoad: 'SINGLE_STEP_PREFERRED',
-      abstractionLevel: 'CONCRETE',
-      visualSupport: 'STRONGLY_CONSIDER',
-      rules,
-    };
-  }
-
-  if (grade <= 4) {
-    return {
-      grade,
-      readingLoad: 'LOW',
-      instructionLoad: 'LIMITED_MULTI_STEP',
-      abstractionLevel: 'CONCRETE',
-      visualSupport: 'CONSIDER',
-      rules,
-    };
-  }
-
-  if (grade <= 6) {
-    return {
-      grade,
-      readingLoad: 'MODERATE',
-      instructionLoad: 'LIMITED_MULTI_STEP',
-      abstractionLevel: 'CONCRETE_TO_ABSTRACT',
-      visualSupport: 'CONSIDER',
-      rules,
-    };
-  }
-
-  if (grade <= 9) {
-    return {
-      grade,
-      readingLoad: 'MODERATE',
-      instructionLoad: 'MULTI_STEP_ALLOWED',
-      abstractionLevel: 'CONCRETE_TO_ABSTRACT',
-      visualSupport: 'AS_NEEDED',
-      rules,
-    };
-  }
-
   return {
     grade,
-    readingLoad: 'HIGH',
-    instructionLoad: 'MULTI_STEP_ALLOWED',
-    abstractionLevel: 'ABSTRACT_ALLOWED',
-    visualSupport: 'AS_NEEDED',
+    readingLoad: adaptation.readingLoad || adaptation.languageLoad,
+    instructionLoad: adaptation.instructionLoad || adaptation.instructionComplexity,
+    abstractionLevel: adaptation.abstractionLevel,
+    visualSupport: adaptation.visualSupport,
     rules,
   };
 }
