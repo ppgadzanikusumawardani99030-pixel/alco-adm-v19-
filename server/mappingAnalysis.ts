@@ -181,16 +181,15 @@ function findDeterministicMaterialAlignment(params: {
   // Tier 2: Global candidates (Search all canonical ATPs)
   const tier2 = evaluateCandidates(atpItems);
   if (tier2.bestItem && tier2.bestScore >= 3 && (tier2.bestScore - tier2.secondBestScore >= 1.5)) {
-    // C2: Allow global matching if parent unit has no lineage
     // Cross-Bab lineage guard: global candidate must belong to the parent unit
-    if (unitAtpIds.length > 0 && !unitAtpIds.includes(tier2.bestItem.id)) {
+    if (!unitAtpIds.includes(tier2.bestItem.id)) {
       return null;
     }
 
     const canonTps = getCanonicalTpsForAtpItem(tier2.bestItem);
-    // C6: Restrict to unit's TP coverage only if unit already has TPs
+    // C6: Restrict to unit's TP coverage
     const relevantTps = canonTps.filter((tpId) => {
-      if (unitTpIds.length > 0 && !unitTpIds.includes(tpId)) return false;
+      if (!unitTpIds.includes(tpId)) return false;
       const t = tpMap.get(tpId);
       const tTokens = extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''}`);
       return mTokens.some((tok) => tTokens.includes(tok));
@@ -291,7 +290,7 @@ WAJIB (C1):
 Untuk setiap Lingkup Materi manual yang ada pada Bab:
 - Jika materi sudah selaras secara lengkap dan benar dengan TP/ATP (silsilah lengkap dan valid terhadap Bab induk): status = "SUPPORTED".
 - Jika materi manual memiliki silsilah (lineage) kosong atau belum lengkap, tetapi ada keselarasan semantik yang kuat dengan TP/ATP canonical tertentu:
-  * Prioritaskan pencarian TP/ATP pada langkah ATP yang sudah terdaftar pada Bab induk (unitId). Namun, jika Bab induk belum memiliki ATP (lineage kosong) atau tidak ditemukan kecocokan di Bab induk, diperbolehkan mencari ke seluruh daftar ATP canonical.
+  * Pencarian TP/ATP HARUS dibatasi hanya pada langkah ATP yang sudah terdaftar pada Bab induk tersebut (unitId). JANGAN menyarankan penyelarasan ke ATP yang berada di Bab lain atau belum terpetakan ke Bab tersebut.
   * Berikan status "ALIGNABLE".
   * Berikan action type "ALIGN_EXISTING_MATERIAL".
   * Material harus memilih SUBSET TP yang benar-benar relevan dengan Lingkup Materi tersebut. JANGAN otomatis memasukkan semua TP dari ATP jika ada TP yang tidak relevan.
@@ -602,13 +601,11 @@ export function sanitizeMappingAnalysisResult(
       const allAtpIdsValid = rawAtpIds.length > 0 && rawAtpIds.every((id) => validAtpIds.has(id));
       const allTpIdsValid = rawTpIds.length > 0 && rawTpIds.every((id) => validTpIds.has(id));
 
-      // C2: Cross-Bab lineage guard: allow global matching if unit has no lineage
+      // Cross-Bab lineage guard: action ATPs/TPs must belong to the target unit
       const allAtpInUnit = rawAtpIds.every(id => unitAtpIds.includes(id));
       const allTpInUnit = rawTpIds.every(id => unitTpIds.includes(id));
-      
-      const allowGlobal = unitAtpIds.length === 0;
 
-      let allTpSupported = allAtpIdsValid && allTpIdsValid && (allowGlobal || (allAtpInUnit && allTpInUnit));
+      let allTpSupported = allAtpIdsValid && allTpIdsValid && allAtpInUnit && allTpInUnit;
       if (allTpSupported) {
         for (const tpId of rawTpIds) {
           let supported = false;
