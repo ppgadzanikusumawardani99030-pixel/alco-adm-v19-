@@ -251,11 +251,13 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
 
   // AI Initial Generation State
   const [isGeneratingMapping, setIsGeneratingMapping] = useState(false);
+  const [showRegenerateConfirm, setShowRegenerateConfirm] = useState(false);
   const [generationError, setGenerationError] = useState<string | null>(null);
 
   const handleGenerateMapping = async () => {
     if (isGeneratingMapping) return;
     setIsGeneratingMapping(true);
+    setShowRegenerateConfirm(false);
     setGenerationError(null);
     setAnalysisError(null);
     setAppliedNotice(null);
@@ -1387,18 +1389,44 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
 
           {/* AI Action Buttons */}
           <div className="flex items-center gap-2.5 flex-wrap">
-            {!hasSubstantiveManualMappingContent && (
-              <button
-                id="btn-generate-canonical-mapping"
-                type="button"
-                onClick={handleGenerateMapping}
-                disabled={isGeneratingMapping || (atp.items || []).length === 0 || (tp.items || []).length === 0}
-                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                title="Susun struktur Bab dan Lingkup Materi awal secara otomatis dari butir TP & alur ATP"
-              >
-                <Sparkles className={`w-4 h-4 ${isGeneratingMapping ? 'animate-spin' : ''}`} />
-                <span>{isGeneratingMapping ? 'Menyusun Pemetaan...' : 'Susun Pemetaan dengan AI'}</span>
-              </button>
+            <button
+              id="btn-generate-canonical-mapping"
+              type="button"
+              onClick={() => hasCanonicalMapping ? setShowRegenerateConfirm(true) : handleGenerateMapping()}
+              disabled={isGeneratingMapping || (atp.items || []).length === 0 || (tp.items || []).length === 0}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Susun struktur Bab dan Lingkup Materi awal secara otomatis dari butir TP & alur ATP"
+            >
+              <Sparkles className={`w-4 h-4 ${isGeneratingMapping ? 'animate-spin' : ''}`} />
+              <span>{isGeneratingMapping ? 'Menyusun Pemetaan...' : hasCanonicalMapping ? 'Susun Ulang dengan AI' : 'Susun Pemetaan dengan AI'}</span>
+            </button>
+
+            {/* Confirmation Modal */}
+            {showRegenerateConfirm && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+                <div className="bg-white rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-xl">
+                  <h3 className="font-bold text-slate-900">Konfirmasi Penyusunan Ulang</h3>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Pemetaan saat ini akan diganti sebagai DRAF baru. Data tersimpan belum berubah sampai guru menekan Simpan Pemetaan. Perubahan draft yang belum disimpan juga akan diganti.
+                  </p>
+                  <div className="flex gap-2 justify-end pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowRegenerateConfirm(false)}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleGenerateMapping}
+                      className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold transition cursor-pointer"
+                    >
+                      Lanjutkan
+                    </button>
+                  </div>
+                </div>
+              </div>
             )}
 
             <button
