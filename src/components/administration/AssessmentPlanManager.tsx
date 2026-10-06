@@ -260,9 +260,22 @@ export const AssessmentPlanManager: React.FC<AssessmentPlanManagerProps> = ({
       });
     });
 
+    const coveredTpIdsWithEmbeddedAssessment = new Set<string>();
+    if (learningPlans && Array.isArray(learningPlans)) {
+      for (const lp of learningPlans) {
+        const hasFormative = lp.assessmentPlan?.formative && lp.assessmentPlan.formative.length > 0;
+        const hasSummative = lp.assessmentPlan?.summative && lp.assessmentPlan.summative.length > 0;
+        if (hasFormative || hasSummative) {
+          for (const tpId of lp.tpIds || []) {
+            coveredTpIdsWithEmbeddedAssessment.add(tpId);
+          }
+        }
+      }
+    }
+
     // 3. Check if there are any canonical objectives not yet represented and not yet provisioned in-flight
     const unprovisionedIds = canonicalIds.filter(
-      (id) => !representedIds.has(id) && !provisionedTpIdsRef.current.has(id)
+      (id) => !representedIds.has(id) && !provisionedTpIdsRef.current.has(id) && !coveredTpIdsWithEmbeddedAssessment.has(id)
     );
 
     if (unprovisionedIds.length === 0) return;

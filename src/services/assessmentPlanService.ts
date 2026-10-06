@@ -905,6 +905,20 @@ export function generateAutoDraftPlansFromCanonicalContext(params: {
     (p.tpIds || []).forEach((id) => existingTpIds.add(id));
   }
 
+  // Deduplicate routines covered in LearningPlans with embedded assessments
+  const coveredTpIdsWithEmbeddedAssessment = new Set<string>();
+  if (params.learningPlans && Array.isArray(params.learningPlans)) {
+    for (const lp of params.learningPlans) {
+      const hasFormative = lp.assessmentPlan?.formative && lp.assessmentPlan.formative.length > 0;
+      const hasSummative = lp.assessmentPlan?.summative && lp.assessmentPlan.summative.length > 0;
+      if (hasFormative || hasSummative) {
+        for (const tpId of lp.tpIds || []) {
+          coveredTpIdsWithEmbeddedAssessment.add(tpId);
+        }
+      }
+    }
+  }
+
   const newPlans: AssessmentPlan[] = [];
 
   if (isMerdeka(params.academicSetting) && (!params.tp || params.tp.workflowStatus !== 'SIAP' || params.tp.needsReview === true)) {
@@ -914,6 +928,7 @@ export function generateAutoDraftPlansFromCanonicalContext(params: {
   if (isMerdeka(params.academicSetting) && params.tp?.items) {
     for (const item of params.tp.items) {
       if (existingTpIds.has(item.id)) continue;
+      if (coveredTpIdsWithEmbeddedAssessment.has(item.id)) continue;
 
       const derived = deriveAutoDraftAssessmentPlan({
         ...params,
@@ -926,6 +941,7 @@ export function generateAutoDraftPlansFromCanonicalContext(params: {
   } else if (isK13(params.academicSetting) && params.k13Analysis?.items) {
     for (const item of params.k13Analysis.items) {
       if (existingTpIds.has(item.id)) continue;
+      if (coveredTpIdsWithEmbeddedAssessment.has(item.id)) continue;
 
       const derived = deriveAutoDraftAssessmentPlan({
         ...params,

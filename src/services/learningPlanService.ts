@@ -101,6 +101,16 @@ export interface LearningPlanScopeUnit {
   materialScope?: string;
   materials?: { id: string; title: string }[];
   jp?: number | null;
+  meetings?: {
+    meetingId: string;
+    order: number;
+    title: string;
+    date?: string;
+    jp: number;
+    materials?: { id: string; title: string }[];
+    linkedTpIds?: string[];
+    linkedAtpItemIds?: string[];
+  }[];
 }
 
 export function isAtpReadyForAIScope(atpData?: ATPData | null): boolean {
@@ -453,6 +463,17 @@ export function buildLearningPlanScopeUnits(
       const matchedTps = availableTps.filter((t) => linkedTpIdSet.has(t.id));
       const matchedAtps = availableAtps.filter((a) => linkedAtpIdSet.has(a.id));
 
+      const meetings = rowsForUnit.map((r) => ({
+        meetingId: r.meetingId,
+        order: r.meetingOrder,
+        title: r.meetingTitle,
+        date: r.date || undefined,
+        jp: r.jp,
+        materials: r.materials,
+        linkedTpIds: r.linkedTpIds,
+        linkedAtpItemIds: r.linkedAtpItemIds,
+      }));
+
       unitScopes.push({
         id: unitId,
         type: 'CANONICAL_UNIT',
@@ -469,6 +490,7 @@ export function buildLearningPlanScopeUnits(
         tpItem: matchedTps[0],
         atpItems: matchedAtps,
         atpItem: matchedAtps[0],
+        meetings,
       });
     }
 

@@ -3231,7 +3231,7 @@ function validateAILearningPlanPayload(data: any): { isValid: boolean; reason?: 
 // Endpoint: AI Generate Learning Plan (Modul Ajar DRAFT)
 app.post('/api/ai/generate-learning-plan', async (req, res) => {
   const requestId = `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-  const { academicSetting, tps, atpItems, topic, allocatedJP, cognitiveAdaptation } = req.body || {};
+  const { academicSetting, tps, atpItems, topic, allocatedJP, cognitiveAdaptation, meetings, kktpCriteria } = req.body || {};
 
   if (!tps || !Array.isArray(tps) || tps.length === 0) {
     return res.status(400).json({ error: 'Minimal satu Tujuan Pembelajaran (TP) diperlukan untuk menyusun Modul Ajar' });
@@ -3275,6 +3275,39 @@ app.post('/api/ai/generate-learning-plan', async (req, res) => {
         }).join('\n')
       : 'ATP: Belum tersedia';
 
+    const meetingsContextStr = meetings && Array.isArray(meetings) && meetings.length > 0
+      ? meetings.map((m: any, i: number) => {
+          const parts: string[] = [];
+          parts.push(`Pertemuan ID: ${m.meetingId || m.id || '-'}`);
+          parts.push(`Urutan: ${m.order || i + 1}`);
+          parts.push(`Judul: ${m.title || '-'}`);
+          if (m.date) parts.push(`Tanggal: ${m.date}`);
+          parts.push(`JP: ${m.jp || '-'}`);
+          const mats = m.materials || m.materialIds;
+          if (mats && Array.isArray(mats)) {
+            const matTitles = mats.map((mat: any) => typeof mat === 'string' ? mat : (mat.title || mat.id)).join(', ');
+            if (matTitles) parts.push(`Materi: ${matTitles}`);
+          }
+          if (m.linkedTpIds && m.linkedTpIds.length > 0) {
+            parts.push(`TP Terhubung: ${m.linkedTpIds.join(', ')}`);
+          }
+          if (m.linkedAtpItemIds && m.linkedAtpItemIds.length > 0) {
+            parts.push(`ATP Terhubung: ${m.linkedAtpItemIds.join(', ')}`);
+          }
+          return `${i + 1}. ${parts.join(', ')}`;
+        }).join('\n')
+      : 'Pertemuan/Meeting: Belum tersedia';
+
+    const kktpContextStr = kktpCriteria && Array.isArray(kktpCriteria) && kktpCriteria.length > 0
+      ? kktpCriteria.map((ac: any, i: number) => {
+          const indicatorsStr = ac.indicators && Array.isArray(ac.indicators) ? ac.indicators.join('; ') : '-';
+          const levelsStr = ac.levels && Array.isArray(ac.levels)
+            ? ac.levels.map((lvl: any) => `${lvl.level || lvl.label}: ${lvl.description}`).join(' | ')
+            : '-';
+          return `${i + 1}. [TP ID: ${ac.tpId || '-'}] Deskripsi Kriteria: ${ac.description || '-'}\n   - Pendekatan: ${ac.approach || ac.method || '-'}\n   - Indikator: ${indicatorsStr}\n   - Kriteria Level/Deskripsi: ${levelsStr}`;
+        }).join('\n')
+      : 'KKTP/Kriteria Ketercapaian Tujuan Pembelajaran: Belum tersedia secara formal.';
+
     const prompt = `Anda adalah spesialis penyusun Modul Ajar / RPP Berdiferensiasi Kurikulum Merdeka 2026 (Deep Learning & Kemendikdasmen).
 Susun draf Modul Ajar pedagogis yang komprehensif berdasarkan data rujukan berikut:
 
@@ -3289,6 +3322,24 @@ ${tps.map((t: any, i: number) => `${i + 1}. [Kode: ${t.code || '-'}] ${t.stateme
 ATP RUJUKAN:
 ${atpContextStr}
 
+STRUKTUR PERTEMUAN KANONIKAL (WAJIB DIPATUHI):
+${meetingsContextStr}
+
+KRITERIA KETERCAPAIAN TUJUAN PEMBELAJARAN (KKTP) SEBAGAI ACUAN ASESMEN:
+${kktpContextStr}
+
+INSTRUKSI WAJIB MENGENAI STRUKTUR PERTEMUAN & KKTP:
+1. Pertahankan urutan, jumlah, dan lingkup pertemuan kanonikal yang diberikan di atas. Jangan memangkas, mengganti, atau menambah pertemuan.
+2. Buat seluruh draf pengalaman belajar (learningExperiences) dengan struktur 3 fase utama (UNDERSTAND, APPLY, REFLECT) agar benar-benar merepresentasikan dan menjangkau keseluruhan rangkaian kegiatan di setiap pertemuan secara nyata, runtut, dan detail, bukan hanya menulis aktivitas generik 3 baris. Jangan membuat satu learningExperience per pertemuan secara paksa, melainkan deskripsikan bagaimana rangkaian pertemuan tersebut mengalir dari fase memahami (UNDERSTAND), menerapkan (APPLY), hingga merefleksikan (REFLECT) secara harmonis.
+3. Batasi topik pembahasan ketat hanya pada Unit, TP, ATP, dan struktur pertemuan kanonikal di atas. Jangan memperluas materi di luar batas-batas tersebut.
+4. Alokasi JP total tepat ${canonicalAllocatedJP ? `${canonicalAllocatedJP} JP` : 'sesuai jumlah JP pertemuan'} dan bersifat mutlak dari rancangan pertemuan kanonikal.
+5. Jika rujukan KKTP di atas tersedia (bukan 'Belum tersedia'):
+   - Gunakan indikator dan kriteria level tersebut secara langsung sebagai acuan utama penyusunan rencana penilaian/asesmen (initial, formative, summative) agar terintegrasi secara autentik.
+   - JANGAN mengarang, membuat baru, atau memodifikasi KKTP yang sudah ada.
+6. Jika rujukan KKTP belum tersedia (bernilai 'Belum tersedia'):
+   - Buat rancangan penilaian/asesmen (initial, formative, summative) secara pedagogis umum/draf yang relevan dengan TP/ATP.
+   - JANGAN mengarang kriteria atau indikator KKTP formal baru.
+
 INSTRUKSI INFORMASI UMUM & PEDAGOGIS:
 1. "initialCompetency" (Kompetensi Awal): Tuliskan kalimat prasyarat kompetensi awal yang diharapkan (misal: "Murid diharapkan telah mengenal..." atau "Prasyarat pembelajaran meliputi..."). Jangan mengklaim penguasaan murid tanpa asesmen nyata.
 2. "graduateProfileDimensions": Pilih 2–4 dimensi profil lulusan yang paling relevan dari 8 dimensi kanonikal: "Keimanan dan Ketakwaan terhadap Tuhan Yang Maha Esa", "Kewargaan", "Penalaran Kritis", "Kreativitas", "Kolaborasi", "Kemandirian", "Kesehatan", "Komunikasi".
@@ -3299,7 +3350,7 @@ INSTRUKSI KEGIATAN & ASESMEN:
 5. Susun Pengalaman Belajar (learningExperiences) dengan struktur 3 fase utama (UNDERSTAND, APPLY, REFLECT) sesuai panduan 2026. Nilai properti "phase" HARUS salah satu dari: "UNDERSTAND", "APPLY", atau "REFLECT".
 6. Setiap Pengalaman Belajar memuat "description" yang jelas dan operasional, serta "durationMinutes" (dalam menit, opsional).
 7. Gunakan terminologi "Murid" (bukan peserta didik) dan "Dimensi Profil Lulusan".
-8. Sediakan Rencana Asesmen (Asesmen Diagnostik Awal, Formatif, dan Sumatif).
+8. Sediakan Rencana Asesmen (Asesmen Diagnostik Awal, Formatif, dan Sumatif) dengan memperhatikan acuan KKTP jika tersedia.
 9. Sediakan Rencana Diferensiasi (Konten, Proses, Produk).
 10. Buat kalimat pemahaman bermakna dan pertanyaan pemantik yang relevan.
 ${

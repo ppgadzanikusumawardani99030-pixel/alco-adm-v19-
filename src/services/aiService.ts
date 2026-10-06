@@ -9,6 +9,7 @@ import {
   CPAnalysisData,
   ATPUnitMappingData,
   UnitExecutionPlanData,
+  AssessmentCriterion,
 } from '../types';
 import { CognitiveAdaptationProfile, getCognitiveAdaptationProfile } from './cognitiveAdaptationService';
 import {
@@ -525,6 +526,17 @@ export interface GenerateLearningPlanParams {
   topic?: string;
   allocatedJP?: number;
   cognitiveAdaptation?: CognitiveAdaptationProfile;
+  meetings?: {
+    meetingId: string;
+    order: number;
+    title: string;
+    date?: string;
+    jp: number;
+    materials?: { id: string; title: string }[];
+    linkedTpIds?: string[];
+    linkedAtpItemIds?: string[];
+  }[];
+  kktpCriteria?: AssessmentCriterion[];
 }
 
 export async function generateLearningPlanWithAI(params: GenerateLearningPlanParams): Promise<Partial<LearningPlan>> {

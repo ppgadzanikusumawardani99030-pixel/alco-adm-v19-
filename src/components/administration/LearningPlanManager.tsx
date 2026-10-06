@@ -449,12 +449,17 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     const atpsToSend = scope.atpItems && scope.atpItems.length > 0 ? scope.atpItems : (scope.atpItem ? [scope.atpItem] : []);
     const canonicalTopic = scope.materialScope || scope.unitTitle || scope.title || (scope.tpItem ? (scope.tpItem.contentScope || scope.tpItem.statement) : '');
 
+    const tpIdsToSend = tpsToSend.map((t) => t.id);
+    const relevantCriteria = (assessmentCriteria || []).filter((ac) => tpIdsToSend.includes(ac.tpId));
+
     const aiDraftResult = await generateLearningPlanWithAI({
       academicSetting,
       tps: tpsToSend,
       atpItems: atpsToSend,
       topic: canonicalTopic,
       allocatedJP: scope.jp,
+      meetings: scope.meetings,
+      kktpCriteria: relevantCriteria,
     });
 
     const draftPlan = createAIDraftLearningPlan({
@@ -473,6 +478,8 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       context: { tp, atp },
     });
 
+    draftPlan.kktpCriterionIds = relevantCriteria.map((ac) => ac.id);
+
     return draftPlan;
   };
 
@@ -480,6 +487,10 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     setIsScopeModalOpen(false);
     setIsGeneratingAI(true);
     showNotification('info', `Sedang menyusun Draf AI Modul Ajar untuk unit '${scope.title}'...`);
+
+    const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
+    const tpIdsToSend = tpsToSend.map((t) => t.id);
+    const hasKktp = (assessmentCriteria || []).some((ac) => tpIdsToSend.includes(ac.tpId));
 
     try {
       recordDiagnosticEvent({
@@ -492,8 +503,8 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
           atpCount: scope.linkedAtpItemIds?.length || 0,
           learningMeetingCount: scope.learningMeetingIds?.length || 0,
           allocatedJP: scope.jp || 0,
-          meetingStructureSent: false,
-          kktpSent: false,
+          meetingStructureSent: !!scope.meetings?.length,
+          kktpSent: hasKktp,
         },
       });
       const draftPlan = await generateAIDraftPlanForScope(scope);
@@ -684,6 +695,10 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     let processed = 0;
     for (const scope of pendingScopes) {
       try {
+        const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
+        const tpIdsToSend = tpsToSend.map((t) => t.id);
+        const hasKktp = (assessmentCriteria || []).some((ac) => tpIdsToSend.includes(ac.tpId));
+
         recordDiagnosticEvent({
           scope: 'LEARNING_PLAN',
           action: 'LEARNING_PLAN_AI_REQUEST',
@@ -694,8 +709,8 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
             atpCount: scope.linkedAtpItemIds?.length || 0,
             learningMeetingCount: scope.learningMeetingIds?.length || 0,
             allocatedJP: scope.jp || 0,
-            meetingStructureSent: false,
-            kktpSent: false,
+            meetingStructureSent: !!scope.meetings?.length,
+            kktpSent: hasKktp,
           },
         });
         const draftPlan = await generateAIDraftPlanForScope(scope);
