@@ -76,7 +76,7 @@ function deriveUnitLinkedTpIds(linkedAtpItemIds: string[], atpItems: ATPItem[]):
 /**
  * Builds initial canonical units state.
  */
-function createInitialUnits(
+export function createInitialUnits(
   mapping: ATPUnitMappingData | undefined,
   atpItems: ATPItem[]
 ): ATPUnitMapping[] {
@@ -178,6 +178,59 @@ function createInitialUnits(
     });
   }
   return defaults;
+}
+
+/**
+ * Builds canonical ATPUnitMappingData from live units state without lossy silent filtering.
+ */
+export function buildCurrentMappingDraftFromUnits(
+  units: ATPUnitMapping[],
+  mappingId?: string,
+  academicSettingId?: string,
+  atpId?: string,
+  tpDataId?: string,
+  basedOnTpUpdatedAt?: string,
+  basedOnAtpUpdatedAt?: string
+): ATPUnitMappingData {
+  const finalUnits: ATPUnitMapping[] = units.map((u, idx) => {
+    const uId = u.id && u.id.trim() ? u.id.trim() : `unit-${Date.now()}-${idx + 1}`;
+    const uTitle = u.title !== undefined ? u.title : `Bab ${idx + 1}`;
+    const linkedAtpItemIds = Array.isArray(u.linkedAtpItemIds) ? [...u.linkedAtpItemIds] : [];
+    const linkedTpIds = Array.isArray(u.linkedTpIds) ? [...u.linkedTpIds] : [];
+
+    const materials: ATPUnitMaterial[] = (u.materials || []).map((m, mIdx) => {
+      const matAtpIds = Array.isArray(m.linkedAtpItemIds) ? [...m.linkedAtpItemIds] : [];
+      const matTpIds = Array.isArray(m.linkedTpIds) ? [...m.linkedTpIds] : [];
+
+      return {
+        id: m.id && m.id.trim() ? m.id.trim() : `mat-${Date.now()}-${mIdx + 1}`,
+        title: m.title !== undefined ? m.title : '',
+        order: mIdx + 1,
+        linkedTpIds: matTpIds,
+        linkedAtpItemIds: matAtpIds,
+      };
+    });
+
+    return {
+      id: uId,
+      title: uTitle,
+      order: idx + 1,
+      linkedAtpItemIds,
+      linkedTpIds,
+      materials,
+    };
+  });
+
+  return {
+    id: mappingId && mappingId.trim() ? mappingId.trim() : (atpId ? `mapping-${atpId}` : `atp-mapping-${Date.now()}`),
+    academicSettingId: academicSettingId || '',
+    atpId: atpId || '',
+    tpDataId: tpDataId || '',
+    units: finalUnits,
+    basedOnTpUpdatedAt,
+    basedOnAtpUpdatedAt,
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
@@ -747,74 +800,15 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
 
   // Helper to build canonical ATPUnitMappingData from current live draft
   const buildCurrentMappingDraft = (): ATPUnitMappingData => {
-    const finalUnits: ATPUnitMapping[] = units.map((u, idx) => {
-      const uId = u.id && u.id.trim() ? u.id.trim() : `unit-${Date.now()}-${idx + 1}`;
-      const uTitle = u.title !== undefined ? u.title : `Bab ${idx + 1}`;
-      const linkedAtpItemIds = Array.isArray(u.linkedAtpItemIds) ? [...u.linkedAtpItemIds] : [];
-
-      const supportedTpIdSet = new Set<string>();
-      linkedAtpItemIds.forEach((atpId) => {
-        const item = atpItemMap.get(atpId);
-        if (item) {
-          const resolvedIds = Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0
-            ? item.linkedTpIds
-            : item.tpId ? [item.tpId] : [];
-          resolvedIds.forEach((id) => {
-            if (id) supportedTpIdSet.add(id.trim());
-          });
-        }
-      });
-
-      // Preserve explicit valid unit.linkedTpIds - DO NOT expand or call deriveUnitLinkedTpIds
-      const linkedTpIds = Array.isArray(u.linkedTpIds)
-        ? u.linkedTpIds.filter((id) => supportedTpIdSet.has(id))
-        : [];
-
-      const materials: ATPUnitMaterial[] = (u.materials || []).map((m, mIdx) => {
-        const matAtpIds = (m.linkedAtpItemIds || []).filter((id) => linkedAtpItemIds.includes(id));
-        const matSupportedTpSet = new Set<string>();
-        matAtpIds.forEach((atpId) => {
-          const item = atpItemMap.get(atpId);
-          if (item) {
-            const resolvedIds = Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0
-              ? item.linkedTpIds
-              : item.tpId ? [item.tpId] : [];
-            resolvedIds.forEach((id) => {
-              if (id) matSupportedTpSet.add(id.trim());
-            });
-          }
-        });
-        const matTpIds = (m.linkedTpIds || []).filter((id) => linkedTpIds.includes(id) && matSupportedTpSet.has(id));
-
-        return {
-          id: m.id && m.id.trim() ? m.id.trim() : `mat-${Date.now()}-${mIdx + 1}`,
-          title: m.title !== undefined ? m.title : '',
-          order: mIdx + 1,
-          linkedTpIds: matTpIds,
-          linkedAtpItemIds: matAtpIds,
-        };
-      });
-
-      return {
-        id: uId,
-        title: uTitle,
-        order: idx + 1,
-        linkedAtpItemIds,
-        linkedTpIds,
-        materials,
-      };
-    });
-
-    return {
-      id: mapping?.id && mapping.id.trim() ? mapping.id.trim() : (atp.id ? `mapping-${atp.id}` : `atp-mapping-${Date.now()}`),
-      academicSettingId: academicSetting?.id || atp.academicSettingId || '',
-      atpId: atp.id,
-      tpDataId: tp.id || atp.tpDataId || '',
-      units: finalUnits,
-      basedOnTpUpdatedAt: tp.updatedAt || atp.basedOnTpUpdatedAt,
-      basedOnAtpUpdatedAt: atp.updatedAt,
-      updatedAt: new Date().toISOString(),
-    };
+    return buildCurrentMappingDraftFromUnits(
+      units,
+      mapping?.id,
+      academicSetting?.id || atp.academicSettingId,
+      atp.id,
+      tp.id || atp.tpDataId,
+      tp.updatedAt || atp.basedOnTpUpdatedAt,
+      atp.updatedAt
+    );
   };
 
   // AI Analysis State
@@ -1017,6 +1011,17 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   // Save Mapping Canonical
   const handleSave = (): boolean => {
     const result = buildCurrentMappingDraft();
+    const validation = validateATPUnitMappingCanonical(result, atp, tp);
+
+    if (!validation.isValid) {
+      setSaveSuccessNotice(false);
+      const errorMsg = validation.issues.length > 0
+        ? `Pemetaan tidak valid: ${validation.issues.join(' ')}`
+        : 'Pemetaan memiliki referensi tidak valid. Perbaiki silsilah/lineage sebelum menyimpan.';
+      setSaveErrorNotice(errorMsg);
+      setLocalValidationNotice(errorMsg);
+      return false;
+    }
 
     const saved = onSaveMapping(result);
     if (saved) {
