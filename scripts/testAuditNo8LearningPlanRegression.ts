@@ -7,6 +7,7 @@ import {
   validateLearningPlan,
   resolveLearningPlanAllocatedJP,
   buildLearningPlanScopeUnits,
+  normalizeAIAssessmentPlan,
 } from '../src/services/learningPlanService';
 import { generateAutoDraftPlansFromCanonicalContext, validateAssessmentPlan } from '../src/services/assessmentPlanService';
 import { resolveScheduledLearningMeetings } from '../src/services/scheduledLearningMeetingProjectionService';
@@ -532,6 +533,20 @@ async function runRegressionSuite() {
     const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
     const tpIdsToSend = tpsToSend.map((t: any) => t.id);
     const relevantCriteria = globalCriteria.filter((ac) => tpIdsToSend.includes(ac.tpId));
+    const canonicalTopic = scope.materialScope || scope.unitTitle || scope.title || (scope.tpItem ? (scope.tpItem.contentScope || scope.tpItem.statement) : '');
+
+    const isCanonicalUnit = scope.type === 'CANONICAL_UNIT' || Boolean(scope.unitTitle);
+    const canonicalTitle = scope.unitTitle
+      ? (scope.unitTitle.startsWith('Modul Ajar:') ? scope.unitTitle : `Modul Ajar: ${scope.unitTitle}`)
+      : (scope.title ? (scope.title.startsWith('Modul Ajar:') ? scope.title : `Modul Ajar: ${scope.title}`) : undefined);
+
+    const resolvedTitle = isCanonicalUnit
+      ? canonicalTitle
+      : (aiDraftResult.title || canonicalTitle);
+
+    const resolvedTopic = isCanonicalUnit
+      ? canonicalTopic
+      : (aiDraftResult.topic || canonicalTopic);
 
     const draftPlan = createAIDraftLearningPlan({
       academicSetting: mockSetting,
@@ -543,7 +558,8 @@ async function runRegressionSuite() {
       allocatedJP: scope.jp,
       aiDraft: {
         ...aiDraftResult,
-        title: aiDraftResult.title || (scope.unitTitle ? `Modul Ajar: ${scope.unitTitle}` : undefined),
+        title: resolvedTitle,
+        topic: resolvedTopic,
       },
       context: { tp: mockTpData, atp: mockAtpData },
     });
@@ -912,6 +928,95 @@ async function runRegressionSuite() {
     legacyLpNoKktp.status === 'DRAFT' && !legacyLpNoKktp.kktpCriterionIds,
     'Backward compatibility: LearningPlan without KKTP can still be constructed as a DRAFT',
     `status=${legacyLpNoKktp.status}`
+  );
+
+  console.log('\n--- B19.8: Canonical Unit Title & Topic Authority over AI Output ---');
+  const canonicalScopeTest: any = {
+    type: 'CANONICAL_UNIT',
+    unitId: 'unit-1',
+    unitTitle: 'Bab 1: Algoritma Pemrograman',
+    materialScope: 'Konsep Algoritma dan Pemrograman',
+    tpItems: [{ id: 'tp-101', statement: 'Belajar programming' }],
+    linkedTpIds: ['tp-101'],
+    linkedAtpItemIds: ['atp-201'],
+    meetings: [],
+    jp: 6,
+  };
+
+  const aiOutputWithOverrides = {
+    title: 'AI Hallucinated Title: Belajar Cepat Python',
+    topic: 'AI Hallucinated Topic: Machine Learning Masterclass',
+    initialCompetency: 'Siswa dapat membaca',
+    learningExperiences: [
+      { phase: 'UNDERSTAND', description: 'Memahami' },
+      { phase: 'APPLY', description: 'Menerapkan' },
+      { phase: 'REFLECT', description: 'Refleksi' },
+    ] as any,
+    graduateProfileDimensions: ['Bernalar Kritis'],
+    assessmentPlan: {
+      initial: [{ type: 'INITIAL', description: 'Tes Diagnostik Awal' }],
+      formative: [{ type: 'FORMATIVE', description: 'Kuis Formatif Proses' }],
+      summative: [{ type: 'SUMMATIVE', description: 'Tes Sumatif Akhir' }],
+    },
+  };
+
+  const planFromCanonicalScope = compileDraftLearningPlanForScope(
+    canonicalScopeTest,
+    allCriteria,
+    aiOutputWithOverrides
+  );
+
+  assert(
+    planFromCanonicalScope.title === 'Modul Ajar: Bab 1: Algoritma Pemrograman' &&
+    planFromCanonicalScope.title !== aiOutputWithOverrides.title,
+    'Canonical unit title must win over AI generated title for CANONICAL_UNIT scope',
+    `title=${planFromCanonicalScope.title}`
+  );
+
+  assert(
+    planFromCanonicalScope.topic === 'Konsep Algoritma dan Pemrograman' &&
+    planFromCanonicalScope.topic !== aiOutputWithOverrides.topic,
+    'Canonical topic must win over AI generated topic for CANONICAL_UNIT scope',
+    `topic=${planFromCanonicalScope.topic}`
+  );
+
+  console.log('\n--- B19.9: Assessment Plan Complete (Initial + Formative + Summative) Validation ---');
+  // 1. Incomplete assessment missing formative
+  const incompleteAssessmentMissingFormative = {
+    initial: [{ description: 'Tes Diagnostik Awal', technique: 'Tes Lisan' }],
+    formative: [], // MISSING formative
+    summative: [{ description: 'Tes Sumatif Akhir', technique: 'Tes Tertulis' }],
+  };
+
+  const normalizedIncomplete = normalizeAIAssessmentPlan(incompleteAssessmentMissingFormative, ['tp-101']);
+  const isIncompleteValid =
+    normalizedIncomplete.initial.length > 0 &&
+    normalizedIncomplete.formative.length > 0 &&
+    normalizedIncomplete.summative.length > 0;
+
+  assert(
+    !isIncompleteValid,
+    'Assessment plan without formative assessment must be rejected as invalid',
+    `initial=${normalizedIncomplete.initial.length}, formative=${normalizedIncomplete.formative.length}, summative=${normalizedIncomplete.summative.length}`
+  );
+
+  // 2. Complete assessment containing initial, formative, and summative
+  const completeAssessment = {
+    initial: [{ description: 'Tes Diagnostik Awal', technique: 'Tes Lisan' }],
+    formative: [{ description: 'Observasi Formatif', technique: 'Observasi' }],
+    summative: [{ description: 'Tes Sumatif Akhir', technique: 'Tes Tertulis' }],
+  };
+
+  const normalizedComplete = normalizeAIAssessmentPlan(completeAssessment, ['tp-101']);
+  const isCompleteValid =
+    normalizedComplete.initial.length > 0 &&
+    normalizedComplete.formative.length > 0 &&
+    normalizedComplete.summative.length > 0;
+
+  assert(
+    isCompleteValid,
+    'Assessment plan containing initial + formative + summative must be accepted as valid',
+    `initial=${normalizedComplete.initial.length}, formative=${normalizedComplete.formative.length}, summative=${normalizedComplete.summative.length}`
   );
 
   console.log(`\n==========================================`);

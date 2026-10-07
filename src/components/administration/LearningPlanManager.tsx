@@ -462,6 +462,19 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       kktpCriteria: relevantCriteria,
     });
 
+    const isCanonicalUnit = scope.type === 'CANONICAL_UNIT' || Boolean(scope.unitTitle);
+    const canonicalTitle = scope.unitTitle
+      ? (scope.unitTitle.startsWith('Modul Ajar:') ? scope.unitTitle : `Modul Ajar: ${scope.unitTitle}`)
+      : (scope.title ? (scope.title.startsWith('Modul Ajar:') ? scope.title : `Modul Ajar: ${scope.title}`) : undefined);
+
+    const resolvedTitle = isCanonicalUnit
+      ? canonicalTitle
+      : (aiDraftResult.title || canonicalTitle);
+
+    const resolvedTopic = isCanonicalUnit
+      ? canonicalTopic
+      : (aiDraftResult.topic || canonicalTopic);
+
     const draftPlan = createAIDraftLearningPlan({
       academicSetting,
       curriculumType,
@@ -472,8 +485,8 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       allocatedJP: scope.jp,
       aiDraft: {
         ...aiDraftResult,
-        title: aiDraftResult.title || (scope.unitTitle ? `Modul Ajar: ${scope.unitTitle}` : undefined),
-        topic: aiDraftResult.topic || canonicalTopic,
+        title: resolvedTitle,
+        topic: resolvedTopic,
       },
       context: { tp, atp },
     });

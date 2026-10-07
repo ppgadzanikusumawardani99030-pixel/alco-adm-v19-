@@ -3192,17 +3192,32 @@ function validateAILearningPlanPayload(data: any): { isValid: boolean; reason?: 
     return { isValid: false, reason: 'Rencana Asesmen (assessmentPlan) wajib berupa objek' };
   }
 
-  const assessmentCount = ['initial', 'formative', 'summative'].reduce((sum, key) => {
-    const items = Array.isArray(data.assessmentPlan[key]) ? data.assessmentPlan[key] : [];
-    return sum + items.filter((item: any) => item && typeof item === 'object' && (
-      typeof item.description === 'string' ||
-      typeof item.technique === 'string' ||
-      typeof item.method === 'string' ||
-      typeof item.instrument === 'string'
-    )).length;
-  }, 0);
-  if (assessmentCount === 0) {
-    return { isValid: false, reason: 'Rencana Asesmen tidak memuat item pedagogis valid' };
+  const isPedagogicalItemValid = (item: any) =>
+    item &&
+    typeof item === 'object' &&
+    ((typeof item.description === 'string' && item.description.trim().length > 0) ||
+      (typeof item.technique === 'string' && item.technique.trim().length > 0) ||
+      (typeof item.method === 'string' && item.method.trim().length > 0) ||
+      (typeof item.instrument === 'string' && item.instrument.trim().length > 0));
+
+  const initialItems = Array.isArray(data.assessmentPlan.initial)
+    ? data.assessmentPlan.initial.filter(isPedagogicalItemValid)
+    : [];
+  const formativeItems = Array.isArray(data.assessmentPlan.formative)
+    ? data.assessmentPlan.formative.filter(isPedagogicalItemValid)
+    : [];
+  const summativeItems = Array.isArray(data.assessmentPlan.summative)
+    ? data.assessmentPlan.summative.filter(isPedagogicalItemValid)
+    : [];
+
+  if (initialItems.length === 0) {
+    return { isValid: false, reason: 'Rencana Asesmen Awal (initial) tidak memuat item pedagogis valid' };
+  }
+  if (formativeItems.length === 0) {
+    return { isValid: false, reason: 'Rencana Asesmen Formatif (formative) tidak memuat item pedagogis valid' };
+  }
+  if (summativeItems.length === 0) {
+    return { isValid: false, reason: 'Rencana Asesmen Sumatif (summative) tidak memuat item pedagogis valid' };
   }
 
   if (data.triggerQuestions !== undefined && !Array.isArray(data.triggerQuestions)) {

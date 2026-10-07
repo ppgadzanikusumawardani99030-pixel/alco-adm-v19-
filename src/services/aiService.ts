@@ -615,12 +615,14 @@ export async function generateLearningPlanWithAI(params: GenerateLearningPlanPar
       }
     }
     const normalizedAssessmentPlan = normalizeAIAssessmentPlan(data.data.assessmentPlan, params.tps.map((t) => t.id));
-    const assessmentCount =
-      normalizedAssessmentPlan.initial.length +
-      normalizedAssessmentPlan.formative.length +
-      normalizedAssessmentPlan.summative.length;
-    if (assessmentCount === 0) {
-      throw new Error('Hasil respon AI Modul Ajar tidak memuat Rencana Asesmen valid.');
+    if (normalizedAssessmentPlan.initial.length === 0) {
+      throw new Error('Hasil respon AI Modul Ajar tidak memuat Rencana Asesmen Awal (initial / diagnostik) yang valid.');
+    }
+    if (normalizedAssessmentPlan.formative.length === 0) {
+      throw new Error('Hasil respon AI Modul Ajar tidak memuat Rencana Asesmen Formatif (formative) yang valid.');
+    }
+    if (normalizedAssessmentPlan.summative.length === 0) {
+      throw new Error('Hasil respon AI Modul Ajar tidak memuat Rencana Asesmen Sumatif (summative) yang valid.');
     }
     data.data.assessmentPlan = normalizedAssessmentPlan;
     data.data.reflection = normalizeAIReflection(data.data.reflection);
