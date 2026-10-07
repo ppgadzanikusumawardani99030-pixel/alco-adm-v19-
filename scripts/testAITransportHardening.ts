@@ -1378,6 +1378,183 @@ async function runTests() {
     }
   }
 
+  // Test 30: fallback valid -> retry with empty items array { engine: 'gemini', items: [] } -> uses first fallback without throw
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKeyEmptyItems');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback preserved on empty Gemini items', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback preserved on empty Gemini items', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: Gemini with empty items
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini',
+            items: []
+          })
+        }),
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: []
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch ran 2 requests on empty Gemini items (callCount: ${callCount})`);
+      assert(result.engine === 'pedagogical_engine', 'Result is pedagogical_engine fallback');
+      assert(result.items[0].statement === 'Fallback preserved on empty Gemini items', 'First fallback is used when Gemini returns empty items');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 31: fallback valid -> retry with invalid item structure { engine: 'gemini', items: [{}] } -> uses first fallback
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKeyInvalidItem');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback preserved on invalid Gemini item', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback preserved on invalid Gemini item', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: Gemini with item missing statement
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini',
+            items: [{}]
+          })
+        }),
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{}]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch ran 2 requests on invalid Gemini item (callCount: ${callCount})`);
+      assert(result.engine === 'pedagogical_engine', 'Result is pedagogical_engine fallback');
+      assert(result.items[0].statement === 'Fallback preserved on invalid Gemini item', 'First fallback is used when Gemini returns invalid item');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 32: fallback valid -> retry with valid item { engine: 'gemini', items: [{ statement: 'TP valid' }] } -> Gemini retry used
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKeyValidItem');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: Valid Gemini item
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini',
+            items: [{ code: 'E1-VAL-01', statement: 'TP valid dari Gemini' }]
+          })
+        }),
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{ code: 'E1-VAL-01', statement: 'TP valid dari Gemini' }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch ran 2 requests on valid Gemini item (callCount: ${callCount})`);
+      assert(result.engine === 'gemini', 'Result is gemini');
+      assert(result.items[0].statement === 'TP valid dari Gemini', 'Valid Gemini item is used');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
   console.log(`\n=== Hardening Tests Summary: ${passed} passed, ${failed} failed ===`);
   if (failed > 0) {
     process.exit(1);

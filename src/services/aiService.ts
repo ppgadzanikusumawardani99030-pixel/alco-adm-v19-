@@ -210,8 +210,33 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
             if (contentType.toLowerCase().includes('application/json')) {
               const retryCloned = typeof retryRes.clone === 'function' ? retryRes.clone() : retryRes;
               const retryBody = await retryCloned.json().catch(() => null);
-              if (retryBody && typeof retryBody === 'object' && retryBody.engine === 'gemini') {
-                return retryRes;
+              if (
+                retryBody &&
+                typeof retryBody === 'object' &&
+                retryBody.engine === 'gemini'
+              ) {
+                const rawItems = Array.isArray(retryBody.items)
+                  ? retryBody.items
+                  : Array.isArray(retryBody.data?.items)
+                  ? retryBody.data.items
+                  : null;
+
+                let hasValidItems = true;
+                if (rawItems !== null) {
+                  if (rawItems.length === 0) {
+                    hasValidItems = false;
+                  } else {
+                    hasValidItems = rawItems.every((it: any) => {
+                      if (!it || typeof it !== 'object') return false;
+                      const stmt = it.statement || it.description || it.cpCompetence || it.materialScope;
+                      return typeof stmt === 'string' && stmt.trim().length > 0;
+                    });
+                  }
+                }
+
+                if (hasValidItems) {
+                  return retryRes;
+                }
               }
             }
           }
