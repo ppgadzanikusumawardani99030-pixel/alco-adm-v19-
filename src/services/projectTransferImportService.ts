@@ -24,11 +24,13 @@ import {
   TPItem,
   ATPData,
   ATPItem,
+  AcademicSetting,
 } from '../types';
 import { validateProjectTransfer } from './projectTransferService';
 import {
   validateCPAnalysisDataWorkflow,
   validateTPDataWorkflow,
+  validateATPDataWorkflow,
 } from './cpWorkflowService';
 
 export interface ProjectTransferImportParams {
@@ -282,7 +284,6 @@ export function performImportProjectTransferInState(
 
     const anaValidation = validateCPAnalysisDataWorkflow(newCPAnalysisData, newCPData);
     newCPAnalysisData.workflowStatus = anaValidation.status;
-    newCPAnalysisData.status = anaValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
   }
 
   // 6. Generate fresh internal IDs for TPData and TPItems
@@ -354,9 +355,14 @@ export function performImportProjectTransferInState(
   };
 
   if (isMerdeka && newCPAnalysisData) {
-    const tpValidation = validateTPDataWorkflow(newTPData, newCPData, newCPAnalysisData);
-    newTPData.workflowStatus = tpValidation.status;
-    newTPData.status = tpValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
+    if (newCPAnalysisData.workflowStatus !== 'SIAP') {
+      newTPData.workflowStatus = 'DRAFT';
+      newTPData.status = 'DRAFT';
+    } else {
+      const tpValidation = validateTPDataWorkflow(newTPData, newCPData, newCPAnalysisData);
+      newTPData.workflowStatus = tpValidation.status;
+      newTPData.status = tpValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
+    }
   } else {
     newTPData.workflowStatus = 'DRAFT';
     newTPData.status = 'DRAFT';
@@ -434,6 +440,29 @@ export function performImportProjectTransferInState(
     },
     updatedAt: now,
   };
+
+  const academicSettingForVal: AcademicSetting = {
+    id: newYearPlanId,
+    schoolId: state.activeProfileId || '',
+    workspaceId: newWorkspaceId,
+    academicYear: targetAcademicYear,
+    subjectCode: targetSubject,
+    grade: targetGrade,
+    ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
+    curriculumType: pkg.curriculumType,
+    updatedAt: now,
+  };
+
+  const atpValidation = validateATPDataWorkflow(
+    newATPData,
+    newTPData,
+    academicSettingForVal,
+    newCPData,
+    isMerdeka ? newCPAnalysisData : undefined
+  );
+
+  newATPData.workflowStatus = atpValidation.status;
+  newATPData.status = atpValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
 
   // 9. Save hierarchy & annualData entries for the new YearPlan
   state.yearPlans.push(newYearPlan);
