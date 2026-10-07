@@ -125,7 +125,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
           id: '',
           stepNumber: item.stepNumber || idx + 1,
           linkedTpIds: rawLinkedTpIds,
-          focus: item.focus ? String(item.focus).trim() : undefined,
+          focus: item.focus ? String(item.focus).trim() : `Langkah ${idx + 1}`,
         };
 
         const refResult = resolveATPItemTPReferences(candidateItem, tp.items);
@@ -236,7 +236,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
       updatedAt: new Date().toISOString(),
     };
 
-    const valRes = validateATPReferences(candidate, tp);
+    const valRes = validateATPReferences(candidate, tp, academicSetting, cp, cpAnalysis);
     if (valRes.isSiap) {
       candidate.workflowStatus = 'SIAP';
       candidate.needsReview = false;
@@ -265,7 +265,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
       workflowStatus: atp.workflowStatus,
       needsReview: atp.needsReview,
     };
-    const val = validateATPReferences(candidate, tp);
+    const val = validateATPReferences(candidate, tp, academicSetting, cp, cpAnalysis);
     if (!val.isSiap || atp.workflowStatus !== 'SIAP' || atp.needsReview) {
       alert(`ATP belum SIAP untuk dilanjutkan: ${val.issues[0] || atp.reviewReason || 'Konfirmasi dan finalisasi ATP terlebih dahulu.'}`);
       return;
@@ -316,6 +316,12 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
 
   const handleSaveItemModal = (e: React.FormEvent) => {
     e.preventDefault();
+    const focusTrimmed = currentItem?.focus?.trim() || '';
+    if (!focusTrimmed) {
+      alert('Fokus langkah pembelajaran wajib diisi.');
+      return;
+    }
+
     const effectiveLinkedIds = Array.isArray(currentItem?.linkedTpIds) && currentItem.linkedTpIds.length > 0
       ? currentItem.linkedTpIds
       : currentItem?.tpId ? [currentItem.tpId] : [];
@@ -333,14 +339,14 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
       toSave = {
         ...existing,
         linkedTpIds: effectiveLinkedIds,
-        focus: currentItem.focus?.trim() || undefined,
+        focus: focusTrimmed,
         tpId: existing.tpId,
       };
     } else {
       toSave = {
         id: currentItem.id,
         linkedTpIds: effectiveLinkedIds,
-        focus: currentItem.focus?.trim() || undefined,
+        focus: focusTrimmed,
       };
     }
 
@@ -751,10 +757,11 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
               {/* Step Focus */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
-                  Fokus Langkah
+                  Fokus Langkah <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
+                  required
                   placeholder="Ringkasan fokus langkah pembelajaran ini..."
                   value={currentItem.focus || ''}
                   onChange={(e) => setCurrentItem({ ...currentItem, focus: e.target.value })}

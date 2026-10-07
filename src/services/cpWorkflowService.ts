@@ -291,6 +291,8 @@ function pedagogicalATPFingerprint(atp?: ATPData | null): string {
       tpId: item.tpId,
       tpCode: normalizeText(item.tpCode),
       tpStatement: normalizeText(item.tpStatement),
+      focus: normalizeText(item.focus),
+      linkedTpIds: normalizeStringArray(item.linkedTpIds),
       materialScope: normalizeText(item.materialScope),
       jp: item.jp ?? item.allocatedJP ?? null,
       assessmentPlan: normalizeText(item.assessmentPlan),
@@ -905,7 +907,9 @@ export function resolveATPItemTPReference(
 export function validateATPDataWorkflow(
   atp?: ATPData,
   tp?: TPData,
-  academicSetting?: AcademicSetting
+  academicSetting?: AcademicSetting,
+  cp?: CPData,
+  cpAnalysis?: CPAnalysisData
 ): {
   status: WorkflowCompletionStatus;
   isSiap: boolean;
@@ -927,26 +931,49 @@ export function validateATPDataWorkflow(
     };
   }
 
-  // Canonical TP Readiness check
-  if (!tp || tp.items.length === 0) {
+  // 1. Canonical TP Runtime Readiness check
+  if (!tp || !tp.items || tp.items.length === 0) {
     issues.push('Daftar Tujuan Pembelajaran (TP) acuan belum tersedia.');
-  } else if (tp.workflowStatus !== 'SIAP' || tp.needsReview) {
-    issues.push('Tujuan Pembelajaran (TP) acuan belum berstatus SIAP atau memerlukan peninjauan ulang.');
+  } else {
+    // Deep runtime validation on TP (don't blindly trust tp.workflowStatus)
+    const tpValidation = validateTPDataWorkflow(tp, cp, cpAnalysis, academicSetting);
+    if (!tpValidation.isSiap) {
+      tpValidation.issues.forEach((iss) => {
+        if (!issues.includes(iss)) {
+          issues.push(iss);
+        }
+      });
+    }
+    if (tp.workflowStatus !== 'SIAP') {
+      issues.push(`Tujuan Pembelajaran (TP) acuan belum berstatus SIAP (status: ${tp.workflowStatus || 'BELUM_DIMULAI'}).`);
+    }
+    if (tp.needsReview) {
+      issues.push(tp.reviewReason || 'Tujuan Pembelajaran (TP) acuan memerlukan peninjauan ulang.');
+    }
   }
 
-  // Flag review check
+  // 2. Flag review check on ATP
   if (atp.needsReview) {
     issues.push(
       atp.reviewReason || 'Alur Tujuan Pembelajaran (ATP) memerlukan peninjauan ulang karena TP acuan telah diperbarui.'
     );
   }
 
-  // Academic Setting check
+  // 3. Workflow status check on ATP
+  if (atp.workflowStatus !== 'SIAP') {
+    if (atp.workflowStatus === 'DRAFT') {
+      issues.push('Alur Tujuan Pembelajaran (ATP) berstatus DRAFT dan memerlukan konfirmasi guru.');
+    } else {
+      issues.push(`Alur Tujuan Pembelajaran (ATP) belum berstatus SIAP (status: ${atp.workflowStatus || 'BELUM_DIMULAI'}).`);
+    }
+  }
+
+  // 4. Academic Setting check
   if (academicSetting && atp.academicSettingId && atp.academicSettingId !== academicSetting.id) {
     issues.push(`ATP terikat pada Academic Setting lain (${atp.academicSettingId}).`);
   }
 
-  // Provenance check against TPData
+  // 5. Provenance & Stale check against TPData
   if (tp?.id) {
     if (atp.tpId && atp.tpId !== tp.id) {
       issues.push(`ID TPData pada ATP (${atp.tpId}) tidak sesuai dengan TP rujukan (${tp.id}).`);
@@ -956,17 +983,16 @@ export function validateATPDataWorkflow(
     }
     if (!atp.basedOnTpUpdatedAt) {
       issues.push('Lineage ATP belum mencatat waktu TP acuan saat dikonfirmasi.');
-    } else if (tp.updatedAt && atp.basedOnTpUpdatedAt !== tp.updatedAt) {
-      issues.push('TP acuan telah berubah sejak ATP dikonfirmasi.');
+    } else if (tp.updatedAt) {
+      const tpTime = new Date(tp.updatedAt).getTime();
+      const atpTpTime = new Date(atp.basedOnTpUpdatedAt).getTime();
+      if (tpTime > atpTpTime + 1000) {
+        issues.push('TP acuan telah berubah sejak ATP dikonfirmasi.');
+      }
     }
   }
 
-  // Check if AI generated ATP is still in DRAFT
-  if (atp.workflowStatus === 'DRAFT') {
-    issues.push('Alur Tujuan Pembelajaran (ATP) berstatus DRAFT dan memerlukan konfirmasi guru.');
-  }
-
-  // Items step ordering & reference validation
+  // 6. Items step ordering, non-empty focus & reference validation
   const tpItems = tp?.items || [];
   const seenStepNumbers = new Set<number>();
   const coveredTpIdSet = new Set<string>();
@@ -981,6 +1007,11 @@ export function validateATPDataWorkflow(
       issues.push(`Langkah ATP ke-${i + 1} memiliki nomor urut duplikat (${item.stepNumber}).`);
     } else {
       seenStepNumbers.add(item.stepNumber);
+    }
+
+    // Step focus non-empty check
+    if (!item.focus || !item.focus.trim()) {
+      issues.push(`Langkah ATP ke-${item.stepNumber || i + 1} belum memiliki fokus langkah pembelajaran (focus non-empty).`);
     }
 
     // Canonical multi-reference resolution
@@ -1010,7 +1041,7 @@ export function validateATPDataWorkflow(
     }
   }
 
-  // TP Coverage check (MISSING_TP_REFERENCE)
+  // 7. TP Coverage check (MISSING_TP_REFERENCE)
   if (tpItems.length > 0) {
     for (const tpItem of tpItems) {
       if (!coveredTpIdSet.has(tpItem.id)) {
@@ -1041,11 +1072,14 @@ export function validateATPDataWorkflow(
 }
 
 /**
- * Validates all ATP items against canonical TPData.
+ * Validates all ATP items against canonical TPData & AcademicSetting context.
  */
 export function validateATPReferences(
   atp?: ATPData,
-  tp?: TPData
+  tp?: TPData,
+  academicSetting?: AcademicSetting,
+  cp?: CPData,
+  cpAnalysis?: CPAnalysisData
 ): {
   status: WorkflowCompletionStatus;
   isSiap: boolean;
@@ -1053,7 +1087,7 @@ export function validateATPReferences(
   details: ATPReferenceResult[];
   multiDetails?: ATPMultiReferenceResult[];
 } {
-  return validateATPDataWorkflow(atp, tp);
+  return validateATPDataWorkflow(atp, tp, academicSetting, cp, cpAnalysis);
 }
 
 /**

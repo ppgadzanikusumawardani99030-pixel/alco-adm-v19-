@@ -38,7 +38,7 @@ const mockAcademicSetting: AcademicSetting = {
 const canonicalTPItems: TPItem[] = [
   {
     id: 'tp-canon-001',
-    code: 'TP 4.1',
+    code: 'E1-PGD-01',
     elementName: 'Keterampilan Gerak',
     statement: 'Mempraktikkan variasi pola gerak dasar lokomotor dan non-lokomotor.',
     competence: 'Mempraktikkan',
@@ -48,7 +48,7 @@ const canonicalTPItems: TPItem[] = [
   },
   {
     id: 'tp-canon-002',
-    code: 'TP 4.2',
+    code: 'E1-PGD-02',
     elementName: 'Pengetahuan Gerak',
     statement: 'Menerapkan konsep variasi pola gerak dasar lokomotor dalam permainan.',
     competence: 'Menerapkan',
@@ -58,7 +58,7 @@ const canonicalTPItems: TPItem[] = [
   },
   {
     id: 'tp-canon-003',
-    code: 'TP 4.3',
+    code: 'E1-PGD-03',
     elementName: 'Pemanfaatan Gerak',
     statement: 'Membiasakan aktivitas jasmani untuk menjaga kebugaran tubuh.',
     competence: 'Membiasakan',
@@ -106,7 +106,7 @@ const itemLegacyCode: ATPItem = {
   id: 'atp-2',
   stepNumber: 2,
   tpId: '',
-  tpCode: 'TP 4.2',
+  tpCode: 'E1-PGD-02',
   tpStatement: '',
   p3Dimensions: [],
 };
@@ -131,14 +131,14 @@ console.log('✅ 1.3 Unique legacy tpStatement matches -> LEGACY_MIGRATED');
 
 // 1.4 Duplicate tpCode -> AMBIGUOUS_REFERENCE (Must NOT pick first match)
 const duplicateCodeTPs: TPItem[] = [
-  { ...canonicalTPItems[0], id: 'tp-dup-1', code: 'TP 4.X' },
-  { ...canonicalTPItems[1], id: 'tp-dup-2', code: 'TP 4.X' },
+  { ...canonicalTPItems[0], id: 'tp-dup-1', code: 'E1-PGD-XX' },
+  { ...canonicalTPItems[1], id: 'tp-dup-2', code: 'E1-PGD-XX' },
 ];
 const itemDupCode: ATPItem = {
   id: 'atp-4',
   stepNumber: 4,
   tpId: '',
-  tpCode: 'TP 4.X',
+  tpCode: 'E1-PGD-XX',
   tpStatement: '',
   p3Dimensions: [],
 };
@@ -170,7 +170,7 @@ const itemDangling: ATPItem = {
   id: 'atp-6',
   stepNumber: 6,
   tpId: 'deleted-tp-999',
-  tpCode: 'TP 4.1',
+  tpCode: 'E1-PGD-01',
   tpStatement: canonicalTPItems[0].statement,
   p3Dimensions: [],
 };
@@ -197,7 +197,7 @@ const itemContradictory: ATPItem = {
   id: 'atp-8',
   stepNumber: 8,
   tpId: '',
-  tpCode: 'TP 4.1', // points to canon 001
+  tpCode: 'E1-PGD-01', // points to canon 001
   tpStatement: canonicalTPItems[1].statement, // points to canon 002
   p3Dimensions: [],
 };
@@ -248,7 +248,9 @@ let atpItems: ATPItem[] = [
     id: 'atp-item-A',
     stepNumber: 1,
     tpId: 'tp-canon-001',
-    tpCode: 'TP 4.1',
+    linkedTpIds: ['tp-canon-001'],
+    focus: 'Variasi gerak dasar',
+    tpCode: 'E1-PGD-01',
     tpStatement: canonicalTPItems[0].statement,
     materialScope: 'Variasi pola gerak',
     jp: 18,
@@ -259,7 +261,9 @@ let atpItems: ATPItem[] = [
     id: 'atp-item-B',
     stepNumber: 2,
     tpId: 'tp-canon-002',
-    tpCode: 'TP 4.2',
+    linkedTpIds: ['tp-canon-002'],
+    focus: 'Konsep gerak permainan',
+    tpCode: 'E1-PGD-02',
     tpStatement: canonicalTPItems[1].statement,
     materialScope: 'Konsep gerak dasar',
     jp: 18,
@@ -270,7 +274,9 @@ let atpItems: ATPItem[] = [
     id: 'atp-item-C',
     stepNumber: 3,
     tpId: 'tp-canon-003',
-    tpCode: 'TP 4.3',
+    linkedTpIds: ['tp-canon-003'],
+    focus: 'Aktivitas jasmani',
+    tpCode: 'E1-PGD-03',
     tpStatement: canonicalTPItems[2].statement,
     materialScope: 'Aktivitas jasmani',
     jp: 36,
@@ -430,21 +436,21 @@ assert.ok(
 );
 console.log('✅ 5.1 MISSING_TP_REFERENCE detected and prevents SIAP');
 
-// 5.2 DUPLICATE_TP_REFERENCE (same canonical TP referenced twice)
+// 5.2 DUPLICATE_TP_REFERENCE (same canonical TP referenced twice in same step)
 const duplicateRefATP: ATPData = {
   ...aiGeneratedATP,
   workflowStatus: 'SIAP',
   items: [
-    atpItems[0],
-    atpItems[0], // Duplicate!
+    { ...atpItems[0], linkedTpIds: [canonicalTPItems[0].id, canonicalTPItems[0].id] },
+    atpItems[1],
     atpItems[2],
   ],
 };
 const valDuplicate = validateATPReferences(duplicateRefATP, mockTPData);
 assert.strictEqual(valDuplicate.isSiap, false, 'Duplicate reference must prevent SIAP');
 assert.ok(
-  valDuplicate.issues.some((i) => i.includes('DUPLICATE_TP_REFERENCE')),
-  'Issues must explicitly flag DUPLICATE_TP_REFERENCE'
+  valDuplicate.issues.some((i) => i.includes('Duplicate TP Reference')),
+  'Issues must explicitly flag Duplicate TP Reference'
 );
 console.log('✅ 5.2 DUPLICATE_TP_REFERENCE detected and prevents SIAP');
 
@@ -459,8 +465,9 @@ const danglingATP: ATPData = {
       id: 'atp-item-dang',
       stepNumber: 3,
       tpId: 'ghost-tp',
-      tpCode: 'TP 4.3',
+      tpCode: 'E1-PGD-03',
       tpStatement: canonicalTPItems[2].statement,
+      focus: 'Aktivitas jasmani',
       p3Dimensions: [],
     },
   ],

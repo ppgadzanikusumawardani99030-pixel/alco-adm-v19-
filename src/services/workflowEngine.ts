@@ -26,7 +26,7 @@ import { validateAcademicSettingReadiness } from './academicSettingReadiness';
 import { resolveCurriculumContext, resolveSubjectInput } from '../data/curriculum/resolver';
 import { ResolvedCurriculumContext } from '../data/curriculum/types';
 import { getPhaseFromGrade } from '../data/curriculumDefaults';
-import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences, validateTPDataWorkflow, validateCPAnalysisDataWorkflow } from './cpWorkflowService';
+import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences, validateTPDataWorkflow, validateCPAnalysisDataWorkflow, validateATPDataWorkflow } from './cpWorkflowService';
 import { loadStorageV5, getSemesterDataV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
@@ -502,71 +502,50 @@ export function validateWorkflowDependencies(
       });
     }
 
-    // 4. ATP (Alur Tujuan Pembelajaran - Requires TP and references canonical tpId)
+    // 4. ATP (Alur Tujuan Pembelajaran - Uses authoritative validateATPDataWorkflow)
     const atpItems = atp?.items || [];
-    const validTpIds = new Set(tpItems.map((t) => t.id));
     const isATPBlocked = !isTPDataValid || isTPBlocked || isTPStale;
 
-    // Check ATP sequence, orphan tpIds, and canonical TP coverage
-    let hasOrphanATPItem = false;
-    let hasDuplicateATPSequence = false;
-    let hasMissingTpCoverage = false;
-    const coveredAtpTpIds = new Set<string>();
-    const seenSequences = new Set<number>();
+    const isATPStale = isTPDataValid && (
+      isUpstreamStale(tp?.updatedAt, atp?.basedOnTpUpdatedAt) ||
+      Boolean(atp?.needsReview)
+    );
 
-    atpItems.forEach((atpItem) => {
-      // Canonical multi-reference semantics (linkedTpIds or legacy compatibility fallback)
-      const refRes = resolveATPItemTPReferences(atpItem, tpItems);
-      if (!refRes.isValid) {
-        hasOrphanATPItem = true;
+    const atpValidation = !isATPBlocked && atp && atpItems.length > 0
+      ? validateATPDataWorkflow(atp, tp, academicSetting, cp, cpAnalysis)
+      : null;
+
+    const isATPComplete = !!(atpValidation && atpValidation.isSiap && !isATPBlocked && !isATPStale);
+
+    if (atpValidation && !atpValidation.isSiap && atpItems.length > 0 && !isATPBlocked) {
+      atpValidation.issues.forEach((issueMsg) => {
+        const isCoverage = issueMsg.startsWith('MISSING_TP_REFERENCE') || issueMsg.includes('belum dimasukkan');
+        const isDangling = issueMsg.includes('Dangling Reference') || issueMsg.includes('tidak ditemukan pada TP tersimpan');
+        const isDuplicateSeq = issueMsg.includes('nomor urut duplikat') || issueMsg.includes('Duplikasi nomor urut');
+        
         issues.push({
-          severity: 'ERROR',
+          severity: isCoverage || isDangling ? 'ERROR' : 'WARNING',
           module: 'atp',
-          code: 'ORPHAN_ATP_TP_ID',
-          message: refRes.issues[0] || `Item ATP '${atpItem.id}' tidak terhubung ke TP canonical.`,
-          targetId: atpItem.id,
+          code: isCoverage
+            ? 'MISSING_ATP_TP_COVERAGE'
+            : isDangling
+            ? 'ORPHAN_ATP_TP_ID'
+            : isDuplicateSeq
+            ? 'DUPLICATE_ATP_SEQUENCE'
+            : 'ATP_WORKFLOW_INCOMPLETE',
+          message: issueMsg,
         });
-      } else {
-        refRes.canonicalTPItems.forEach((t) => coveredAtpTpIds.add(t.id));
-      }
-
-      const seq = atpItem.stepNumber || atpItem.sequence;
-      if (seq) {
-        if (seenSequences.has(seq)) {
-          hasDuplicateATPSequence = true;
-          issues.push({
-            severity: 'WARNING',
-            module: 'atp',
-            code: 'DUPLICATE_ATP_SEQUENCE',
-            message: `Duplikasi nomor urut ATP ${seq} terdeteksi.`,
-            targetId: atpItem.id,
-          });
-        }
-        seenSequences.add(seq);
-      }
-    });
-
-    if (isTPDataValid && tpItems.length > 0 && atpItems.length > 0) {
-      tpItems.forEach((tpItem) => {
-        if (!coveredAtpTpIds.has(tpItem.id)) {
-          hasMissingTpCoverage = true;
-          issues.push({
-            severity: 'ERROR',
-            module: 'atp',
-            code: 'MISSING_ATP_TP_COVERAGE',
-            message: `Tujuan Pembelajaran '${tpItem.code || tpItem.id}' belum dimasukkan ke dalam Alur Tujuan Pembelajaran (ATP).`,
-            targetId: tpItem.id,
-          });
-        }
       });
     }
 
-    const isATPComplete =
-      isTPDataValid &&
-      atpItems.length > 0 &&
-      !hasOrphanATPItem &&
-      !hasMissingTpCoverage;
-    const isATPStale = isTPDataValid && isUpstreamStale(tp?.updatedAt, atp?.basedOnTpUpdatedAt);
+    if (isATPStale) {
+      issues.push({
+        severity: 'INFO',
+        module: 'atp',
+        code: 'STALE_ATP',
+        message: 'Tujuan Pembelajaran diperbarui setelah penyusunan ATP. Alur ATP mungkin memerlukan penyesuaian.',
+      });
+    }
 
     stepStates.atp = {
       id: 'atp',
@@ -583,23 +562,16 @@ export function validateWorkflowDependencies(
       isComplete: isATPComplete,
       isStale: isATPStale,
       reason: isATPBlocked
-        ? 'Memerlukan daftar Tujuan Pembelajaran (TP) terlebih dahulu'
+        ? (!isTPDataValid && tpItems.length > 0 && tpValidation?.issues?.[0]
+            ? `TP acuan belum siap: ${tpValidation.issues[0]}`
+            : 'Memerlukan daftar Tujuan Pembelajaran (TP) yang siap terlebih dahulu')
         : isATPStale
         ? 'Daftar TP telah diperbarui, alur ATP perlu ditinjau'
-        : hasMissingTpCoverage
-        ? 'Belum semua Tujuan Pembelajaran (TP) dimasukkan ke dalam alur ATP'
+        : !isATPComplete && atpItems.length > 0 && atpValidation?.issues?.[0]
+        ? atpValidation.issues[0]
         : undefined,
       missingDependencies: isATPBlocked ? ['Tujuan Pembelajaran (TP)'] : undefined,
     };
-
-    if (isATPStale) {
-      issues.push({
-        severity: 'INFO',
-        module: 'atp',
-        code: 'STALE_ATP',
-        message: 'Tujuan Pembelajaran diperbarui setelah penyusunan ATP. Alur ATP mungkin memerlukan penyesuaian.',
-      });
-    }
 
     // 5. KKTP Validation (Standalone branch from TP -> KKTP)
     let hasOrphanCriterion = false;
