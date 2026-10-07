@@ -88,7 +88,7 @@ function validTP(overrides: Partial<TPData> = {}): TPData {
     items: [
       {
         id: 'tp-item-1',
-        code: 'TP 1.1',
+        code: 'E1-TKS-01',
         statement: 'Peserta didik mampu mengidentifikasi informasi utama dalam teks sederhana.',
         competence: 'Mengidentifikasi',
         contentScope: 'Informasi utama teks sederhana',
@@ -97,7 +97,7 @@ function validTP(overrides: Partial<TPData> = {}): TPData {
       },
       {
         id: 'tp-item-2',
-        code: 'TP 1.2',
+        code: 'E1-TKS-02',
         statement: 'Peserta didik mampu menceritakan kembali isi teks sederhana dengan bahasa sendiri.',
         competence: 'Menceritakan',
         contentScope: 'Isi teks sederhana',

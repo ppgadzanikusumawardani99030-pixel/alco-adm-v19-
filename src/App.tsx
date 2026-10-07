@@ -1632,6 +1632,7 @@ export function App() {
               atp={activeATP}
               tp={activeTP}
               cp={activeCP}
+              cpAnalysis={activeCPAnalysis}
               context={transitionalActiveContext}
               academicSetting={transitionalAcademicSetting}
               profile={activeProfile}

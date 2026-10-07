@@ -45,6 +45,62 @@ import {
   formatPreviewRouteProbeReport,
 } from '../services/previewRouteProbe';
 
+function deriveScopeCode(scopeText?: string): string {
+  if (!scopeText || !scopeText.trim()) return 'MAT';
+  const words = scopeText.trim().replace(/[^a-zA-Z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    const code = words.map((w) => w[0].toUpperCase()).slice(0, 4).join('');
+    if (code.length >= 2) return code;
+  }
+  const word = (words[0] || 'MAT').toUpperCase();
+  if (word.length <= 4) return word;
+  return word.slice(0, 3);
+}
+
+function generateSemanticTPCode(
+  selectedAnalysisItem: { id: string; elementId?: string; elementName?: string; scopeCode?: string; materialScope?: string },
+  cpElements: Array<{ id?: string; name: string; code?: string }> = [],
+  existingItems: TPItem[] = [],
+  currentEditingItemId?: string
+): string {
+  let elementCode = 'E1';
+  if (cpElements && cpElements.length > 0) {
+    const elemIdx = cpElements.findIndex(
+      (e, idx) =>
+        (selectedAnalysisItem.elementId && e.id === selectedAnalysisItem.elementId) ||
+        (e.name && selectedAnalysisItem.elementName && e.name.toLowerCase().trim() === selectedAnalysisItem.elementName.toLowerCase().trim()) ||
+        (e.code && selectedAnalysisItem.elementId && e.code.toLowerCase().trim() === selectedAnalysisItem.elementId.toLowerCase().trim())
+    );
+    if (elemIdx >= 0) {
+      const matchedElem = cpElements[elemIdx];
+      elementCode = matchedElem.code && /^E\d+$/i.test(matchedElem.code)
+        ? matchedElem.code.toUpperCase()
+        : `E${elemIdx + 1}`;
+    }
+  }
+
+  const rawScope = (selectedAnalysisItem.scopeCode || '').trim().toUpperCase();
+  const scopeCode = rawScope && /^[A-Z0-9]{2,5}$/.test(rawScope)
+    ? rawScope
+    : deriveScopeCode(selectedAnalysisItem.materialScope || selectedAnalysisItem.elementName || 'Umum');
+
+  const prefix = `${elementCode}-${scopeCode}`;
+  let maxSeq = 0;
+  existingItems.forEach((it) => {
+    if (currentEditingItemId && it.id === currentEditingItemId) return;
+    if (it.code && it.code.toUpperCase().startsWith(`${prefix}-`)) {
+      const parts = it.code.split('-');
+      const num = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(num) && num > maxSeq) {
+        maxSeq = num;
+      }
+    }
+  });
+
+  const nextSeq = maxSeq + 1;
+  return `${prefix}-${String(nextSeq).padStart(2, '0')}`;
+}
+
 interface TPManagerProps {
   tp: TPData;
   cp: CPData;
@@ -364,63 +420,88 @@ export const TPManager: React.FC<TPManagerProps> = ({
 
   const handleOpenAdd = () => {
     const nextNum = items.length + 1;
-    const gradeNum = context.grade.replace(/[^0-9]/g, '') || '4';
     const newId = `tp-item-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    const defaultAnalysisItem = cpAnalysis?.items?.[0];
-    const defaultAnalysisId = defaultAnalysisItem?.id;
     setCurrentItem({
       id: newId,
-      code: `TP ${gradeNum}.${nextNum}`,
-      elementName: defaultAnalysisItem?.elementName || cp.elements?.[0]?.name || 'Umum',
+      code: '',
+      elementName: '',
       statement: '',
-      competence: defaultAnalysisItem?.cpCompetence || '',
-      contentScope: defaultAnalysisItem?.materialScope || '',
+      competence: '',
+      contentScope: '',
       p3Dimensions: [],
       order: nextNum,
-      cpAnalysisItemIds: defaultAnalysisId ? [defaultAnalysisId] : [],
-      cpAnalysisId: defaultAnalysisId,
+      cpAnalysisItemIds: [],
     });
     setIsEditing(true);
   };
 
   const handleOpenEdit = (item: TPItem) => {
     const rawAnalysisIds = Array.isArray(item.cpAnalysisItemIds) && item.cpAnalysisItemIds.length > 0
-      ? item.cpAnalysisItemIds
+      ? [...item.cpAnalysisItemIds]
       : item.cpAnalysisId
       ? [item.cpAnalysisId]
-      : (cpAnalysis?.items?.[0]?.id ? [cpAnalysis.items[0].id] : []);
+      : [];
     setCurrentItem({
       ...item,
       cpAnalysisItemIds: rawAnalysisIds,
-      cpAnalysisId: rawAnalysisIds[0],
+      cpAnalysisId: rawAnalysisIds[0] || undefined,
     });
     setIsEditing(true);
   };
 
   const handleSaveItemModal = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentItem || (!currentItem.statement.trim() && !(currentItem.description || '').trim())) {
+    if (!currentItem) return;
+
+    const stmt = (currentItem.statement || currentItem.description || '').trim();
+    if (!stmt) {
       alert('Rumusan Tujuan Pembelajaran wajib diisi.');
       return;
     }
 
-    const stmt = (currentItem.statement || currentItem.description || '').trim();
-    const effectiveAnalysisIds = Array.isArray(currentItem.cpAnalysisItemIds) && currentItem.cpAnalysisItemIds.length > 0
-      ? currentItem.cpAnalysisItemIds
+    const effectiveAnalysisIds = Array.isArray(currentItem.cpAnalysisItemIds)
+      ? currentItem.cpAnalysisItemIds.filter(Boolean)
       : currentItem.cpAnalysisId
       ? [currentItem.cpAnalysisId]
-      : (cpAnalysis?.items?.length ? [cpAnalysis.items[0].id] : []);
+      : [];
 
-    if (cpAnalysis?.items && cpAnalysis.items.length > 0 && effectiveAnalysisIds.length === 0) {
-      alert('Pilih tepat 1 butir Analisis CP rujukan untuk butir TP ini.');
+    if (effectiveAnalysisIds.length !== 1) {
+      alert('Setiap Tujuan Pembelajaran wajib merujuk ke tepat 1 butir Analisis CP. Silakan pilih butir Analisis CP rujukan.');
+      return;
+    }
+
+    const code = (currentItem.code || '').trim().toUpperCase();
+    if (!code) {
+      alert('Kode TP wajib diisi.');
+      return;
+    }
+
+    const tpCodeRegex = /^E\d+-[A-Z0-9]{2,5}-\d{2}$/;
+    if (!tpCodeRegex.test(code)) {
+      alert(`Format Kode TP "${code}" tidak sah! Format harus sesuai pola kanonikal seperti E1-PGD-01 (huruf E kapital, angka, singkatan materi kapital 2-5 karakter, dan nomor urut 2 digit).`);
+      return;
+    }
+
+    const comp = (currentItem.competence || (currentItem as any).competency || '').trim();
+    if (!comp) {
+      alert('Kata Kerja Operasional (Kompetensi) wajib diisi.');
+      return;
+    }
+
+    const scope = (currentItem.contentScope || (currentItem as any).materialScope || '').trim();
+    if (!scope) {
+      alert('Lingkup Materi wajib diisi.');
       return;
     }
 
     const finalItem: TPItem = {
       ...currentItem,
+      code,
       statement: stmt,
       description: stmt,
-      cpAnalysisItemIds: effectiveAnalysisIds,
+      competence: comp,
+      contentScope: scope,
+      cpAnalysisItemIds: [effectiveAnalysisIds[0]],
       cpAnalysisId: effectiveAnalysisIds[0],
     };
 
@@ -888,8 +969,23 @@ export const TPManager: React.FC<TPManagerProps> = ({
                     onChange={(e) => {
                       const selId = e.target.value;
                       const matchedAna = cpAnalysis.items.find((a) => a.id === selId);
+                      let generatedCode = currentItem.code;
+                      let resolvedScopeCode = currentItem.scopeCode;
+                      if (matchedAna) {
+                        generatedCode = generateSemanticTPCode(
+                          matchedAna,
+                          cp.elements || [],
+                          items,
+                          currentItem.id
+                        );
+                        resolvedScopeCode =
+                          (matchedAna.scopeCode || '').trim().toUpperCase() ||
+                          deriveScopeCode(matchedAna.materialScope || matchedAna.elementName || 'Umum');
+                      }
                       setCurrentItem({
                         ...currentItem,
+                        code: generatedCode,
+                        scopeCode: resolvedScopeCode,
                         cpAnalysisItemIds: selId ? [selId] : [],
                         cpAnalysisId: selId || undefined,
                         elementName: matchedAna?.elementName || currentItem.elementName,
@@ -917,10 +1013,10 @@ export const TPManager: React.FC<TPManagerProps> = ({
                   <input
                     type="text"
                     required
-                    placeholder="Contoh: TP 4.1"
+                    placeholder="Contoh: E1-PGD-01"
                     value={currentItem.code}
                     onChange={(e) => setCurrentItem({ ...currentItem, code: e.target.value })}
-                    className="w-full text-sm px-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-600"
+                    className="w-full text-sm px-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-600 font-mono"
                   />
                 </div>
                 <div>

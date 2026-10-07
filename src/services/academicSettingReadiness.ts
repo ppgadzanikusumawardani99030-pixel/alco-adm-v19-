@@ -62,7 +62,7 @@ export function validateAnnualMerdekaSettingReadiness(
   // Invariant: Semester is NOT required for annual Merdeka workflow.
   // semester === '' or undefined is strictly valid.
   // If explicitly provided and non-empty, ensure it's not a corrupt value.
-  const rawSemester = (setting.semester || '').trim();
+  const rawSemester = String(setting.semester ?? '').trim();
   if (rawSemester && rawSemester !== '1 (Ganjil)' && rawSemester !== '2 (Genap)') {
     errors.push('Pilih semester yang valid (1 (Ganjil) atau 2 (Genap)).');
   }
@@ -80,7 +80,7 @@ export function validateAnnualMerdekaSettingReadiness(
     isLevelValid = true;
   }
 
-  const rawGrade = (setting.grade || '').trim();
+  const rawGrade = String(setting.grade ?? '').trim();
   if (!rawGrade) {
     errors.push('Pilih tingkat/kelas terlebih dahulu.');
   } else if (isLevelValid) {
@@ -150,7 +150,7 @@ export function validateAcademicSettingReadiness(
     }
   }
 
-  const rawSemester = (setting.semester || '').trim();
+  const rawSemester = String(setting.semester ?? '').trim();
   const requireSemester = options?.requireSemester ?? (curriculumType === 'K13');
   if (requireSemester) {
     if (rawSemester !== '1 (Ganjil)' && rawSemester !== '2 (Genap)') {
@@ -173,7 +173,7 @@ export function validateAcademicSettingReadiness(
     isLevelValid = true;
   }
 
-  const rawGrade = (setting.grade || '').trim();
+  const rawGrade = String(setting.grade ?? '').trim();
   if (!rawGrade) {
     errors.push('Pilih tingkat/kelas terlebih dahulu.');
   } else if (isLevelValid) {

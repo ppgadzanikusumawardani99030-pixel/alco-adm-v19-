@@ -26,7 +26,7 @@ import { validateAcademicSettingReadiness } from './academicSettingReadiness';
 import { resolveCurriculumContext, resolveSubjectInput } from '../data/curriculum/resolver';
 import { ResolvedCurriculumContext } from '../data/curriculum/types';
 import { getPhaseFromGrade } from '../data/curriculumDefaults';
-import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences, validateTPDataWorkflow } from './cpWorkflowService';
+import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences, validateTPDataWorkflow, validateCPAnalysisDataWorkflow } from './cpWorkflowService';
 import { loadStorageV5, getSemesterDataV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
@@ -381,10 +381,13 @@ export function validateWorkflowDependencies(
       isStale: false,
     };
 
-    // 2. CP Analysis (Explicit Dependency of TP)
+    // 2. CP Analysis (Explicit Canonical Dependency of TP)
+    const cpAnalysisValidation = validateCPAnalysisDataWorkflow(cpAnalysis, cp);
+    const isAnalysisCanonicalSiap = cpAnalysisValidation.isSiap;
+    const isAnalysisStale =
+      isCPComplete &&
+      (isUpstreamStale(cp?.updatedAt, cpAnalysis?.basedOnCpUpdatedAt) || Boolean(cpAnalysis?.needsReview));
     const analysisItems = cpAnalysis?.items || [];
-    const isAnalysisComplete = isCPComplete && analysisItems.length > 0 && analysisItems.some((i) => (i.cpCompetence?.trim() || i.materialScope?.trim()));
-    const isAnalysisStale = isCPComplete && isUpstreamStale(cp?.updatedAt, cpAnalysis?.basedOnCpUpdatedAt);
 
     stepStates['cp-analysis'] = {
       id: 'cp-analysis',
@@ -392,15 +395,21 @@ export function validateWorkflowDependencies(
         ? 'BLOCKED'
         : isAnalysisStale
         ? 'STALE'
-        : isAnalysisComplete
+        : isAnalysisCanonicalSiap
         ? 'COMPLETE'
         : analysisItems.length > 0
         ? 'IN_PROGRESS'
         : 'READY',
       isBlocked: !isCPComplete,
-      isComplete: isAnalysisComplete,
+      isComplete: isAnalysisCanonicalSiap && !isAnalysisStale,
       isStale: isAnalysisStale,
-      reason: !isCPComplete ? 'Memerlukan data Capaian Pembelajaran (CP) terlebih dahulu' : isAnalysisStale ? 'Data CP telah diperbarui, analisis CP perlu diselaraskan' : undefined,
+      reason: !isCPComplete
+        ? 'Memerlukan data Capaian Pembelajaran (CP) terlebih dahulu'
+        : isAnalysisStale
+        ? 'Data CP telah diperbarui, analisis CP perlu diselaraskan'
+        : !isAnalysisCanonicalSiap && analysisItems.length > 0 && cpAnalysisValidation.issues[0]
+        ? cpAnalysisValidation.issues[0]
+        : undefined,
       missingDependencies: !isCPComplete ? ['Capaian Pembelajaran (CP)'] : undefined,
     };
 
@@ -424,11 +433,14 @@ export function validateWorkflowDependencies(
 
     // 3. TP (Tujuan Pembelajaran - Requires CP Analysis & Canonical Validation)
     const tpItems = tp?.items || [];
-    const isTPBlocked = !isAnalysisComplete;
     const isTPStale =
-      isAnalysisComplete &&
+      tpItems.length > 0 &&
       (isUpstreamStale(cpAnalysis?.updatedAt, tp?.basedOnAnalysisUpdatedAt) ||
-        isUpstreamStale(cp?.updatedAt, tp?.basedOnCpUpdatedAt));
+        isUpstreamStale(cp?.updatedAt, tp?.basedOnCpUpdatedAt) ||
+        Boolean(tp?.needsReview) ||
+        isAnalysisStale);
+    const isAnalysisReadyForTP = isCPComplete && isAnalysisCanonicalSiap && !isAnalysisStale;
+    const isTPBlocked = !isAnalysisReadyForTP && !isTPStale;
 
     const tpValidation = !isTPBlocked && tp && tpItems.length > 0
       ? validateTPDataWorkflow(tp, cp, cpAnalysis, academicSetting)
@@ -449,22 +461,24 @@ export function validateWorkflowDependencies(
       isBlocked: isTPBlocked,
       isComplete: isTPDataValid && !isTPBlocked && !isTPStale,
       isStale: isTPStale,
-      reason: !isAnalysisComplete
-        ? 'Memerlukan Analisis CP terlebih dahulu sebagai rujukan resmi TP'
-        : isTPStale
-        ? 'Analisis CP telah diperbarui, daftar TP perlu diselaraskan'
+      reason: isTPStale
+        ? 'Analisis CP atau CP induk telah diperbarui, daftar TP perlu diselaraskan'
+        : isTPBlocked
+        ? (!isAnalysisCanonicalSiap && analysisItems.length > 0 && cpAnalysisValidation.issues[0]
+            ? `Analisis CP belum lengkap: ${cpAnalysisValidation.issues[0]}`
+            : 'Memerlukan Analisis CP yang lengkap dan siap terlebih dahulu sebagai rujukan resmi TP')
         : !isTPDataValid && tpItems.length > 0 && tpValidation?.issues?.[0]
         ? tpValidation.issues[0]
         : undefined,
-      missingDependencies: !isAnalysisComplete ? ['Analisis CP'] : undefined,
+      missingDependencies: !isAnalysisReadyForTP && !isTPStale ? ['Analisis CP'] : undefined,
     };
 
-    if (tpItems.length > 0 && !isAnalysisComplete) {
+    if (tpItems.length > 0 && !isAnalysisReadyForTP) {
       issues.push({
         severity: 'WARNING',
         module: 'tp',
         code: 'TP_WITHOUT_ANALYSIS',
-        message: 'Tujuan Pembelajaran dirumuskan tanpa rujukan Analisis CP yang lengkap.',
+        message: 'Tujuan Pembelajaran dirumuskan tanpa rujukan Analisis CP yang lengkap dan siap.',
       });
     }
 

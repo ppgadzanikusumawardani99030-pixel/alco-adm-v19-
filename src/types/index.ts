@@ -355,6 +355,7 @@ export interface CPAnalysisData {
   status?: 'DRAFT' | 'FINAL';
   generatedBy?: 'AI' | 'TEACHER' | 'AI_EDITED_BY_TEACHER';
   generatedAt?: string;
+  generationEngine?: 'gemini' | 'pedagogical_engine';
   workflowStatus?: WorkflowCompletionStatus;
   needsReview?: boolean;
   reviewReason?: string;

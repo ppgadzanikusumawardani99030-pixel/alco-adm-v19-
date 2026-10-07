@@ -213,6 +213,7 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
       setItems(newItems);
       setGeneralSummary(nextSummary);
 
+      const isGemini = res.engine === 'gemini';
       const candidateData: CPAnalysisData = {
         id: cpAnalysis?.id || `cpanalysis-${academicSetting.id}`,
         academicSettingId: academicSetting.id,
@@ -225,7 +226,13 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
         phase: context.phase,
         generalSummary: nextSummary,
         items: newItems,
-        generatedBy: 'AI',
+        generatedBy: isGemini ? 'AI' : 'TEACHER',
+        generationEngine: res.engine || (isGemini ? 'gemini' : 'pedagogical_engine'),
+        provenance: {
+          generatedBy: isGemini ? 'AI' : 'SYSTEM',
+          generatedAt: new Date().toISOString(),
+          engine: res.engine || (isGemini ? 'gemini' : 'pedagogical_engine'),
+        },
         generatedAt: new Date().toISOString(),
         basedOnCpUpdatedAt: cp.updatedAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),

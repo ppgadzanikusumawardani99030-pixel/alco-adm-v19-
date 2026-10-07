@@ -203,15 +203,33 @@ async function runTests() {
     assert(getGeminiApiKey() === null, 'removeGeminiApiKey clears key');
   }
 
-  // Test 7: User key is sent as X-Gemini-API-Key header in AI requests
+  // Test 7: User key is sent as X-Gemini-API-Key header in AI retry request when server requires auth
   {
     const originalFetch = global.fetch;
-    let capturedHeaders: Headers | null = null;
+    let callCount = 0;
+    let retryHeaders: Headers | null = null;
     
     saveGeminiApiKey('AIzaSyUserSpecificKey999');
 
     global.fetch = async (url, init) => {
-      capturedHeaders = new Headers(init?.headers);
+      callCount++;
+      if (callCount === 1) {
+        // Request 1: Server has no env key, returns 503 AI_NOT_CONFIGURED
+        return {
+          ok: false,
+          status: 503,
+          headers: {
+            get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+          clone: () => ({
+            json: async () => ({ code: 'AI_NOT_CONFIGURED', error: 'Layanan AI belum dikonfigurasi pada server.' })
+          }),
+          json: async () => ({ code: 'AI_NOT_CONFIGURED', error: 'Layanan AI belum dikonfigurasi pada server.' })
+        } as any;
+      }
+
+      // Request 2: Retry with user key
+      retryHeaders = new Headers(init?.headers);
       return {
         ok: true,
         status: 200,
@@ -234,9 +252,10 @@ async function runTests() {
 
     try {
       await generateTPWithAI(dummyParams);
-      assert(capturedHeaders !== null, 'Fetch was called and headers captured');
-      const headerVal = capturedHeaders?.get('x-gemini-api-key');
-      assert(headerVal === 'AIzaSyUserSpecificKey999', `User key sent as X-Gemini-API-Key header (received: ${headerVal})`);
+      assert(callCount === 2, 'aiFetch retried once after 503 AI_NOT_CONFIGURED');
+      assert(retryHeaders !== null, 'Retry fetch was called and headers captured');
+      const headerVal = retryHeaders?.get('x-gemini-api-key');
+      assert(headerVal === 'AIzaSyUserSpecificKey999', `User key sent as X-Gemini-API-Key header on retry (received: ${headerVal})`);
     } finally {
       removeGeminiApiKey();
       global.fetch = originalFetch;

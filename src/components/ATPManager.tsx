@@ -16,17 +16,19 @@ import {
   Wand2,
   AlertTriangle,
 } from 'lucide-react';
-import { ATPData, ATPItem, TPData, CPData, AcademicSetting, TeacherProfile, ActiveContext } from '../types';
+import { ATPData, ATPItem, TPData, CPData, CPAnalysisData, AcademicSetting, TeacherProfile, ActiveContext } from '../types';
 import { generateATPWithAI, refineTextWithAI } from '../services/aiService';
 import {
   validateATPReferences,
   resolveATPItemTPReferences,
+  validateTPDataWorkflow,
 } from '../services/cpWorkflowService';
 
 interface ATPManagerProps {
   atp: ATPData;
   tp: TPData;
   cp: CPData;
+  cpAnalysis?: CPAnalysisData;
   context: ActiveContext;
   academicSetting: AcademicSetting;
   profile: TeacherProfile;
@@ -39,6 +41,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
   atp,
   tp,
   cp,
+  cpAnalysis,
   context,
   academicSetting,
   profile,
@@ -63,7 +66,11 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
   }, [atp]);
 
   const hasTP = tp.items && tp.items.length > 0;
-  const isTPReady = hasTP && tp.workflowStatus === 'SIAP' && tp.needsReview !== true;
+  const tpValidation = validateTPDataWorkflow(tp, cp, cpAnalysis, academicSetting);
+  const isTPReady = tpValidation.isSiap;
+  const tpReadinessReason = !isTPReady
+    ? (tpValidation.issues[0] || 'TP belum memenuhi kriteria kanonikal SIAP.')
+    : undefined;
 
   // Integrity Check: TP was modified after ATP was formed
   const isTPOutdated =
@@ -80,7 +87,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
       return;
     }
     if (!isTPReady) {
-      alert(`TP belum SIAP untuk menyusun ATP. Status TP: ${tp.workflowStatus || 'BELUM_DIMULAI'}${tp.needsReview ? ' dan perlu ditinjau ulang' : ''}.`);
+      alert(`TP belum SIAP untuk menyusun ATP: ${tpReadinessReason}`);
       return;
     }
 
@@ -104,6 +111,9 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
         academicYear: context.academicYear,
       });
 
+      const existingItems = items || [];
+      const usedExistingIds = new Set<string>();
+
       const formattedItems: ATPItem[] = [];
       for (let idx = 0; idx < generated.items.length; idx++) {
         const item = generated.items[idx];
@@ -112,7 +122,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
           : item.tpId ? [item.tpId] : [];
 
         const candidateItem: ATPItem = {
-          id: `atp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+          id: '',
           stepNumber: item.stepNumber || idx + 1,
           linkedTpIds: rawLinkedTpIds,
           focus: item.focus ? String(item.focus).trim() : undefined,
@@ -126,7 +136,29 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
         }
 
         // Canonical authority is linkedTpIds; DO NOT set candidateItem.tpId = primary.id
-        candidateItem.linkedTpIds = refResult.canonicalTPItems.map((t) => t.id);
+        const canonicalLinkedTpIds = refResult.canonicalTPItems.map((t) => t.id);
+        const normalizedCandidateKey = [...canonicalLinkedTpIds].sort().join(',');
+
+        // Preserve ATPItem.id if the new step represents the exact same grouping of linkedTpIds
+        const matchedExisting = existingItems.find((existing) => {
+          if (usedExistingIds.has(existing.id)) return false;
+          const existingLinked = Array.isArray(existing.linkedTpIds) && existing.linkedTpIds.length > 0
+            ? existing.linkedTpIds
+            : existing.tpId ? [existing.tpId] : [];
+          const existingKey = [...existingLinked].sort().join(',');
+          return existingKey === normalizedCandidateKey;
+        });
+
+        const stableId = matchedExisting
+          ? matchedExisting.id
+          : `atp-item-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`;
+
+        if (matchedExisting) {
+          usedExistingIds.add(matchedExisting.id);
+        }
+
+        candidateItem.id = stableId;
+        candidateItem.linkedTpIds = canonicalLinkedTpIds;
         formattedItems.push(candidateItem);
       }
 
@@ -442,24 +474,32 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
           </div>
 
           {/* AI Generator Button */}
-          <button
-            id="btn-ai-generate-atp"
-            onClick={handleGenerateAI}
-            disabled={isGenerating}
-            className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition cursor-pointer disabled:opacity-50 self-start sm:self-auto"
-          >
-            {isGenerating ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                <span>AI Sedang Menyusun Alur ATP...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles className="w-4 h-4 text-amber-300" />
-                <span>Susun ATP dari TP (AI)</span>
-              </>
+          <div className="flex flex-col items-end gap-1.5 self-start sm:self-auto">
+            <button
+              id="btn-ai-generate-atp"
+              onClick={handleGenerateAI}
+              disabled={isGenerating || !isTPReady}
+              title={!isTPReady ? tpReadinessReason : undefined}
+              className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isGenerating ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  <span>AI Sedang Menyusun Alur ATP...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-4 h-4 text-amber-300" />
+                  <span>Susun ATP dari TP (AI)</span>
+                </>
+              )}
+            </button>
+            {!isTPReady && (
+              <span className="text-[11px] text-amber-700 font-medium text-right max-w-xs">
+                Penyusunan diblokir: {tpReadinessReason}
+              </span>
             )}
-          </button>
+          </div>
         </div>
 
         {generationError && (

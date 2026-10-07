@@ -32,6 +32,7 @@ export interface CanonicalCPAnalysisResult {
     meaningfulUnderstanding?: string;
     suggestedTp?: string;
   }>;
+  engine?: 'gemini' | 'pedagogical_engine';
 }
 
 export interface GenerateTPParams {
@@ -172,12 +173,12 @@ export async function ensureGeminiApiKey(): Promise<string> {
 }
 
 export async function aiFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  const userKey = getGeminiApiKey();
-
   const makeRequest = async (currentKey?: string | null): Promise<Response> => {
     const headers = new Headers(options.headers || {});
     if (currentKey && currentKey.trim()) {
       headers.set('X-Gemini-API-Key', currentKey.trim());
+    } else {
+      headers.delete('X-Gemini-API-Key');
     }
     return fetch(url, {
       ...options,
@@ -185,23 +186,59 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
     });
   };
 
-  // 1. Server-First: attempt request with user key if available, otherwise rely on server-configured key
-  let res = await makeRequest(userKey);
+  // 1. Request PERTAMA tanpa local BYOK header agar server mendapat kesempatan memakai server key/fallback
+  let res = await makeRequest(null);
 
-  // 2. Prompt only when server explicitly denies authorization (401/403)
-  if (res.status === 401 || res.status === 403) {
-    if (userKey) {
-      removeGeminiApiKey();
-    }
-    if (modalOpenListeners.length > 0) {
-      try {
-        const newKey = await openApiKeyModal(
-          'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
-        );
-        res = await makeRequest(newKey);
-      } catch {
-        // Modal dismissed or rejected
+  // 2. Cek kondisi yang memerlukan BYOK/auth:
+  // - 401/403 auth provider
+  // - 503 + code AI_NOT_CONFIGURED
+  let needsByok = res.status === 401 || res.status === 403;
+
+  if (!needsByok && res.status === 503) {
+    try {
+      const cloned = res.clone();
+      const bodyJson = await cloned.json().catch(() => null);
+      if (
+        bodyJson &&
+        (bodyJson.code === 'AI_NOT_CONFIGURED' ||
+          (typeof bodyJson.error === 'string' && bodyJson.error.toLowerCase().includes('belum dikonfigurasi')))
+      ) {
+        needsByok = true;
       }
+    } catch {
+      // not json or clone failed
+    }
+  }
+
+  // 3. Jika server memerlukan BYOK/auth: buka modal lalu retry tepat satu kali dengan X-Gemini-API-Key
+  if (needsByok) {
+    let keyForRetry = getGeminiApiKey();
+    if (!keyForRetry && modalOpenListeners.length > 0) {
+      try {
+        keyForRetry = await openApiKeyModal(
+          'Layanan AI memerlukan API Key Gemini (BYOK). Silakan masukkan API Key Anda:'
+        );
+      } catch {
+        keyForRetry = null;
+      }
+    } else if (res.status === 401 || res.status === 403) {
+      if (keyForRetry) {
+        removeGeminiApiKey();
+      }
+      if (modalOpenListeners.length > 0) {
+        try {
+          keyForRetry = await openApiKeyModal(
+            'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
+          );
+        } catch {
+          keyForRetry = null;
+        }
+      }
+    }
+
+    if (keyForRetry && keyForRetry.trim()) {
+      // Retry tepat satu kali
+      res = await makeRequest(keyForRetry);
     }
   }
 
@@ -264,7 +301,11 @@ export async function analyzeCPWithAI(params: {
     }
 
     const data = await res.json();
-    return data.data;
+    const payload = data.data || data;
+    return {
+      ...payload,
+      engine: data.engine === 'gemini' ? 'gemini' : 'pedagogical_engine',
+    };
   } catch (err) {
     throw new Error(formatAIErrorMessage(err, 'menganalisis Capaian Pembelajaran'));
   }
