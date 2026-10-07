@@ -8,6 +8,7 @@ import {
   resolveLearningPlanAllocatedJP,
   buildLearningPlanScopeUnits,
   normalizeAIAssessmentPlan,
+  LearningPlanScopeUnit,
 } from '../src/services/learningPlanService';
 import {
   getScopeLinkedTpIds,
@@ -20,7 +21,7 @@ import { buildModulAjarProjection } from '../src/services/documentEngine/modulAj
 import { generateModulAjar } from '../src/services/documentEngine/generators/modulAjarGenerator';
 import { generatePdfDocument } from '../src/services/documentEngine/renderers/pdf/pdfDocGenerators';
 import { validateDocumentRequirements } from '../src/services/documentEngine';
-import { AcademicSetting, TPData, ATPData, LearningPlan, SchoolData, TeacherProfile, TimeAllocation } from '../src/types';
+import { AcademicSetting, TPData, ATPData, LearningPlan, SchoolData, TeacherProfile, TimeAllocation, AssessmentCriterion } from '../src/types';
 
 async function runRegressionSuite() {
   console.log('=== RUNNING AUDIT NO. 8 REGRESSION SUITE ===\n');
@@ -524,18 +525,69 @@ async function runRegressionSuite() {
   // CANONICAL MEETING & KKTP INTEGRATION TESTS (B19)
   // ==========================================
   console.log('\n--- B19.1: KKTP Filtering & Lineage (Real Flow) ---');
-  const allCriteria = [
-    { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101 Siap', workflowStatus: 'SIAP', needsReview: false },
-    { id: 'crit-draft', tpId: 'tp-101', description: 'Kriteria TP 101 Draft', workflowStatus: 'DRAFT', needsReview: false },
-    { id: 'crit-incomplete', tpId: 'tp-101', description: 'Kriteria TP 101 Perlu Dilengkapi', workflowStatus: 'PERLU_DILENGKAPI', needsReview: false },
-    { id: 'crit-review', tpId: 'tp-101', description: 'Kriteria TP 101 Needs Review', workflowStatus: 'SIAP', needsReview: true },
-    { id: 'crit-2', tpId: 'tp-999', description: 'Kriteria TP 999 (Out of Scope)', workflowStatus: 'SIAP', needsReview: false }
+  const allCriteria: AssessmentCriterion[] = [
+    {
+      id: 'crit-1',
+      academicSettingId: 'setting-1',
+      tpId: 'tp-101',
+      description: 'Kriteria TP 101 Siap',
+      approach: 'deskripsi',
+      indicators: ['Indikator 1'],
+      levels: [{ level: 'Baik', label: 'Tuntas', description: 'Memenuhi capaian' }],
+      workflowStatus: 'SIAP',
+      needsReview: false,
+    },
+    {
+      id: 'crit-draft',
+      academicSettingId: 'setting-1',
+      tpId: 'tp-101',
+      description: 'Kriteria TP 101 Draft',
+      approach: 'deskripsi',
+      indicators: ['Indikator draft'],
+      levels: [{ level: 'Cukup', label: 'Belum Tuntas', description: 'Draf awal' }],
+      workflowStatus: 'DRAFT',
+      needsReview: false,
+    },
+    {
+      id: 'crit-incomplete',
+      academicSettingId: 'setting-1',
+      tpId: 'tp-101',
+      description: 'Kriteria TP 101 Perlu Dilengkapi',
+      approach: 'deskripsi',
+      indicators: ['Indikator incomplete'],
+      levels: [{ level: 'Perlu Bimbingan', label: 'Belum Selesai', description: 'Perlu dilengkapi' }],
+      workflowStatus: 'PERLU_DILENGKAPI',
+      needsReview: false,
+    },
+    {
+      id: 'crit-review',
+      academicSettingId: 'setting-1',
+      tpId: 'tp-101',
+      description: 'Kriteria TP 101 Needs Review',
+      approach: 'deskripsi',
+      indicators: ['Indikator review'],
+      levels: [{ level: 'Baik', label: 'Tuntas', description: 'Memerlukan review' }],
+      workflowStatus: 'SIAP',
+      needsReview: true,
+      reviewReason: 'Perlu revisi guru',
+    },
+    {
+      id: 'crit-2',
+      academicSettingId: 'setting-1',
+      tpId: 'tp-999',
+      description: 'Kriteria TP 999 (Out of Scope)',
+      approach: 'deskripsi',
+      indicators: ['Indikator out of scope'],
+      levels: [{ level: 'Baik', label: 'Tuntas', description: 'Di luar unit' }],
+      workflowStatus: 'SIAP',
+      needsReview: false,
+    },
   ];
 
   // Helper function simulating the exact scope draft compilation sequence from LearningPlanManager.tsx
   function compileDraftLearningPlanForScope(
-    scope: any,
-    globalCriteria: any[],
+    scope: LearningPlanScopeUnit,
+    globalCriteria: AssessmentCriterion[],
     aiDraftResult: any
   ): LearningPlan {
     const kktpCheck = checkScopeKKTPReadiness(scope, globalCriteria);
@@ -566,7 +618,7 @@ async function runRegressionSuite() {
       curriculumType: 'KURIKULUM_MERDEKA',
       unitId: scope.unitId,
       learningMeetingIds: scope.learningMeetingIds,
-      tpIds: scope.linkedTpIds || tpsToSend.map((t: any) => t.id),
+      tpIds: scope.linkedTpIds || tpsToSend.map((t) => t.id),
       atpItemIds: scope.linkedAtpItemIds || [],
       allocatedJP: scope.jp,
       aiDraft: {
@@ -582,14 +634,17 @@ async function runRegressionSuite() {
   }
 
   // Real world simulation: scope built and passed into compilation sequence
-  const simScope: any = {
+  const simScope: LearningPlanScopeUnit = {
+    id: 'unit-1',
+    type: 'CANONICAL_UNIT',
+    title: 'Bab 1',
     unitId: 'unit-1',
     unitTitle: 'Bab 1',
-    tpItems: [{ id: 'tp-101', statement: 'Belajar programming' }],
+    tpItems: [{ id: 'tp-101', code: 'TP-1', statement: 'Belajar programming' }],
     linkedTpIds: ['tp-101'],
     linkedAtpItemIds: ['atp-201'],
     meetings: [],
-    jp: 6
+    jp: 6,
   };
 
   const compiledPlanResult = compileDraftLearningPlanForScope(simScope, allCriteria, {
@@ -597,9 +652,9 @@ async function runRegressionSuite() {
     learningExperiences: [
       { phase: 'UNDERSTAND', description: 'Memahami' },
       { phase: 'APPLY', description: 'Menerapkan' },
-      { phase: 'REFLECT', description: 'Refleksi' }
+      { phase: 'REFLECT', description: 'Refleksi' },
     ] as any,
-    graduateProfileDimensions: ['Bernalar Kritis']
+    graduateProfileDimensions: ['Bernalar Kritis'],
   });
 
   assert(
@@ -613,6 +668,10 @@ async function runRegressionSuite() {
   );
 
   const filteredCriteria = getReadyKKTPCriteriaForScope(simScope, allCriteria);
+  assert(
+    filteredCriteria.some((c) => c.id === 'crit-1'),
+    'SIAP + needsReview false → accepted'
+  );
   assert(
     !filteredCriteria.some((c) => c.workflowStatus === 'DRAFT'),
     'DRAFT criterion ditolak dari KKTP Modul Ajar'
@@ -631,35 +690,68 @@ async function runRegressionSuite() {
   );
 
   // Readiness tests: multi-TP scope
-  const multiTpScope: any = {
+  const multiTpScope: LearningPlanScopeUnit = {
+    id: 'unit-multi',
+    type: 'CANONICAL_UNIT',
+    title: 'Bab Multi TP',
     unitId: 'unit-multi',
     unitTitle: 'Bab Multi TP',
     linkedTpIds: ['tp-101', 'tp-102'],
     tpItems: [
-      { id: 'tp-101', statement: 'TP 101' },
-      { id: 'tp-102', statement: 'TP 102' }
+      { id: 'tp-101', code: 'TP-1', statement: 'TP 101' },
+      { id: 'tp-102', code: 'TP-2', statement: 'TP 102' },
     ],
     meetings: [],
-    jp: 4
+    jp: 4,
   };
 
-  const criteriaOnlyTp101 = [
-    { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101', workflowStatus: 'SIAP', needsReview: false }
+  const criteriaOnlyTp101: AssessmentCriterion[] = [
+    {
+      id: 'crit-1',
+      academicSettingId: 'setting-1',
+      tpId: 'tp-101',
+      description: 'Kriteria TP 101',
+      approach: 'deskripsi',
+      indicators: ['Indikator TP 101'],
+      levels: [{ level: 'Baik', label: 'Tuntas', description: 'Tuntas' }],
+      workflowStatus: 'SIAP',
+      needsReview: false,
+    },
   ];
 
-  const checkBlocked = checkScopeKKTPReadiness(multiTpScope, criteriaOnlyTp101 as any);
+  const checkBlocked = checkScopeKKTPReadiness(multiTpScope, criteriaOnlyTp101);
   assert(
     !checkBlocked.isReady && checkBlocked.unreadyTpCount === 1 && checkBlocked.message?.includes('1 TP pada unit ini belum memiliki KKTP SIAP'),
     'satu TP belum punya KKTP SIAP → blocked',
     `isReady=${checkBlocked.isReady}, message=${checkBlocked.message}`
   );
 
-  const criteriaBothReady = [
-    { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101', workflowStatus: 'SIAP', needsReview: false },
-    { id: 'crit-102', tpId: 'tp-102', description: 'Kriteria TP 102', workflowStatus: 'SIAP', needsReview: false }
+  const criteriaBothReady: AssessmentCriterion[] = [
+    {
+      id: 'crit-1',
+      academicSettingId: 'setting-1',
+      tpId: 'tp-101',
+      description: 'Kriteria TP 101',
+      approach: 'deskripsi',
+      indicators: ['Indikator TP 101'],
+      levels: [{ level: 'Baik', label: 'Tuntas', description: 'Tuntas' }],
+      workflowStatus: 'SIAP',
+      needsReview: false,
+    },
+    {
+      id: 'crit-102',
+      academicSettingId: 'setting-1',
+      tpId: 'tp-102',
+      description: 'Kriteria TP 102',
+      approach: 'deskripsi',
+      indicators: ['Indikator TP 102'],
+      levels: [{ level: 'Baik', label: 'Tuntas', description: 'Tuntas' }],
+      workflowStatus: 'SIAP',
+      needsReview: false,
+    },
   ];
 
-  const checkAllowed = checkScopeKKTPReadiness(multiTpScope, criteriaBothReady as any);
+  const checkAllowed = checkScopeKKTPReadiness(multiTpScope, criteriaBothReady);
   assert(
     checkAllowed.isReady && checkAllowed.unreadyTpCount === 0,
     'semua TP punya KKTP SIAP → allowed',
