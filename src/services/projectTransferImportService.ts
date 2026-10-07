@@ -18,12 +18,18 @@ import {
   SemesterPlan,
   CPData,
   CPElem,
+  CPAnalysisData,
+  CPAnalysisItem,
   TPData,
   TPItem,
   ATPData,
   ATPItem,
 } from '../types';
 import { validateProjectTransfer } from './projectTransferService';
+import {
+  validateCPAnalysisDataWorkflow,
+  validateTPDataWorkflow,
+} from './cpWorkflowService';
 
 export interface ProjectTransferImportParams {
   pkg: ProjectTransferPackage;
@@ -38,6 +44,7 @@ export interface ProjectTransferImportResult {
   workspace: AdministrationWorkspaceV5;
   semesterPlans: [SemesterPlan, SemesterPlan];
   cp: CPData;
+  cpAnalysis?: CPAnalysisData;
   tp: TPData;
   atp: ATPData;
 }
@@ -114,6 +121,7 @@ export function performImportProjectTransferInState(
   }
 
   const now = new Date().toISOString();
+  const isMerdeka = pkg.curriculumType === 'KURIKULUM_MERDEKA';
 
   // 4. Create Canonical YearPlan, WorkspaceV5, SemesterPlans (1 & 2)
   const newYearPlanId = `yp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -128,6 +136,7 @@ export function performImportProjectTransferInState(
     grade: targetGrade,
     ...(targetClassSection ? { classSection: targetClassSection } : {}),
     subject: targetSubject,
+    subjectCode: targetSubject,
     ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
     curriculumLock: {
       curriculumType: pkg.curriculumType,
@@ -172,16 +181,24 @@ export function performImportProjectTransferInState(
 
   // 5. Generate fresh internal IDs for CPData and its elements
   const newCPDataId = `cp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-  const cpElements: CPElem[] = (pkg.cp || []).map((c: ProjectTransferCP, idx: number) => ({
-    id: `elem-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 7)}`,
-    name: (c.element || c.code || `Elemen ${idx + 1}`).trim(),
-    content: (c.content || '').trim(),
-  }));
+  const cpElements: CPElem[] = (pkg.cp || []).map((c: ProjectTransferCP, idx: number) => {
+    const code = c.code && c.code.trim() ? c.code.trim() : undefined;
+    return {
+      id: `elem-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 7)}`,
+      ...(code ? { code } : {}),
+      name: (c.element || c.code || `Elemen ${idx + 1}`).trim(),
+      content: (c.content || '').trim(),
+    };
+  });
 
-  const cpElementMap = new Map<string, string>();
-  (pkg.cp || []).forEach((c) => {
-    if (c.code) {
-      cpElementMap.set(c.code.toUpperCase().trim(), (c.element || '').trim());
+  const cpElemByCodeMap = new Map<string, CPElem>();
+  (pkg.cp || []).forEach((c, idx) => {
+    const elem = cpElements[idx];
+    if (c.code && c.code.trim()) {
+      cpElemByCodeMap.set(c.code.trim().toUpperCase(), elem);
+    }
+    if (c.element && c.element.trim()) {
+      cpElemByCodeMap.set(c.element.trim().toUpperCase(), elem);
     }
   });
 
@@ -200,6 +217,56 @@ export function performImportProjectTransferInState(
     updatedAt: now,
   };
 
+  // 5.b Build CP Analysis for Kurikulum Merdeka
+  let newCPAnalysisData: CPAnalysisData | undefined = undefined;
+
+  if (isMerdeka) {
+    const cpAnalysisItems: CPAnalysisItem[] = (pkg.tp || []).map((t: ProjectTransferTP, idx: number) => {
+      const rawCpCode = (t.cpCode || '').trim().toUpperCase();
+      const matchedElem = rawCpCode ? cpElemByCodeMap.get(rawCpCode) : undefined;
+
+      const competence = (t.competence || '').trim();
+      const materialScope = (t.materialScope || '').trim();
+      const statement = (t.statement || '').trim();
+
+      const analysisItemId = `ana-item-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 7)}`;
+
+      return {
+        id: analysisItemId,
+        elementId: matchedElem ? matchedElem.id : undefined,
+        elementName: matchedElem ? matchedElem.name : '',
+        cpText: matchedElem ? matchedElem.content : '',
+        cpCompetence: competence,
+        materialScope: materialScope,
+        suggestedTp: statement,
+        order: idx + 1,
+      };
+    });
+
+    const newCPAnalysisDataId = `cpa-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+    newCPAnalysisData = {
+      id: newCPAnalysisDataId,
+      academicSettingId: newYearPlanId,
+      workspaceId: newWorkspaceId,
+      cpId: newCPData.id,
+      academicYear: targetAcademicYear,
+      subjectCode: targetSubject,
+      ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
+      items: cpAnalysisItems,
+      basedOnCpUpdatedAt: newCPData.updatedAt,
+      generatedBy: 'TEACHER',
+      provenance: {
+        generatedBy: 'USER',
+        generatedAt: now,
+      },
+      updatedAt: now,
+    };
+
+    const anaValidation = validateCPAnalysisDataWorkflow(newCPAnalysisData, newCPData);
+    newCPAnalysisData.workflowStatus = anaValidation.status;
+  }
+
   // 6. Generate fresh internal IDs for TPData and TPItems
   // Map portable TP code -> internal TPItem
   const newTPDataId = `tp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -208,12 +275,24 @@ export function performImportProjectTransferInState(
   const tpItems: TPItem[] = (pkg.tp || []).map((t: ProjectTransferTP, idx: number) => {
     const freshTPItemId = `tp-item-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 7)}`;
     const cleanCode = (t.code || '').trim();
-    const mappedElementName = t.cpCode ? cpElementMap.get(t.cpCode.toUpperCase().trim()) : undefined;
+    const rawCpCode = (t.cpCode || '').trim().toUpperCase();
+    const matchedElem = rawCpCode ? cpElemByCodeMap.get(rawCpCode) : undefined;
+
+    let cpAnalysisId: string | undefined = undefined;
+    let cpAnalysisItemIds: string[] | undefined = undefined;
+
+    if (isMerdeka && newCPAnalysisData && newCPAnalysisData.items[idx]) {
+      const analysisItem = newCPAnalysisData.items[idx];
+      cpAnalysisId = analysisItem.id;
+      cpAnalysisItemIds = [analysisItem.id];
+    }
 
     const item: TPItem = {
       id: freshTPItemId,
       code: cleanCode,
-      ...(mappedElementName ? { elementName: mappedElementName } : {}),
+      ...(cpAnalysisId ? { cpAnalysisId } : {}),
+      ...(cpAnalysisItemIds ? { cpAnalysisItemIds } : {}),
+      elementName: (matchedElem ? matchedElem.name : (t.cpCode ? cpElemByCodeMap.get(rawCpCode)?.name : '') || '').trim() || undefined,
       statement: (t.statement || '').trim(),
       competence: (t.competence || '').trim(),
       contentScope: (t.materialScope || '').trim(),
@@ -237,9 +316,14 @@ export function performImportProjectTransferInState(
     id: newTPDataId,
     academicSettingId: newYearPlanId,
     workspaceId: newWorkspaceId,
+    cpId: newCPData.id,
+    ...(isMerdeka && newCPAnalysisData ? { cpAnalysisId: newCPAnalysisData.id } : {}),
     academicYear: targetAcademicYear,
+    subjectCode: targetSubject,
     ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
     items: tpItems,
+    basedOnCpUpdatedAt: newCPData.updatedAt,
+    ...(isMerdeka && newCPAnalysisData ? { basedOnAnalysisUpdatedAt: newCPAnalysisData.updatedAt } : {}),
     status: 'DRAFT',
     workflowStatus: 'DRAFT',
     provenance: {
@@ -248,6 +332,13 @@ export function performImportProjectTransferInState(
     },
     updatedAt: now,
   };
+
+  if (isMerdeka && newCPAnalysisData) {
+    const tpValidation = validateTPDataWorkflow(newTPData, newCPData, newCPAnalysisData);
+    newTPData.workflowStatus = tpValidation.status;
+  } else {
+    newTPData.workflowStatus = 'DRAFT';
+  }
 
   // 7. Generate fresh internal IDs for ATPData and ATPItems
   // 8. Resolve ATP tpCode -> internal TPItem.id and set ATPItem.tpId as canonical linkage
@@ -281,6 +372,7 @@ export function performImportProjectTransferInState(
       id: freshATPItemId,
       stepNumber: a.order ?? idx + 1,
       sequence: a.order ?? idx + 1,
+      linkedTpIds: [matchedTPItem.id],
       tpId: matchedTPItem.id,
       tpCode: matchedTPItem.code,
       tpStatement: matchedTPItem.statement,
@@ -304,12 +396,14 @@ export function performImportProjectTransferInState(
     workspaceId: newWorkspaceId,
     tpDataId: newTPDataId,
     academicYear: targetAcademicYear,
+    subjectCode: targetSubject,
     ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
     items: atpItems,
     totalJP: knownTotalJP > 0 ? knownTotalJP : undefined,
     knownTotalJP,
     hasUnknownJP,
     allocationComplete: false,
+    basedOnTpUpdatedAt: newTPData.updatedAt,
     status: 'DRAFT',
     workflowStatus: 'DRAFT',
     provenance: {
@@ -325,6 +419,9 @@ export function performImportProjectTransferInState(
   state.semesterPlans.push(newSemesterPlan1, newSemesterPlan2);
 
   state.annualData.cp.push({ yearPlanId: newYearPlanId, value: newCPData });
+  if (isMerdeka && newCPAnalysisData) {
+    state.annualData.cpAnalysis.push({ yearPlanId: newYearPlanId, value: newCPAnalysisData });
+  }
   state.annualData.tp.push({ yearPlanId: newYearPlanId, value: newTPData });
   state.annualData.atp.push({ yearPlanId: newYearPlanId, value: newATPData });
   state.annualData.curriculumContext.push({
@@ -348,6 +445,7 @@ export function performImportProjectTransferInState(
     workspace: newWorkspace,
     semesterPlans: [newSemesterPlan1, newSemesterPlan2],
     cp: newCPData,
+    ...(newCPAnalysisData ? { cpAnalysis: newCPAnalysisData } : {}),
     tp: newTPData,
     atp: newATPData,
   };
