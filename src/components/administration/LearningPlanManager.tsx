@@ -81,6 +81,59 @@ export {
   isAtpReadyForAIScope,
 };
 
+export const getScopeLinkedTpIds = (scope: LearningPlanScopeUnit): string[] => {
+  const ids: string[] = [];
+  if (scope.linkedTpIds && scope.linkedTpIds.length > 0) {
+    ids.push(...scope.linkedTpIds);
+  }
+  if (scope.tpItems && scope.tpItems.length > 0) {
+    ids.push(...scope.tpItems.map((t) => t.id));
+  }
+  if (scope.tpItem) {
+    ids.push(scope.tpItem.id);
+  }
+  return Array.from(new Set(ids.filter(Boolean)));
+};
+
+export const getReadyKKTPCriteriaForScope = (
+  scope: LearningPlanScopeUnit,
+  allCriteria: AssessmentCriterion[] = []
+): AssessmentCriterion[] => {
+  const scopeTpIds = getScopeLinkedTpIds(scope);
+  return (allCriteria || []).filter(
+    (ac) =>
+      scopeTpIds.includes(ac.tpId) &&
+      ac.workflowStatus === 'SIAP' &&
+      ac.needsReview !== true
+  );
+};
+
+export const checkScopeKKTPReadiness = (
+  scope: LearningPlanScopeUnit,
+  allCriteria: AssessmentCriterion[] = []
+): { isReady: boolean; unreadyTpCount: number; message?: string } => {
+  const scopeTpIds = getScopeLinkedTpIds(scope);
+  if (scopeTpIds.length === 0) {
+    return { isReady: true, unreadyTpCount: 0 };
+  }
+
+  const unreadyTpIds = scopeTpIds.filter((tpId) => {
+    return !(allCriteria || []).some(
+      (ac) => ac.tpId === tpId && ac.workflowStatus === 'SIAP' && ac.needsReview !== true
+    );
+  });
+
+  if (unreadyTpIds.length > 0) {
+    return {
+      isReady: false,
+      unreadyTpCount: unreadyTpIds.length,
+      message: `${unreadyTpIds.length} TP pada unit ini belum memiliki KKTP SIAP. Selesaikan KKTP terlebih dahulu.`,
+    };
+  }
+
+  return { isReady: true, unreadyTpCount: 0 };
+};
+
 interface LearningPlanManagerProps {
   profile: TeacherProfile;
   school: SchoolData;
@@ -445,12 +498,16 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
   };
 
   const generateAIDraftPlanForScope = async (scope: LearningPlanScopeUnit): Promise<LearningPlan> => {
+    const kktpCheck = checkScopeKKTPReadiness(scope, assessmentCriteria);
+    if (!kktpCheck.isReady) {
+      throw new Error(kktpCheck.message || 'KKTP belum siap');
+    }
+
     const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
     const atpsToSend = scope.atpItems && scope.atpItems.length > 0 ? scope.atpItems : (scope.atpItem ? [scope.atpItem] : []);
     const canonicalTopic = scope.materialScope || scope.unitTitle || scope.title || (scope.tpItem ? (scope.tpItem.contentScope || scope.tpItem.statement) : '');
 
-    const tpIdsToSend = tpsToSend.map((t) => t.id);
-    const relevantCriteria = (assessmentCriteria || []).filter((ac) => tpIdsToSend.includes(ac.tpId));
+    const relevantCriteria = getReadyKKTPCriteriaForScope(scope, assessmentCriteria);
 
     const aiDraftResult = await generateLearningPlanWithAI({
       academicSetting,
@@ -498,12 +555,17 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
 
   const executeAIGenerationForScope = async (scope: LearningPlanScopeUnit) => {
     setIsScopeModalOpen(false);
+
+    const kktpCheck = checkScopeKKTPReadiness(scope, assessmentCriteria);
+    if (!kktpCheck.isReady) {
+      showNotification('error', kktpCheck.message || 'KKTP belum siap');
+      return;
+    }
+
     setIsGeneratingAI(true);
     showNotification('info', `Sedang menyusun Draf AI Modul Ajar untuk unit '${scope.title}'...`);
 
-    const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
-    const tpIdsToSend = tpsToSend.map((t) => t.id);
-    const relevantCriteria = (assessmentCriteria || []).filter((ac) => tpIdsToSend.includes(ac.tpId));
+    const relevantCriteria = getReadyKKTPCriteriaForScope(scope, assessmentCriteria);
     const hasKktp = relevantCriteria.length > 0;
 
     try {
@@ -575,6 +637,12 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     const scope = resolveCanonicalScopeOfActivePlan();
     if (!scope) {
       showNotification('error', 'Scope aktif untuk modul ajar ini tidak ditemukan.');
+      return;
+    }
+
+    const kktpCheck = checkScopeKKTPReadiness(scope, assessmentCriteria);
+    if (!kktpCheck.isReady) {
+      showNotification('error', kktpCheck.message || 'KKTP belum siap');
       return;
     }
 
@@ -711,9 +779,12 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     let processed = 0;
     for (const scope of pendingScopes) {
       try {
-        const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
-        const tpIdsToSend = tpsToSend.map((t) => t.id);
-        const relevantCriteria = (assessmentCriteria || []).filter((ac) => tpIdsToSend.includes(ac.tpId));
+        const kktpCheck = checkScopeKKTPReadiness(scope, assessmentCriteria);
+        if (!kktpCheck.isReady) {
+          throw new Error(kktpCheck.message);
+        }
+
+        const relevantCriteria = getReadyKKTPCriteriaForScope(scope, assessmentCriteria);
         const hasKktp = relevantCriteria.length > 0;
 
         recordDiagnosticEvent({

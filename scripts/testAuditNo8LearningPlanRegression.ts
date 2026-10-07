@@ -9,6 +9,11 @@ import {
   buildLearningPlanScopeUnits,
   normalizeAIAssessmentPlan,
 } from '../src/services/learningPlanService';
+import {
+  getScopeLinkedTpIds,
+  getReadyKKTPCriteriaForScope,
+  checkScopeKKTPReadiness,
+} from '../src/components/administration/LearningPlanManager';
 import { generateAutoDraftPlansFromCanonicalContext, validateAssessmentPlan } from '../src/services/assessmentPlanService';
 import { resolveScheduledLearningMeetings } from '../src/services/scheduledLearningMeetingProjectionService';
 import { buildModulAjarProjection } from '../src/services/documentEngine/modulAjarProjection';
@@ -520,8 +525,10 @@ async function runRegressionSuite() {
   // ==========================================
   console.log('\n--- B19.1: KKTP Filtering & Lineage (Real Flow) ---');
   const allCriteria = [
-    { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101' },
-    { id: 'crit-2', tpId: 'tp-999', description: 'Kriteria TP 999 (Out of Scope)' }
+    { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101 Siap', workflowStatus: 'SIAP', needsReview: false },
+    { id: 'crit-draft', tpId: 'tp-101', description: 'Kriteria TP 101 Draft', workflowStatus: 'DRAFT', needsReview: false },
+    { id: 'crit-review', tpId: 'tp-101', description: 'Kriteria TP 101 Needs Review', workflowStatus: 'SIAP', needsReview: true },
+    { id: 'crit-2', tpId: 'tp-999', description: 'Kriteria TP 999 (Out of Scope)', workflowStatus: 'SIAP', needsReview: false }
   ];
 
   // Helper function simulating the exact scope draft compilation sequence from LearningPlanManager.tsx
@@ -530,10 +537,15 @@ async function runRegressionSuite() {
     globalCriteria: any[],
     aiDraftResult: any
   ): LearningPlan {
+    const kktpCheck = checkScopeKKTPReadiness(scope, globalCriteria);
+    if (!kktpCheck.isReady) {
+      throw new Error(kktpCheck.message || 'KKTP belum siap');
+    }
+
     const tpsToSend = scope.tpItems && scope.tpItems.length > 0 ? scope.tpItems : (scope.tpItem ? [scope.tpItem] : []);
-    const tpIdsToSend = tpsToSend.map((t: any) => t.id);
-    const relevantCriteria = globalCriteria.filter((ac) => tpIdsToSend.includes(ac.tpId));
     const canonicalTopic = scope.materialScope || scope.unitTitle || scope.title || (scope.tpItem ? (scope.tpItem.contentScope || scope.tpItem.statement) : '');
+
+    const relevantCriteria = getReadyKKTPCriteriaForScope(scope, globalCriteria);
 
     const isCanonicalUnit = scope.type === 'CANONICAL_UNIT' || Boolean(scope.unitTitle);
     const canonicalTitle = scope.unitTitle
@@ -553,7 +565,7 @@ async function runRegressionSuite() {
       curriculumType: 'KURIKULUM_MERDEKA',
       unitId: scope.unitId,
       learningMeetingIds: scope.learningMeetingIds,
-      tpIds: scope.linkedTpIds || tpIdsToSend,
+      tpIds: scope.linkedTpIds || tpsToSend.map((t: any) => t.id),
       atpItemIds: scope.linkedAtpItemIds || [],
       allocatedJP: scope.jp,
       aiDraft: {
@@ -590,9 +602,62 @@ async function runRegressionSuite() {
   });
 
   assert(
-    compiledPlanResult.kktpCriterionIds.includes('crit-1') && !compiledPlanResult.kktpCriterionIds.includes('crit-2'),
-    'LearningPlan draft must save only kktpCriterionIds matching the target scope TPs',
+    compiledPlanResult.kktpCriterionIds.includes('crit-1') &&
+    !compiledPlanResult.kktpCriterionIds.includes('crit-draft') &&
+    !compiledPlanResult.kktpCriterionIds.includes('crit-review') &&
+    !compiledPlanResult.kktpCriterionIds.includes('crit-2'),
+    'kktpCriterionIds hanya berisi KKTP SIAP dalam scope',
     `kktpCriterionIds=${JSON.stringify(compiledPlanResult.kktpCriterionIds)}`
+  );
+
+  const filteredCriteria = getReadyKKTPCriteriaForScope(simScope, allCriteria);
+  assert(
+    !filteredCriteria.some((c) => c.workflowStatus === 'DRAFT'),
+    'DRAFT criterion ditolak dari KKTP Modul Ajar'
+  );
+  assert(
+    !filteredCriteria.some((c) => c.needsReview === true),
+    'needsReview=true ditolak dari KKTP Modul Ajar'
+  );
+  assert(
+    !filteredCriteria.some((c) => c.tpId === 'tp-999'),
+    'criterion TP luar scope ditolak dari KKTP Modul Ajar'
+  );
+
+  // Readiness tests: multi-TP scope
+  const multiTpScope: any = {
+    unitId: 'unit-multi',
+    unitTitle: 'Bab Multi TP',
+    linkedTpIds: ['tp-101', 'tp-102'],
+    tpItems: [
+      { id: 'tp-101', statement: 'TP 101' },
+      { id: 'tp-102', statement: 'TP 102' }
+    ],
+    meetings: [],
+    jp: 4
+  };
+
+  const criteriaOnlyTp101 = [
+    { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101', workflowStatus: 'SIAP', needsReview: false }
+  ];
+
+  const checkBlocked = checkScopeKKTPReadiness(multiTpScope, criteriaOnlyTp101 as any);
+  assert(
+    !checkBlocked.isReady && checkBlocked.unreadyTpCount === 1 && checkBlocked.message?.includes('1 TP pada unit ini belum memiliki KKTP SIAP'),
+    'satu TP belum punya KKTP SIAP → blocked',
+    `isReady=${checkBlocked.isReady}, message=${checkBlocked.message}`
+  );
+
+  const criteriaBothReady = [
+    { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101', workflowStatus: 'SIAP', needsReview: false },
+    { id: 'crit-102', tpId: 'tp-102', description: 'Kriteria TP 102', workflowStatus: 'SIAP', needsReview: false }
+  ];
+
+  const checkAllowed = checkScopeKKTPReadiness(multiTpScope, criteriaBothReady as any);
+  assert(
+    checkAllowed.isReady && checkAllowed.unreadyTpCount === 0,
+    'semua TP punya KKTP SIAP → allowed',
+    `isReady=${checkAllowed.isReady}`
   );
 
   console.log('\n--- B19.2: Multi-meeting Order & Deterministic sorting ---');
