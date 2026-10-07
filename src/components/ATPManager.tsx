@@ -67,9 +67,13 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
 
   const hasTP = tp.items && tp.items.length > 0;
   const tpValidation = validateTPDataWorkflow(tp, cp, cpAnalysis, academicSetting);
-  const isTPReady = tpValidation.isSiap;
+  const isTPReady = tpValidation.isSiap && tp.workflowStatus === 'SIAP' && tp.needsReview !== true;
   const tpReadinessReason = !isTPReady
-    ? (tpValidation.issues[0] || 'TP belum memenuhi kriteria kanonikal SIAP.')
+    ? (!tpValidation.isSiap
+        ? (tpValidation.issues[0] || 'TP belum memenuhi kriteria kanonikal SIAP.')
+        : (tp.needsReview
+            ? (tp.reviewReason || 'TP ditandai perlu ditinjau ulang (needsReview).')
+            : 'TP belum dikonfirmasi atau disimpan sebagai SIAP.'))
     : undefined;
 
   // Integrity Check: TP was modified after ATP was formed
@@ -121,11 +125,18 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
           ? item.linkedTpIds
           : item.tpId ? [item.tpId] : [];
 
+        const focusTrimmed = item.focus ? String(item.focus).trim() : '';
+        if (!focusTrimmed) {
+          throw new Error(
+            `Hasil susunan ATP AI pada langkah ke-${item.stepNumber || idx + 1} tidak memiliki fokus langkah pembelajaran yang valid.`
+          );
+        }
+
         const candidateItem: ATPItem = {
           id: '',
           stepNumber: item.stepNumber || idx + 1,
           linkedTpIds: rawLinkedTpIds,
-          focus: item.focus ? String(item.focus).trim() : `Langkah ${idx + 1}`,
+          focus: focusTrimmed,
         };
 
         const refResult = resolveATPItemTPReferences(candidateItem, tp.items);
