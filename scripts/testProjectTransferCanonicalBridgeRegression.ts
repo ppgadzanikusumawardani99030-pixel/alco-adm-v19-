@@ -107,11 +107,15 @@ console.log('Testing Scenario A: Valid Merdeka v1...');
   assert(!!res.cpAnalysis, 'CPAnalysis harus dibuat untuk Merdeka');
   assert(res.cpAnalysis?.items.length === 2, 'CPAnalysis items count harus 2');
   assert(res.cpAnalysis?.workflowStatus === 'SIAP', `CPAnalysis workflowStatus harus SIAP (got ${res.cpAnalysis?.workflowStatus})`);
+  assert(res.cpAnalysis?.status === 'SIAP', `CPAnalysis status harus SIAP (got ${res.cpAnalysis?.status})`);
+  assert(res.cpAnalysis?.items[0].elementName === 'Bilangan', 'elementName CP Analysis harus dari data asli ProjectTransferCP');
+  assert(res.cpAnalysis?.items[0].cpText.includes('bilangan cacah'), 'cpText CP Analysis harus dari data asli ProjectTransferCP');
 
   assert(res.tp.items.length === 2, 'TP items count harus 2');
   assert(res.tp.items[0].cpAnalysisItemIds?.length === 1, 'TP item 0 harus memuat tepat 1 cpAnalysisItemId');
   assert(res.tp.items[0].cpAnalysisId === res.cpAnalysis?.items[0].id, 'TP item 0 cpAnalysisId harus merujuk ke item CPAnalysis 0');
   assert(res.tp.workflowStatus === 'SIAP', `TP workflowStatus harus SIAP (got ${res.tp.workflowStatus})`);
+  assert(res.tp.status === 'SIAP', `TP status harus SIAP (got ${res.tp.status})`);
 
   // Check state graph save
   const storedCpAnalysis = state.annualData.cpAnalysis.find((e) => e.yearPlanId === res.yearPlan.id);

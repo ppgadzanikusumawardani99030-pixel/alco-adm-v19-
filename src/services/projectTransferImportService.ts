@@ -191,6 +191,18 @@ export function performImportProjectTransferInState(
     };
   });
 
+  // Build lookup maps for source ProjectTransferCP by code and by element name
+  const sourceCpByCodeMap = new Map<string, ProjectTransferCP>();
+  const sourceCpByElementMap = new Map<string, ProjectTransferCP>();
+  (pkg.cp || []).forEach((c) => {
+    if (c.code && c.code.trim()) {
+      sourceCpByCodeMap.set(c.code.trim().toUpperCase(), c);
+    }
+    if (c.element && c.element.trim()) {
+      sourceCpByElementMap.set(c.element.trim().toUpperCase(), c);
+    }
+  });
+
   const cpElemByCodeMap = new Map<string, CPElem>();
   (pkg.cp || []).forEach((c, idx) => {
     const elem = cpElements[idx];
@@ -224,6 +236,9 @@ export function performImportProjectTransferInState(
     const cpAnalysisItems: CPAnalysisItem[] = (pkg.tp || []).map((t: ProjectTransferTP, idx: number) => {
       const rawCpCode = (t.cpCode || '').trim().toUpperCase();
       const matchedElem = rawCpCode ? cpElemByCodeMap.get(rawCpCode) : undefined;
+      const matchedSourceCP = rawCpCode
+        ? sourceCpByCodeMap.get(rawCpCode) || sourceCpByElementMap.get(rawCpCode)
+        : undefined;
 
       const competence = (t.competence || '').trim();
       const materialScope = (t.materialScope || '').trim();
@@ -234,8 +249,8 @@ export function performImportProjectTransferInState(
       return {
         id: analysisItemId,
         elementId: matchedElem ? matchedElem.id : undefined,
-        elementName: matchedElem ? matchedElem.name : '',
-        cpText: matchedElem ? matchedElem.content : '',
+        elementName: matchedSourceCP ? (matchedSourceCP.element || '').trim() : '',
+        cpText: matchedSourceCP ? (matchedSourceCP.content || '').trim() : '',
         cpCompetence: competence,
         materialScope: materialScope,
         suggestedTp: statement,
@@ -254,6 +269,8 @@ export function performImportProjectTransferInState(
       subjectCode: targetSubject,
       ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
       items: cpAnalysisItems,
+      status: 'DRAFT',
+      workflowStatus: 'DRAFT',
       basedOnCpUpdatedAt: newCPData.updatedAt,
       generatedBy: 'TEACHER',
       provenance: {
@@ -265,6 +282,7 @@ export function performImportProjectTransferInState(
 
     const anaValidation = validateCPAnalysisDataWorkflow(newCPAnalysisData, newCPData);
     newCPAnalysisData.workflowStatus = anaValidation.status;
+    newCPAnalysisData.status = anaValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
   }
 
   // 6. Generate fresh internal IDs for TPData and TPItems
@@ -276,7 +294,9 @@ export function performImportProjectTransferInState(
     const freshTPItemId = `tp-item-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 7)}`;
     const cleanCode = (t.code || '').trim();
     const rawCpCode = (t.cpCode || '').trim().toUpperCase();
-    const matchedElem = rawCpCode ? cpElemByCodeMap.get(rawCpCode) : undefined;
+    const matchedSourceCP = rawCpCode
+      ? sourceCpByCodeMap.get(rawCpCode) || sourceCpByElementMap.get(rawCpCode)
+      : undefined;
 
     let cpAnalysisId: string | undefined = undefined;
     let cpAnalysisItemIds: string[] | undefined = undefined;
@@ -292,7 +312,7 @@ export function performImportProjectTransferInState(
       code: cleanCode,
       ...(cpAnalysisId ? { cpAnalysisId } : {}),
       ...(cpAnalysisItemIds ? { cpAnalysisItemIds } : {}),
-      elementName: (matchedElem ? matchedElem.name : (t.cpCode ? cpElemByCodeMap.get(rawCpCode)?.name : '') || '').trim() || undefined,
+      elementName: matchedSourceCP ? (matchedSourceCP.element || '').trim() || undefined : undefined,
       statement: (t.statement || '').trim(),
       competence: (t.competence || '').trim(),
       contentScope: (t.materialScope || '').trim(),
@@ -336,8 +356,10 @@ export function performImportProjectTransferInState(
   if (isMerdeka && newCPAnalysisData) {
     const tpValidation = validateTPDataWorkflow(newTPData, newCPData, newCPAnalysisData);
     newTPData.workflowStatus = tpValidation.status;
+    newTPData.status = tpValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
   } else {
     newTPData.workflowStatus = 'DRAFT';
+    newTPData.status = 'DRAFT';
   }
 
   // 7. Generate fresh internal IDs for ATPData and ATPItems
