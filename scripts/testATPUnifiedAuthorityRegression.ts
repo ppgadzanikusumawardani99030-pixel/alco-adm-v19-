@@ -249,25 +249,19 @@ const mockProfile: TeacherProfile = {
   id: 'prof-001',
   name: 'Budi Santoso',
   nip: '19850101',
-  status: 'PNS',
+  email: 'budi@guru.id',
+  phone: '08123456789',
   defaultSubject: 'Matematika',
   defaultLevel: 'SD',
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
+  defaultGrade: 'Kelas 4',
 };
 const mockSchool: SchoolData = {
   id: 'sch-001',
   name: 'SD Negeri 1 Merdeka',
   npsn: '12345678',
   address: 'Jl. Pendidikan No. 1',
-  village: 'Desa Merdeka',
-  district: 'Kecamatan Merdeka',
-  regency: 'Kabupaten Merdeka',
-  province: 'Jawa Barat',
   principalName: 'Dr. Sutrisno, M.Pd.',
   principalNip: '197001011995011001',
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
 };
 
 const wfReportValid = validateWorkflowDependencies({

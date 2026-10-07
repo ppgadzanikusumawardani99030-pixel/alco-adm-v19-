@@ -600,7 +600,7 @@ async function runTests() {
     assert(tpCandidateGemini.provenance.engine === 'gemini', 'Provenance engine is gemini');
 
     // Pedagogical Fallback Case
-    const fallbackEngine: string = 'pedagogical_engine';
+    const fallbackEngine = 'pedagogical_engine';
     const isFallbackGemini = fallbackEngine === 'gemini';
     const tpCandidateFallback = {
       generatedBy: isFallbackGemini ? 'AI' : undefined,
