@@ -257,11 +257,10 @@ const mockProfile: TeacherProfile = {
 };
 const mockSchool: SchoolData = {
   id: 'sch-001',
+  profileId: 'prof-001',
   name: 'SD Negeri 1 Merdeka',
   npsn: '12345678',
   address: 'Jl. Pendidikan No. 1',
-  principalName: 'Dr. Sutrisno, M.Pd.',
-  principalNip: '197001011995011001',
 };
 
 const wfReportValid = validateWorkflowDependencies({
