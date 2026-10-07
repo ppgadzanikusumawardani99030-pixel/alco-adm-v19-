@@ -1555,6 +1555,244 @@ async function runTests() {
     }
   }
 
+  // Test 33: fallback valid -> retry Gemini has NO items property { engine: 'gemini' } -> uses fallback
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKeyNoItemsProp');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: Gemini with no items property at all
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini'
+          })
+        }),
+        json: async () => ({
+          success: true,
+          engine: 'gemini'
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch ran 2 requests (callCount: ${callCount})`);
+      assert(result.engine === 'pedagogical_engine', 'Result is pedagogical_engine fallback when items prop missing');
+      assert(result.items[0].statement === 'Fallback statement', 'Fallback statement preserved');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 34: fallback valid -> retry Gemini has data.items instead of top-level items -> uses fallback
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKeyNestedData');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: Gemini with data.items (wrong contract)
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini',
+            data: {
+              items: [{ statement: 'Nested data statement' }]
+            }
+          })
+        }),
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          data: {
+            items: [{ statement: 'Nested data statement' }]
+          }
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch ran 2 requests (callCount: ${callCount})`);
+      assert(result.engine === 'pedagogical_engine', 'Result is pedagogical_engine fallback when items is inside data');
+      assert(result.items[0].statement === 'Fallback statement', 'Fallback statement preserved');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 35: fallback valid -> retry Gemini item only has cpCompetence / materialScope without statement/description -> uses fallback
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKeyNoStmt');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: Gemini with cpCompetence only
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini',
+            items: [{ cpCompetence: 'Hanya kompetensi', materialScope: 'Hanya materi' }]
+          })
+        }),
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{ cpCompetence: 'Hanya kompetensi', materialScope: 'Hanya materi' }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch ran 2 requests (callCount: ${callCount})`);
+      assert(result.engine === 'pedagogical_engine', 'Result is pedagogical_engine fallback when item lacks statement/description');
+      assert(result.items[0].statement === 'Fallback statement', 'Fallback statement preserved');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 36: fallback valid -> retry Gemini item has description -> Gemini used
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKeyDescription');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: Gemini with description field
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini',
+            items: [{ description: 'TP valid dari field description' }]
+          })
+        }),
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{ description: 'TP valid dari field description' }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch ran 2 requests (callCount: ${callCount})`);
+      assert(result.engine === 'gemini', 'Result is gemini when description provided');
+      assert(result.items[0].statement === 'TP valid dari field description', 'Statement extracted from description field');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
   console.log(`\n=== Hardening Tests Summary: ${passed} passed, ${failed} failed ===`);
   if (failed > 0) {
     process.exit(1);

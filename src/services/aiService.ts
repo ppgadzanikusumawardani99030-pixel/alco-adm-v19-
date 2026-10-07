@@ -215,26 +215,42 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
                 typeof retryBody === 'object' &&
                 retryBody.engine === 'gemini'
               ) {
-                const rawItems = Array.isArray(retryBody.items)
-                  ? retryBody.items
-                  : Array.isArray(retryBody.data?.items)
-                  ? retryBody.data.items
-                  : null;
+                if (url.includes('generate-tp')) {
+                  const rawItems = Array.isArray(retryBody.items)
+                    ? retryBody.items
+                    : null;
 
-                let hasValidItems = true;
-                if (rawItems !== null) {
-                  if (rawItems.length === 0) {
-                    hasValidItems = false;
-                  } else {
-                    hasValidItems = rawItems.every((it: any) => {
+                  const hasValidItems =
+                    rawItems !== null &&
+                    rawItems.length > 0 &&
+                    rawItems.every((it: any) => {
                       if (!it || typeof it !== 'object') return false;
-                      const stmt = it.statement || it.description || it.cpCompetence || it.materialScope;
+                      const stmt = it.statement || it.description;
                       return typeof stmt === 'string' && stmt.trim().length > 0;
                     });
-                  }
-                }
 
-                if (hasValidItems) {
+                  if (hasValidItems) {
+                    return retryRes;
+                  }
+                } else if (url.includes('analyze-cp')) {
+                  const rawItems = Array.isArray(retryBody.items)
+                    ? retryBody.items
+                    : Array.isArray(retryBody.data?.items)
+                    ? retryBody.data.items
+                    : null;
+
+                  const hasValidItems =
+                    rawItems !== null &&
+                    rawItems.length > 0 &&
+                    rawItems.every((it: any) => {
+                      if (!it || typeof it !== 'object') return false;
+                      return Boolean(it.elementName || it.cpCompetence || it.materialScope);
+                    });
+
+                  if (hasValidItems) {
+                    return retryRes;
+                  }
+                } else {
                   return retryRes;
                 }
               }
