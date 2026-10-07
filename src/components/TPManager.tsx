@@ -366,21 +366,34 @@ export const TPManager: React.FC<TPManagerProps> = ({
     const nextNum = items.length + 1;
     const gradeNum = context.grade.replace(/[^0-9]/g, '') || '4';
     const newId = `tp-item-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    const defaultAnalysisItem = cpAnalysis?.items?.[0];
+    const defaultAnalysisId = defaultAnalysisItem?.id;
     setCurrentItem({
       id: newId,
       code: `TP ${gradeNum}.${nextNum}`,
-      elementName: cp.elements?.[0]?.name || 'Umum',
+      elementName: defaultAnalysisItem?.elementName || cp.elements?.[0]?.name || 'Umum',
       statement: '',
-      competence: '',
-      contentScope: '',
+      competence: defaultAnalysisItem?.cpCompetence || '',
+      contentScope: defaultAnalysisItem?.materialScope || '',
       p3Dimensions: [],
       order: nextNum,
+      cpAnalysisItemIds: defaultAnalysisId ? [defaultAnalysisId] : [],
+      cpAnalysisId: defaultAnalysisId,
     });
     setIsEditing(true);
   };
 
   const handleOpenEdit = (item: TPItem) => {
-    setCurrentItem({ ...item });
+    const rawAnalysisIds = Array.isArray(item.cpAnalysisItemIds) && item.cpAnalysisItemIds.length > 0
+      ? item.cpAnalysisItemIds
+      : item.cpAnalysisId
+      ? [item.cpAnalysisId]
+      : (cpAnalysis?.items?.[0]?.id ? [cpAnalysis.items[0].id] : []);
+    setCurrentItem({
+      ...item,
+      cpAnalysisItemIds: rawAnalysisIds,
+      cpAnalysisId: rawAnalysisIds[0],
+    });
     setIsEditing(true);
   };
 
@@ -392,10 +405,23 @@ export const TPManager: React.FC<TPManagerProps> = ({
     }
 
     const stmt = (currentItem.statement || currentItem.description || '').trim();
+    const effectiveAnalysisIds = Array.isArray(currentItem.cpAnalysisItemIds) && currentItem.cpAnalysisItemIds.length > 0
+      ? currentItem.cpAnalysisItemIds
+      : currentItem.cpAnalysisId
+      ? [currentItem.cpAnalysisId]
+      : (cpAnalysis?.items?.length ? [cpAnalysis.items[0].id] : []);
+
+    if (cpAnalysis?.items && cpAnalysis.items.length > 0 && effectiveAnalysisIds.length === 0) {
+      alert('Pilih tepat 1 butir Analisis CP rujukan untuk butir TP ini.');
+      return;
+    }
+
     const finalItem: TPItem = {
       ...currentItem,
       statement: stmt,
       description: stmt,
+      cpAnalysisItemIds: effectiveAnalysisIds,
+      cpAnalysisId: effectiveAnalysisIds[0],
     };
 
     const exists = items.some((i) => i.id === finalItem.id);
@@ -852,6 +878,37 @@ export const TPManager: React.FC<TPManagerProps> = ({
             </div>
 
             <form onSubmit={handleSaveItemModal} className="space-y-4">
+              {cpAnalysis?.items && cpAnalysis.items.length > 0 && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                    Butir Analisis CP Rujukan (Kontrak Atomik 1:1) <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={currentItem.cpAnalysisItemIds?.[0] || currentItem.cpAnalysisId || ''}
+                    onChange={(e) => {
+                      const selId = e.target.value;
+                      const matchedAna = cpAnalysis.items.find((a) => a.id === selId);
+                      setCurrentItem({
+                        ...currentItem,
+                        cpAnalysisItemIds: selId ? [selId] : [],
+                        cpAnalysisId: selId || undefined,
+                        elementName: matchedAna?.elementName || currentItem.elementName,
+                        competence: currentItem.competence || matchedAna?.cpCompetence || '',
+                        contentScope: currentItem.contentScope || matchedAna?.materialScope || '',
+                      });
+                    }}
+                    className="w-full text-sm px-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-600 bg-white"
+                  >
+                    <option value="">-- Pilih Butir Analisis CP --</option>
+                    {cpAnalysis.items.map((ana, idx) => (
+                      <option key={ana.id || idx} value={ana.id}>
+                        {idx + 1}. [{ana.elementName || 'Elemen'}] {ana.cpCompetence} - {ana.materialScope}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-bold text-slate-700 uppercase mb-1">

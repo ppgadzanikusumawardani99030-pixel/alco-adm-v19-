@@ -92,6 +92,7 @@ function validTP(overrides: Partial<TPData> = {}): TPData {
         statement: 'Peserta didik mampu mengidentifikasi informasi utama dalam teks sederhana.',
         competence: 'Mengidentifikasi',
         contentScope: 'Informasi utama teks sederhana',
+        cpAnalysisItemIds: ['ana-1'],
         order: 1,
       },
       {
@@ -100,6 +101,7 @@ function validTP(overrides: Partial<TPData> = {}): TPData {
         statement: 'Peserta didik mampu menceritakan kembali isi teks sederhana dengan bahasa sendiri.',
         competence: 'Menceritakan',
         contentScope: 'Isi teks sederhana',
+        cpAnalysisItemIds: ['ana-1'],
         order: 2,
       },
     ],

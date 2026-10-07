@@ -32,17 +32,14 @@ async function runPersistenceRegressionSuite() {
   const mockTpData: TPData = {
     id: 'tp-data-1',
     academicSettingId: 'setting-1',
-    subject: 'Informatika',
+    subjectCode: 'Informatika',
     phase: 'E',
-    grade: '10',
-    curriculum: 'Kurikulum Merdeka',
-    curriculumType: 'KURIKULUM_MERDEKA',
     workflowStatus: 'SIAP',
     items: [
-      { id: 'tp-101', code: 'TP-1', statement: 'Memahami konsep dasar algoritma' },
-      { id: 'tp-102', code: 'TP-2', statement: 'Menerapkan struktur kontrol percabangan' },
-      { id: 'tp-103', code: 'TP-3', statement: 'Menerapkan struktur kontrol perulangan' },
-      { id: 'tp-104', code: 'TP-4', statement: 'Menganalisis kompleksitas algoritma sederhana' },
+      { id: 'tp-101', code: 'TP-1', statement: 'Memahami konsep dasar algoritma', competence: 'Memahami', contentScope: 'Algoritma', order: 1 },
+      { id: 'tp-102', code: 'TP-2', statement: 'Menerapkan struktur kontrol percabangan', competence: 'Menerapkan', contentScope: 'Percabangan', order: 2 },
+      { id: 'tp-103', code: 'TP-3', statement: 'Menerapkan struktur kontrol perulangan', competence: 'Menerapkan', contentScope: 'Perulangan', order: 3 },
+      { id: 'tp-104', code: 'TP-4', statement: 'Menganalisis kompleksitas algoritma sederhana', competence: 'Menganalisis', contentScope: 'Kompleksitas', order: 4 },
     ],
     updatedAt: new Date().toISOString(),
   };
@@ -51,11 +48,8 @@ async function runPersistenceRegressionSuite() {
     id: 'atp-data-1',
     academicSettingId: 'setting-1',
     tpDataId: 'tp-data-1',
-    subject: 'Informatika',
+    subjectCode: 'Informatika',
     phase: 'E',
-    grade: '10',
-    curriculum: 'Kurikulum Merdeka',
-    curriculumType: 'KURIKULUM_MERDEKA',
     workflowStatus: 'SIAP',
     items: [
       {

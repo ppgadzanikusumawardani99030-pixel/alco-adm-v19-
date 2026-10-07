@@ -575,9 +575,9 @@ export function validateTPDataWorkflow(
       issues.push(`Butir TP ke-${i + 1} belum memiliki kode TP.`);
     } else {
       const normalizedCode = item.code.trim().toUpperCase();
-      const tpCodeRegex = /^E\d+-[A-Z0-9]{2,5}-\d{2}$/;
+      const tpCodeRegex = /^((E\d+-[A-Z0-9]{2,5}-\d{2})|(TP\s*\d+(\.\d+)?)|(TP\.\d+(\.\d+)?)|(TP-\d+)|(TP\s*\d+))$/i;
       if (!tpCodeRegex.test(normalizedCode)) {
-        issues.push(`Format Kode TP "${item.code}" tidak sah! Format harus sesuai pola E1-PGD-01 (huruf E kapital, angka, singkatan materi kapital 2-5 karakter, dan nomor urut 2 digit).`);
+        issues.push(`Format Kode TP "${item.code}" tidak sah! Format harus sesuai pola standar kurikulum (misal: E1-PGD-01 atau TP 4.1).`);
       } else if (seenCodes.has(normalizedCode)) {
         issues.push(`Terdeteksi duplikasi Kode TP (${item.code}) pada daftar TP.`);
       }
@@ -599,7 +599,9 @@ export function validateTPDataWorkflow(
       }
 
       // 3. Setiap TP harus memiliki cpAnalysisItemIds tepat 1 ID (ATOMIC TP CONTRACT)
-      const analysisIds = Array.isArray(item.cpAnalysisItemIds) ? item.cpAnalysisItemIds : [];
+      const analysisIds = (Array.isArray(item.cpAnalysisItemIds) && item.cpAnalysisItemIds.length > 0)
+        ? item.cpAnalysisItemIds
+        : (item.cpAnalysisId ? [item.cpAnalysisId] : []);
       if (analysisIds.length === 0) {
         issues.push(`Butir TP ke-${i + 1} (${item.code || 'Tanpa Kode'}) belum menautkan butir Analisis CP.`);
       } else if (analysisIds.length > 1) {

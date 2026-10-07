@@ -536,6 +536,7 @@ async function runRegressionSuite() {
       levels: [{ level: 'Baik', label: 'Tuntas', description: 'Memenuhi capaian' }],
       workflowStatus: 'SIAP',
       needsReview: false,
+      updatedAt: new Date().toISOString(),
     },
     {
       id: 'crit-draft',
@@ -547,6 +548,7 @@ async function runRegressionSuite() {
       levels: [{ level: 'Cukup', label: 'Belum Tuntas', description: 'Draf awal' }],
       workflowStatus: 'DRAFT',
       needsReview: false,
+      updatedAt: new Date().toISOString(),
     },
     {
       id: 'crit-incomplete',
@@ -558,6 +560,7 @@ async function runRegressionSuite() {
       levels: [{ level: 'Perlu Bimbingan', label: 'Belum Selesai', description: 'Perlu dilengkapi' }],
       workflowStatus: 'PERLU_DILENGKAPI',
       needsReview: false,
+      updatedAt: new Date().toISOString(),
     },
     {
       id: 'crit-review',
@@ -570,6 +573,7 @@ async function runRegressionSuite() {
       workflowStatus: 'SIAP',
       needsReview: true,
       reviewReason: 'Perlu revisi guru',
+      updatedAt: new Date().toISOString(),
     },
     {
       id: 'crit-2',
@@ -581,6 +585,7 @@ async function runRegressionSuite() {
       levels: [{ level: 'Baik', label: 'Tuntas', description: 'Di luar unit' }],
       workflowStatus: 'SIAP',
       needsReview: false,
+      updatedAt: new Date().toISOString(),
     },
   ];
 
@@ -640,7 +645,7 @@ async function runRegressionSuite() {
     title: 'Bab 1',
     unitId: 'unit-1',
     unitTitle: 'Bab 1',
-    tpItems: [{ id: 'tp-101', code: 'TP-1', statement: 'Belajar programming' }],
+    tpItems: [{ id: 'tp-101', code: 'TP-1', statement: 'Belajar programming', competence: 'Belajar', contentScope: 'Programming', order: 1 }],
     linkedTpIds: ['tp-101'],
     linkedAtpItemIds: ['atp-201'],
     meetings: [],
@@ -697,9 +702,10 @@ async function runRegressionSuite() {
     unitId: 'unit-multi',
     unitTitle: 'Bab Multi TP',
     linkedTpIds: ['tp-101', 'tp-102'],
+    linkedAtpItemIds: [],
     tpItems: [
-      { id: 'tp-101', code: 'TP-1', statement: 'TP 101' },
-      { id: 'tp-102', code: 'TP-2', statement: 'TP 102' },
+      { id: 'tp-101', code: 'TP-1', statement: 'TP 101', competence: 'Memahami', contentScope: 'Materi 1', order: 1 },
+      { id: 'tp-102', code: 'TP-2', statement: 'TP 102', competence: 'Memahami', contentScope: 'Materi 2', order: 2 },
     ],
     meetings: [],
     jp: 4,
@@ -716,6 +722,7 @@ async function runRegressionSuite() {
       levels: [{ level: 'Baik', label: 'Tuntas', description: 'Tuntas' }],
       workflowStatus: 'SIAP',
       needsReview: false,
+      updatedAt: new Date().toISOString(),
     },
   ];
 
@@ -737,6 +744,7 @@ async function runRegressionSuite() {
       levels: [{ level: 'Baik', label: 'Tuntas', description: 'Tuntas' }],
       workflowStatus: 'SIAP',
       needsReview: false,
+      updatedAt: new Date().toISOString(),
     },
     {
       id: 'crit-102',
@@ -748,6 +756,7 @@ async function runRegressionSuite() {
       levels: [{ level: 'Baik', label: 'Tuntas', description: 'Tuntas' }],
       workflowStatus: 'SIAP',
       needsReview: false,
+      updatedAt: new Date().toISOString(),
     },
   ];
 
@@ -849,9 +858,7 @@ async function runRegressionSuite() {
 
   console.log('\n--- B19.4: Diagnostic Flags & Counts ---');
   const simulatedMetadata = (scope: any, criteria: any[]) => {
-    const tpsToSend = scope.tpItems || [];
-    const tpIdsToSend = tpsToSend.map((t: any) => t.id);
-    const relevantCriteria = criteria.filter((ac) => tpIdsToSend.includes(ac.tpId));
+    const relevantCriteria = getReadyKKTPCriteriaForScope(scope, criteria);
     const hasKktp = relevantCriteria.length > 0;
     return {
       meetingStructureSent: !!scope.meetings?.length,

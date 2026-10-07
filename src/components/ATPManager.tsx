@@ -437,7 +437,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
               )}
             </div>
             <p className="text-sm text-slate-500 mt-1">
-              Petakan alur pengurutan dan pengelompokan Tujuan Pembelajaran (TP) secara bertahap dan sistematis untuk <strong>{context.subject}</strong> ({context.grade}), Tahun Ajaran {context.academicYear || '-'}.
+              Petakan alur pengurutan dan pengelompokan Tujuan Pembelajaran (TP) secara bertahap dan sistematis untuk <strong>{context.subject}</strong> ({context.grade}), Tahun Ajaran {context.academicYear || '-'}. Alokasi waktu dapat dilengkapi pada tahap perencanaan waktu berikutnya.
             </p>
           </div>
 

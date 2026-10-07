@@ -26,7 +26,7 @@ import { validateAcademicSettingReadiness } from './academicSettingReadiness';
 import { resolveCurriculumContext, resolveSubjectInput } from '../data/curriculum/resolver';
 import { ResolvedCurriculumContext } from '../data/curriculum/types';
 import { getPhaseFromGrade } from '../data/curriculumDefaults';
-import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences } from './cpWorkflowService';
+import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences, validateTPDataWorkflow } from './cpWorkflowService';
 import { loadStorageV5, getSemesterDataV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
@@ -422,15 +422,18 @@ export function validateWorkflowDependencies(
       });
     }
 
-    // 3. TP (Tujuan Pembelajaran - Requires CP Analysis)
+    // 3. TP (Tujuan Pembelajaran - Requires CP Analysis & Canonical Validation)
     const tpItems = tp?.items || [];
-    const isTPDataValid = tpItems.length > 0 && tpItems.every((item) => item.statement?.trim().length > 0);
+    const isTPBlocked = !isAnalysisComplete;
     const isTPStale =
       isAnalysisComplete &&
       (isUpstreamStale(cpAnalysis?.updatedAt, tp?.basedOnAnalysisUpdatedAt) ||
         isUpstreamStale(cp?.updatedAt, tp?.basedOnCpUpdatedAt));
 
-    const isTPBlocked = !isAnalysisComplete;
+    const tpValidation = !isTPBlocked && tp && tpItems.length > 0
+      ? validateTPDataWorkflow(tp, cp, cpAnalysis, academicSetting)
+      : null;
+    const isTPDataValid = !!(tpValidation && tpValidation.isSiap);
 
     stepStates.tp = {
       id: 'tp',
@@ -444,12 +447,14 @@ export function validateWorkflowDependencies(
         ? 'IN_PROGRESS'
         : 'READY',
       isBlocked: isTPBlocked,
-      isComplete: isTPDataValid && !isTPBlocked,
+      isComplete: isTPDataValid && !isTPBlocked && !isTPStale,
       isStale: isTPStale,
       reason: !isAnalysisComplete
         ? 'Memerlukan Analisis CP terlebih dahulu sebagai rujukan resmi TP'
         : isTPStale
         ? 'Analisis CP telah diperbarui, daftar TP perlu diselaraskan'
+        : !isTPDataValid && tpItems.length > 0 && tpValidation?.issues?.[0]
+        ? tpValidation.issues[0]
         : undefined,
       missingDependencies: !isAnalysisComplete ? ['Analisis CP'] : undefined,
     };
@@ -472,10 +477,21 @@ export function validateWorkflowDependencies(
       });
     }
 
+    if (!isTPBlocked && tpItems.length > 0 && !isTPDataValid && tpValidation) {
+      tpValidation.issues.forEach((issueMsg) => {
+        issues.push({
+          severity: 'WARNING',
+          module: 'tp',
+          code: 'TP_WORKFLOW_INCOMPLETE',
+          message: issueMsg,
+        });
+      });
+    }
+
     // 4. ATP (Alur Tujuan Pembelajaran - Requires TP and references canonical tpId)
     const atpItems = atp?.items || [];
     const validTpIds = new Set(tpItems.map((t) => t.id));
-    const isATPBlocked = !isTPDataValid;
+    const isATPBlocked = !isTPDataValid || isTPBlocked || isTPStale;
 
     // Check ATP sequence, orphan tpIds, and canonical TP coverage
     let hasOrphanATPItem = false;
@@ -622,7 +638,7 @@ export function validateWorkflowDependencies(
     }
 
     const kktpDataVal = validateKKTPData(criteria, tp, academicSetting, k13Analysis);
-    const isKKTPBlocked = !isTPDataValid;
+    const isKKTPBlocked = !isTPDataValid || isTPBlocked || isTPStale;
     const isKKTPComplete =
       isTPDataValid &&
       criteria.length > 0 &&

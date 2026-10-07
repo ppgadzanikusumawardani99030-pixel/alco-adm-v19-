@@ -172,12 +172,9 @@ export async function ensureGeminiApiKey(): Promise<string> {
 }
 
 export async function aiFetch(url: string, options: RequestInit = {}): Promise<Response> {
-  let key = getGeminiApiKey();
-  if (!key) {
-    key = await ensureGeminiApiKey();
-  }
+  const userKey = getGeminiApiKey();
 
-  const makeRequest = async (currentKey: string): Promise<Response> => {
+  const makeRequest = async (currentKey?: string | null): Promise<Response> => {
     const headers = new Headers(options.headers || {});
     if (currentKey && currentKey.trim()) {
       headers.set('X-Gemini-API-Key', currentKey.trim());
@@ -188,15 +185,23 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
     });
   };
 
-  let res = await makeRequest(key);
+  // 1. Server-First: attempt request with user key if available, otherwise rely on server-configured key
+  let res = await makeRequest(userKey);
 
+  // 2. Prompt only when server explicitly denies authorization (401/403)
   if (res.status === 401 || res.status === 403) {
-    removeGeminiApiKey();
+    if (userKey) {
+      removeGeminiApiKey();
+    }
     if (modalOpenListeners.length > 0) {
-      const newKey = await openApiKeyModal(
-        'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
-      );
-      res = await makeRequest(newKey);
+      try {
+        const newKey = await openApiKeyModal(
+          'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
+        );
+        res = await makeRequest(newKey);
+      } catch {
+        // Modal dismissed or rejected
+      }
     }
   }
 
@@ -300,11 +305,13 @@ export async function generateTPWithAI(params: GenerateTPParams): Promise<Genera
       throw new Error('Respons AI TP tidak valid: "items" harus berupa array dan tidak boleh kosong.');
     }
     if (
+      data.engine &&
       data.engine !== 'gemini' &&
       data.engine !== 'pedagogical_engine'
     ) {
       throw new Error('Respons AI TP tidak memiliki provenance engine yang valid.');
     }
+    const resolvedEngine = (data.engine === 'pedagogical_engine' ? 'pedagogical_engine' : 'gemini') as 'gemini' | 'pedagogical_engine';
     for (let i = 0; i < data.items.length; i++) {
       const item = data.items[i];
       if (!item || typeof item !== 'object') {
@@ -322,7 +329,7 @@ export async function generateTPWithAI(params: GenerateTPParams): Promise<Genera
         params.existingTps || [],
         params.cpAnalysisItems || []
       ),
-      engine: data.engine,
+      engine: resolvedEngine,
     };
   } catch (err) {
     throw new Error(formatAIErrorMessage(err, 'merumuskan Tujuan Pembelajaran'));
