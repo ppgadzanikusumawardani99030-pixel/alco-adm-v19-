@@ -527,6 +527,7 @@ async function runRegressionSuite() {
   const allCriteria = [
     { id: 'crit-1', tpId: 'tp-101', description: 'Kriteria TP 101 Siap', workflowStatus: 'SIAP', needsReview: false },
     { id: 'crit-draft', tpId: 'tp-101', description: 'Kriteria TP 101 Draft', workflowStatus: 'DRAFT', needsReview: false },
+    { id: 'crit-incomplete', tpId: 'tp-101', description: 'Kriteria TP 101 Perlu Dilengkapi', workflowStatus: 'PERLU_DILENGKAPI', needsReview: false },
     { id: 'crit-review', tpId: 'tp-101', description: 'Kriteria TP 101 Needs Review', workflowStatus: 'SIAP', needsReview: true },
     { id: 'crit-2', tpId: 'tp-999', description: 'Kriteria TP 999 (Out of Scope)', workflowStatus: 'SIAP', needsReview: false }
   ];
@@ -604,6 +605,7 @@ async function runRegressionSuite() {
   assert(
     compiledPlanResult.kktpCriterionIds.includes('crit-1') &&
     !compiledPlanResult.kktpCriterionIds.includes('crit-draft') &&
+    !compiledPlanResult.kktpCriterionIds.includes('crit-incomplete') &&
     !compiledPlanResult.kktpCriterionIds.includes('crit-review') &&
     !compiledPlanResult.kktpCriterionIds.includes('crit-2'),
     'kktpCriterionIds hanya berisi KKTP SIAP dalam scope',
@@ -614,6 +616,10 @@ async function runRegressionSuite() {
   assert(
     !filteredCriteria.some((c) => c.workflowStatus === 'DRAFT'),
     'DRAFT criterion ditolak dari KKTP Modul Ajar'
+  );
+  assert(
+    !filteredCriteria.some((c) => c.workflowStatus === 'PERLU_DILENGKAPI'),
+    'PERLU_DILENGKAPI criterion ditolak dari KKTP Modul Ajar'
   );
   assert(
     !filteredCriteria.some((c) => c.needsReview === true),
