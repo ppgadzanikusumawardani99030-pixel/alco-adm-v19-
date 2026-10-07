@@ -435,6 +435,19 @@ async function runTests() {
         headers: {
           get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
         },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini',
+            items: [{
+              code: 'E1-ALJ-01',
+              elementName: 'Aljabar',
+              statement: 'Gemini AI generated TP statement',
+              competence: 'Menganalisis',
+              contentScope: 'Pola Bilangan'
+            }]
+          })
+        }),
         json: async () => ({
           success: true,
           engine: 'gemini',
@@ -919,6 +932,19 @@ async function runTests() {
         headers: {
           get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
         },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini',
+            items: [{
+              code: 'E1-ALJ-01',
+              elementName: 'Aljabar',
+              statement: 'Gemini hasil retry dari pedagogical engine.',
+              competence: 'Menganalisis',
+              contentScope: 'Pola Bilangan'
+            }]
+          })
+        }),
         json: async () => ({
           success: true,
           engine: 'gemini',
@@ -1053,6 +1079,300 @@ async function runTests() {
       assert(getGeminiApiKey() === null, 'Fresh invalid key from modal was removed from storage after 401 in 503 branch');
     } finally {
       unsubscribe();
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 24 (A): fallback JSON valid -> retry 200 text/html "Starting Server" -> uses pedagogical fallback without throwing
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKey');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Valid fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Valid fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: preview "Starting Server" html
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'text/html' : null },
+        clone: () => ({
+          json: async () => { throw new Error('Unexpected token < in JSON at position 0'); }
+        }),
+        text: async () => '<html><body>Starting Server...</body></html>',
+        json: async () => { throw new Error('Unexpected token < in JSON at position 0'); }
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch attempted upgrade once (callCount: ${callCount})`);
+      assert(result.engine === 'pedagogical_engine', 'Result preserved first pedagogical fallback');
+      assert(result.items[0].statement === 'Valid fallback statement', 'Pedagogical fallback statement is preserved intact');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 25 (B): fallback JSON valid -> retry 200 application/json but engine still pedagogical_engine -> uses first fallback
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKey');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'First fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        }),
+        json: async () => ({
+          success: true,
+          engine: 'pedagogical_engine',
+          items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'First fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch attempted upgrade (callCount: ${callCount})`);
+      assert(result.engine === 'pedagogical_engine', 'Result is pedagogical_engine');
+      assert(result.items[0].statement === 'First fallback statement', 'First fallback statement preserved');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 26 (C): fallback JSON valid -> retry 500 -> uses first fallback
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidLocalKey');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'First fallback 500 resilience', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'First fallback 500 resilience', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: 500 server error on AI endpoint
+      return {
+        ok: false,
+        status: 500,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        json: async () => ({ error: 'Internal server error in Gemini bridge' })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch caught 500 and safely reverted to fallback (callCount: ${callCount})`);
+      assert(result.items[0].statement === 'First fallback 500 resilience', 'Preserved valid first fallback on retry 500');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 27 (D): fallback JSON valid -> retry 401/403 -> local BYOK invalid deleted -> uses valid first fallback without error
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyBadKeyThatGives401OnRetry');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback preserved on 401 retry', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback preserved on 401 retry', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: 401 Invalid key
+      return {
+        ok: false,
+        status: 401,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        json: async () => ({ error: 'Invalid API key', code: 'INVALID_API_KEY' })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch executed 2 requests on 401 retry (callCount: ${callCount})`);
+      assert(getGeminiApiKey() === null, 'Bad local key was removed from storage after 401 retry');
+      assert(result.engine === 'pedagogical_engine', 'Result is pedagogical_engine');
+      assert(result.items[0].statement === 'Fallback preserved on 401 retry', 'Fallback returned without throwing error');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 28 (E): fallback JSON valid -> retry Gemini JSON valid -> uses Gemini result
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidKeyForGeminiUpgrade');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback statement', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => ({
+            success: true,
+            engine: 'gemini',
+            items: [{ code: 'E1-ALJ-01', elementName: 'Aljabar', statement: 'Gemini upgraded successfully', competence: 'Menganalisis', contentScope: 'Pola Bilangan' }]
+          })
+        }),
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{ code: 'E1-ALJ-01', elementName: 'Aljabar', statement: 'Gemini upgraded successfully', competence: 'Menganalisis', contentScope: 'Pola Bilangan' }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch upgraded to Gemini (callCount: ${callCount})`);
+      assert(result.engine === 'gemini', 'Result engine is gemini');
+      assert(result.items[0].statement === 'Gemini upgraded successfully', 'Gemini statement used');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 29 (F): fallback JSON valid -> retry malformed JSON -> uses first fallback
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyValidKeyMalformedJSON');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback resilient to malformed JSON', competence: 'Memahami', contentScope: 'Materi 1' }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{ code: 'E1-UMU-01', elementName: 'Elemen 1', statement: 'Fallback resilient to malformed JSON', competence: 'Memahami', contentScope: 'Materi 1' }]
+          })
+        } as any;
+      }
+
+      // Request 2: malformed JSON with application/json header
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: (n: string) => n.toLowerCase() === 'content-type' ? 'application/json' : null },
+        clone: () => ({
+          json: async () => { throw new SyntaxError('Unexpected token in JSON'); }
+        }),
+        json: async () => { throw new SyntaxError('Unexpected token in JSON'); }
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch caught malformed JSON on retry (callCount: ${callCount})`);
+      assert(result.items[0].statement === 'Fallback resilient to malformed JSON', 'Preserved valid first fallback on malformed JSON');
+    } finally {
       removeGeminiApiKey();
       global.fetch = originalFetch;
     }

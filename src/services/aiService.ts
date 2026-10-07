@@ -194,18 +194,34 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
   const localKey = getGeminiApiKey();
   if (res.ok && localKey && localKey.trim()) {
     try {
-      const cloned = res.clone();
+      const cloned = typeof res.clone === 'function' ? res.clone() : res;
       const bodyJson = await cloned.json().catch(() => null);
       if (bodyJson && bodyJson.engine === 'pedagogical_engine') {
-        const retryRes = await makeRequest(localKey.trim());
-        if (retryRes.ok) {
-          return retryRes;
+        try {
+          const retryRes = await makeRequest(localKey.trim());
+          if (retryRes.status === 401 || retryRes.status === 403) {
+            removeGeminiApiKey();
+            // Kembalikan fallback valid pertama agar proses tidak gagal
+            return res;
+          }
+
+          if (retryRes.ok) {
+            const contentType = retryRes.headers.get('content-type') || '';
+            if (contentType.toLowerCase().includes('application/json')) {
+              const retryCloned = typeof retryRes.clone === 'function' ? retryRes.clone() : retryRes;
+              const retryBody = await retryCloned.json().catch(() => null);
+              if (retryBody && typeof retryBody === 'object' && retryBody.engine === 'gemini') {
+                return retryRes;
+              }
+            }
+          }
+          // Jika retry menghasilkan text/html, 5xx, non-gemini, atau malformed JSON:
+          // kembalikan fallback valid pertama
+          return res;
+        } catch {
+          // Network / fetch failure on retry: gunakan fallback valid pertama
+          return res;
         }
-        if (retryRes.status === 401 || retryRes.status === 403) {
-          removeGeminiApiKey();
-        }
-        // Jika retry gagal non-auth, gunakan hasil fallback pertama yang valid
-        return res;
       }
     } catch {
       // not json or clone failed, return original res
