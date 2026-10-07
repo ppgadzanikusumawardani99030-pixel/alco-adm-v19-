@@ -5,6 +5,8 @@ import {
   saveGeminiApiKey,
   removeGeminiApiKey,
   GEMINI_API_KEY_STORAGE_KEY,
+  subscribeApiKeyModal,
+  submitApiKeyFromModal,
 } from '../src/services/aiService';
 import { generateSemanticTPCode } from '../src/services/cpWorkflowService';
 import { createInitialStorageV5, serializeBackupV5 } from '../src/services/storageV5';
@@ -599,6 +601,347 @@ async function runTests() {
     assert(tpCandidateFallback.generationEngine === 'pedagogical_engine', 'Pedagogical fallback recorded as generationEngine: pedagogical_engine');
     assert(tpCandidateFallback.provenance.generatedBy === 'SYSTEM', 'Pedagogical fallback provenance generatedBy is SYSTEM');
     assert(tpCandidateFallback.provenance.engine === 'pedagogical_engine', 'Pedagogical fallback provenance engine is pedagogical_engine');
+  }
+
+  // Test 17: Scenario 1 - Server key invalid (401 on req 1) + Local BYOK valid -> 1st req no header 401 -> local key NOT deleted -> 2nd req with local BYOK 200 -> success used without modal
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    const capturedHeaders: Array<string | null> = [];
+
+    saveGeminiApiKey('AIzaSyValidUserLocalKey');
+
+    let modalOpened = false;
+    const unsubscribe = subscribeApiKeyModal(() => {
+      modalOpened = true;
+    });
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      const headers = new Headers(init?.headers);
+      capturedHeaders.push(headers.get('x-gemini-api-key'));
+
+      if (callCount === 1) {
+        // Request 1: server returns 401 (server key invalid)
+        return {
+          ok: false,
+          status: 401,
+          headers: {
+            get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+          json: async () => ({
+            error: 'Server key expired or invalid',
+            code: 'INVALID_API_KEY'
+          })
+        } as any;
+      }
+
+      // Request 2: retried with local BYOK -> returns 200 success
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+        },
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{
+            code: 'E1-ALJ-01',
+            elementName: 'Aljabar',
+            statement: 'Berhasil dengan local key user.',
+            competence: 'Menganalisis',
+            contentScope: 'Pola Bilangan'
+          }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch retried with local key after server 401 (callCount: ${callCount})`);
+      assert(capturedHeaders[0] === null, 'Request 1 had no X-Gemini-API-Key');
+      assert(capturedHeaders[1] === 'AIzaSyValidUserLocalKey', 'Request 2 had local X-Gemini-API-Key');
+      assert(getGeminiApiKey() === 'AIzaSyValidUserLocalKey', 'Local BYOK was NOT removed from storage');
+      assert(!modalOpened, 'ApiKeyModal was NOT opened since local key was valid and succeeded');
+      assert(result.items[0].statement === 'Berhasil dengan local key user.', 'Successful result from local key was returned');
+    } finally {
+      unsubscribe();
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 18: Scenario 2 - Server key invalid (401 on req 1) + Local BYOK invalid (401 on req 2) -> ONLY THEN delete local key -> open modal -> retry with new key -> no loop
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    const capturedHeaders: Array<string | null> = [];
+
+    saveGeminiApiKey('AIzaSyBadUserLocalKey');
+
+    let modalOpenedCount = 0;
+    const unsubscribe = subscribeApiKeyModal((isOpen) => {
+      if (isOpen) {
+        modalOpenedCount++;
+        // User inputs fresh valid key via modal
+        setTimeout(() => {
+          submitApiKeyFromModal('AIzaSyFreshKeyFromModal');
+        }, 10);
+      }
+    });
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      const headers = new Headers(init?.headers);
+      capturedHeaders.push(headers.get('x-gemini-api-key'));
+
+      if (callCount === 1) {
+        // Request 1: server key 401
+        return {
+          ok: false,
+          status: 401,
+          headers: {
+            get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+          json: async () => ({ error: 'Server key invalid', code: 'INVALID_API_KEY' })
+        } as any;
+      }
+
+      if (callCount === 2) {
+        // Request 2: local key was bad -> 401
+        return {
+          ok: false,
+          status: 401,
+          headers: {
+            get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+          json: async () => ({ error: 'User local key invalid', code: 'INVALID_API_KEY' })
+        } as any;
+      }
+
+      // Request 3: fresh key from modal -> 200 OK
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+        },
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{
+            code: 'E1-ALJ-01',
+            elementName: 'Aljabar',
+            statement: 'Berhasil dengan fresh key dari modal.',
+            competence: 'Menganalisis',
+            contentScope: 'Pola Bilangan'
+          }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 3, `aiFetch proceeded: req1 (server 401) -> req2 (local 401) -> req3 (modal fresh key 200) (callCount: ${callCount})`);
+      assert(capturedHeaders[0] === null, 'Request 1 sent without key');
+      assert(capturedHeaders[1] === 'AIzaSyBadUserLocalKey', 'Request 2 sent with bad local key');
+      assert(capturedHeaders[2] === 'AIzaSyFreshKeyFromModal', 'Request 3 sent with fresh key from modal');
+      assert(modalOpenedCount === 1, `Modal opened exactly once when local key failed with 401 (count: ${modalOpenedCount})`);
+      assert(result.items[0].statement === 'Berhasil dengan fresh key dari modal.', 'Result from fresh key returned');
+    } finally {
+      unsubscribe();
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 19: Scenario 3 - No local BYOK + Server 401/403 -> modal opened -> retry once with new key
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    removeGeminiApiKey();
+
+    let modalOpenedCount = 0;
+    const unsubscribe = subscribeApiKeyModal((isOpen) => {
+      if (isOpen) {
+        modalOpenedCount++;
+        setTimeout(() => {
+          submitApiKeyFromModal('AIzaSyNewKeyFromUser');
+        }, 10);
+      }
+    });
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        // Request 1: server 401
+        return {
+          ok: false,
+          status: 401,
+          headers: {
+            get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+          json: async () => ({ error: 'Server requires auth', code: 'UNAUTHORIZED' })
+        } as any;
+      }
+
+      // Request 2: with new key -> 200
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+        },
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{
+            code: 'E1-ALJ-01',
+            elementName: 'Aljabar',
+            statement: 'Berhasil dengan key setelah server 401.',
+            competence: 'Menganalisis',
+            contentScope: 'Pola Bilangan'
+          }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch opened modal and retried once with new key on server 401 (callCount: ${callCount})`);
+      assert(modalOpenedCount === 1, 'Modal was opened for user without local key on server 401');
+      assert(result.items[0].statement === 'Berhasil dengan key setelah server 401.', 'Result returned successfully');
+    } finally {
+      unsubscribe();
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 20: Scenario 4 - Server 503 AI_NOT_CONFIGURED + Local BYOK -> retries once with local BYOK
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyLocalKeyFor503');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: false,
+          status: 503,
+          headers: {
+            get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+          clone: () => ({
+            json: async () => ({ code: 'AI_NOT_CONFIGURED', error: 'Layanan AI belum dikonfigurasi pada server.' })
+          }),
+          json: async () => ({ code: 'AI_NOT_CONFIGURED', error: 'Layanan AI belum dikonfigurasi pada server.' })
+        } as any;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+        },
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{
+            code: 'E1-ALJ-01',
+            elementName: 'Aljabar',
+            statement: 'Berhasil setelah server 503 AI_NOT_CONFIGURED.',
+            competence: 'Menganalisis',
+            contentScope: 'Pola Bilangan'
+          }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch retried once with local key on 503 AI_NOT_CONFIGURED (callCount: ${callCount})`);
+      assert(result.items[0].statement === 'Berhasil setelah server 503 AI_NOT_CONFIGURED.', 'Result from retry returned');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 21: Scenario 5 - Pedagogical engine + Local BYOK -> retries once with local BYOK
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    saveGeminiApiKey('AIzaSyLocalKeyForPedagogicalFallback');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{
+                code: 'E1-UMU-01',
+                elementName: 'Elemen 1',
+                statement: 'Fallback pedagogis',
+                competence: 'Memahami',
+                contentScope: 'Materi'
+              }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{
+              code: 'E1-UMU-01',
+              elementName: 'Elemen 1',
+              statement: 'Fallback pedagogis',
+              competence: 'Memahami',
+              contentScope: 'Materi'
+            }]
+          })
+        } as any;
+      }
+
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+        },
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{
+            code: 'E1-ALJ-01',
+            elementName: 'Aljabar',
+            statement: 'Gemini hasil retry dari pedagogical engine.',
+            competence: 'Menganalisis',
+            contentScope: 'Pola Bilangan'
+          }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch retried once with local key on pedagogical_engine (callCount: ${callCount})`);
+      assert(result.engine === 'gemini', 'Result engine upgraded to gemini');
+      assert(result.items[0].statement === 'Gemini hasil retry dari pedagogical engine.', 'Result from Gemini returned');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
   }
 
   console.log(`\n=== Hardening Tests Summary: ${passed} passed, ${failed} failed ===`);

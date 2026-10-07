@@ -201,7 +201,10 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
         if (retryRes.ok) {
           return retryRes;
         }
-        // Jika retry gagal, gunakan hasil fallback pertama yang valid
+        if (retryRes.status === 401 || retryRes.status === 403) {
+          removeGeminiApiKey();
+        }
+        // Jika retry gagal non-auth, gunakan hasil fallback pertama yang valid
         return res;
       }
     } catch {
@@ -210,12 +213,57 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
     }
   }
 
-  // 3. Cek kondisi yang memerlukan BYOK/auth:
-  // - 401/403 auth provider
-  // - 503 + code AI_NOT_CONFIGURED
-  let needsByok = res.status === 401 || res.status === 403;
+  if (res.ok) {
+    return res;
+  }
 
-  if (!needsByok && res.status === 503) {
+  // 3. Penanganan 401 / 403 pada request pertama (berasal dari server key / provider server, BUKAN local BYOK user):
+  if (res.status === 401 || res.status === 403) {
+    if (localKey && localKey.trim()) {
+      // Jangan hapus local key karena belum pernah dikirim. Retry tepat satu kali dengan local key.
+      const retryRes = await makeRequest(localKey.trim());
+      if (retryRes.ok) {
+        return retryRes;
+      }
+
+      // Jika request yang BENAR-BENAR membawa local key menghasilkan 401/403, barulah key dianggap invalid
+      if (retryRes.status === 401 || retryRes.status === 403) {
+        removeGeminiApiKey();
+        if (modalOpenListeners.length > 0) {
+          try {
+            const newKey = await openApiKeyModal(
+              'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
+            );
+            if (newKey && newKey.trim()) {
+              return await makeRequest(newKey.trim());
+            }
+          } catch {
+            // Modal cancelled
+          }
+        }
+      }
+      return retryRes;
+    } else {
+      // Tidak ada local BYOK: buka modal jika listener tersedia
+      if (modalOpenListeners.length > 0) {
+        try {
+          const newKey = await openApiKeyModal(
+            'Layanan AI memerlukan API Key Gemini (BYOK). Silakan masukkan API Key Anda:'
+          );
+          if (newKey && newKey.trim()) {
+            return await makeRequest(newKey.trim());
+          }
+        } catch {
+          // Modal cancelled
+        }
+      }
+      return res;
+    }
+  }
+
+  // 4. Penanganan 503 + AI_NOT_CONFIGURED
+  let isNotConfigured = false;
+  if (res.status === 503) {
     try {
       const cloned = res.clone();
       const bodyJson = await cloned.json().catch(() => null);
@@ -224,42 +272,43 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
         (bodyJson.code === 'AI_NOT_CONFIGURED' ||
           (typeof bodyJson.error === 'string' && bodyJson.error.toLowerCase().includes('belum dikonfigurasi')))
       ) {
-        needsByok = true;
+        isNotConfigured = true;
       }
     } catch {
       // not json or clone failed
     }
   }
 
-  // 4. Jika server memerlukan BYOK/auth: buka modal lalu retry tepat satu kali dengan X-Gemini-API-Key
-  if (needsByok) {
-    let keyForRetry = getGeminiApiKey();
+  if (isNotConfigured) {
+    let keyForRetry = localKey && localKey.trim() ? localKey.trim() : null;
     if (!keyForRetry && modalOpenListeners.length > 0) {
       try {
         keyForRetry = await openApiKeyModal(
-          'Layanan AI memerlukan API Key Gemini (BYOK). Silakan masukkan API Key Anda:'
+          'Layanan AI belum dikonfigurasi pada server. Silakan masukkan API Key Gemini Anda (BYOK):'
         );
       } catch {
         keyForRetry = null;
       }
-    } else if (res.status === 401 || res.status === 403) {
-      if (keyForRetry) {
-        removeGeminiApiKey();
-      }
-      if (modalOpenListeners.length > 0) {
-        try {
-          keyForRetry = await openApiKeyModal(
-            'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
-          );
-        } catch {
-          keyForRetry = null;
-        }
-      }
     }
 
     if (keyForRetry && keyForRetry.trim()) {
-      // Retry tepat satu kali
-      res = await makeRequest(keyForRetry);
+      const retryRes = await makeRequest(keyForRetry.trim());
+      if (retryRes.status === 401 || retryRes.status === 403) {
+        removeGeminiApiKey();
+        if (modalOpenListeners.length > 0) {
+          try {
+            const freshKey = await openApiKeyModal(
+              'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
+            );
+            if (freshKey && freshKey.trim()) {
+              return await makeRequest(freshKey.trim());
+            }
+          } catch {
+            // Modal cancelled
+          }
+        }
+      }
+      return retryRes;
     }
   }
 
