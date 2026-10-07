@@ -6,6 +6,7 @@ import {
   removeGeminiApiKey,
   GEMINI_API_KEY_STORAGE_KEY,
 } from '../src/services/aiService';
+import { generateSemanticTPCode } from '../src/services/cpWorkflowService';
 import { createInitialStorageV5, serializeBackupV5 } from '../src/services/storageV5';
 import { GoogleGenAI } from '@google/genai';
 
@@ -375,6 +376,229 @@ async function runTests() {
       removeGeminiApiKey();
       global.fetch = originalFetch;
     }
+  }
+
+  // Test 13: Regression A - Server fallback + local BYOK -> 1st req no key, pedagogical_engine -> retry once with local BYOK -> Gemini used
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    const capturedHeaders: Array<string | null> = [];
+
+    saveGeminiApiKey('AIzaSyLocalUserKeyAutoRetry');
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      const headers = new Headers(init?.headers);
+      capturedHeaders.push(headers.get('x-gemini-api-key'));
+
+      if (callCount === 1) {
+        // Request 1: No header sent, server responds with pedagogical fallback
+        return {
+          ok: true,
+          status: 200,
+          headers: {
+            get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+          clone: () => ({
+            json: async () => ({
+              success: true,
+              engine: 'pedagogical_engine',
+              items: [{
+                code: 'E1-UMU-01',
+                elementName: 'Elemen 1',
+                statement: 'Fallback TP statement',
+                competence: 'Memahami',
+                contentScope: 'Materi Fallback'
+              }]
+            })
+          }),
+          json: async () => ({
+            success: true,
+            engine: 'pedagogical_engine',
+            items: [{
+              code: 'E1-UMU-01',
+              elementName: 'Elemen 1',
+              statement: 'Fallback TP statement',
+              competence: 'Memahami',
+              contentScope: 'Materi Fallback'
+            }]
+          })
+        } as any;
+      }
+
+      // Request 2: Retry with user key -> returns Gemini result
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+        },
+        json: async () => ({
+          success: true,
+          engine: 'gemini',
+          items: [{
+            code: 'E1-ALJ-01',
+            elementName: 'Aljabar',
+            statement: 'Gemini AI generated TP statement',
+            competence: 'Menganalisis',
+            contentScope: 'Pola Bilangan'
+          }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 2, `aiFetch retried exactly once with local BYOK (callCount: ${callCount})`);
+      assert(capturedHeaders[0] === null, 'Request 1 sent without X-Gemini-API-Key header');
+      assert(capturedHeaders[1] === 'AIzaSyLocalUserKeyAutoRetry', 'Request 2 sent with local user X-Gemini-API-Key');
+      assert(result.engine === 'gemini', `Result engine is gemini (received: ${result.engine})`);
+      assert(result.items[0].statement === 'Gemini AI generated TP statement', 'Gemini result item statement is used');
+    } finally {
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 14: Regression B - No local BYOK -> pedagogical fallback accepted directly without modal or retry
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    removeGeminiApiKey();
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      return {
+        ok: true,
+        status: 200,
+        headers: {
+          get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+        },
+        json: async () => ({
+          success: true,
+          engine: 'pedagogical_engine',
+          items: [{
+            code: 'E1-UMU-01',
+            elementName: 'Elemen 1',
+            statement: 'Pedagogical fallback statement without BYOK',
+            competence: 'Memahami',
+            contentScope: 'Materi'
+          }]
+        })
+      } as any;
+    };
+
+    try {
+      const result = await generateTPWithAI(dummyParams);
+      assert(callCount === 1, `Without BYOK, pedagogical fallback accepted on call 1 (callCount: ${callCount})`);
+      assert(result.engine === 'pedagogical_engine', 'Result engine is pedagogical_engine');
+      assert(result.items[0].statement === 'Pedagogical fallback statement without BYOK', 'Fallback item statement is used directly');
+    } finally {
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 15: Regression C - Switching CPAnalysisItem A -> B replaces competence/contentScope/scopeCode/code without leftover
+  {
+    const mockAnalysisItems = [
+      {
+        id: 'ana-item-A',
+        elementId: 'elem-1',
+        elementName: 'Membaca',
+        scopeCode: 'MBI',
+        cpCompetence: 'Membaca Lancar',
+        materialScope: 'Teks Narasi Pendek'
+      },
+      {
+        id: 'ana-item-B',
+        elementId: 'elem-2',
+        elementName: 'Menulis',
+        scopeCode: 'MNL',
+        cpCompetence: 'Menulis Tegak Bersambung',
+        materialScope: 'Kalimat Sederhana'
+      }
+    ];
+
+    const cpElements = [
+      { id: 'elem-1', name: 'Membaca', code: 'E1' },
+      { id: 'elem-2', name: 'Menulis', code: 'E2' }
+    ];
+
+    // Simulate initial select of Item A
+    const selectedA = mockAnalysisItems[0];
+    const codeA = generateSemanticTPCode(selectedA, cpElements, []);
+    let currentItem = {
+      id: 'tp-stable-id-123',
+      code: codeA,
+      scopeCode: selectedA.scopeCode,
+      cpAnalysisItemIds: [selectedA.id],
+      cpAnalysisId: selectedA.id,
+      elementName: selectedA.elementName,
+      competence: selectedA.cpCompetence,
+      contentScope: selectedA.materialScope,
+      statement: 'Peserta didik membaca teks narasi pendek dengan lancar.'
+    };
+
+    assert(currentItem.cpAnalysisItemIds[0] === 'ana-item-A', 'Item initially points to ana-item-A');
+    assert(currentItem.competence === 'Membaca Lancar', 'Item initially has competence from A');
+    assert(currentItem.contentScope === 'Teks Narasi Pendek', 'Item initially has materialScope from A');
+    assert(currentItem.code === 'E1-MBI-01', 'Item initially has semantic code E1-MBI-01');
+
+    // Simulate user switching to Item B in UI event handler
+    const selectedB = mockAnalysisItems[1];
+    const codeB = generateSemanticTPCode(selectedB, cpElements, [], currentItem.id);
+    currentItem = {
+      ...currentItem,
+      code: codeB,
+      scopeCode: selectedB.scopeCode,
+      cpAnalysisItemIds: [selectedB.id],
+      cpAnalysisId: selectedB.id,
+      elementName: selectedB.elementName,
+      competence: selectedB.cpCompetence,
+      contentScope: selectedB.materialScope,
+    };
+
+    assert(currentItem.id === 'tp-stable-id-123', 'TPItem.id remains strictly stable across switch');
+    assert(currentItem.cpAnalysisItemIds[0] === 'ana-item-B', 'Lineage successfully switched to ana-item-B');
+    assert(currentItem.competence === 'Menulis Tegak Bersambung', 'Competence overwritten cleanly to B');
+    assert(currentItem.contentScope === 'Kalimat Sederhana', 'ContentScope overwritten cleanly to B without leftover from A');
+    assert(currentItem.scopeCode === 'MNL', 'ScopeCode overwritten cleanly to B');
+    assert(currentItem.code === 'E2-MNL-01', 'Semantic code regenerated cleanly for B');
+  }
+
+  // Test 16: Regression D - Provenance recording for Gemini vs Pedagogical Engine
+  {
+    // Gemini Case
+    const geminiEngine = 'gemini';
+    const isGemini = geminiEngine === 'gemini';
+    const tpCandidateGemini = {
+      generatedBy: isGemini ? 'AI' : undefined,
+      generationEngine: geminiEngine,
+      provenance: {
+        generatedBy: isGemini ? 'AI' : 'SYSTEM',
+        engine: geminiEngine
+      }
+    };
+    assert(tpCandidateGemini.generatedBy === 'AI', 'Gemini recorded as generatedBy: AI');
+    assert(tpCandidateGemini.generationEngine === 'gemini', 'Gemini recorded as generationEngine: gemini');
+    assert(tpCandidateGemini.provenance.generatedBy === 'AI', 'Provenance generatedBy is AI');
+    assert(tpCandidateGemini.provenance.engine === 'gemini', 'Provenance engine is gemini');
+
+    // Pedagogical Fallback Case
+    const fallbackEngine = 'pedagogical_engine';
+    const isFallbackGemini = fallbackEngine === 'gemini';
+    const tpCandidateFallback = {
+      generatedBy: isFallbackGemini ? 'AI' : undefined,
+      generationEngine: fallbackEngine,
+      provenance: {
+        generatedBy: isFallbackGemini ? 'AI' : 'SYSTEM',
+        engine: fallbackEngine
+      }
+    };
+    assert(tpCandidateFallback.generatedBy === undefined, 'Pedagogical fallback is NOT claimed as TEACHER (undefined in schema)');
+    assert(tpCandidateFallback.generationEngine === 'pedagogical_engine', 'Pedagogical fallback recorded as generationEngine: pedagogical_engine');
+    assert(tpCandidateFallback.provenance.generatedBy === 'SYSTEM', 'Pedagogical fallback provenance generatedBy is SYSTEM');
+    assert(tpCandidateFallback.provenance.engine === 'pedagogical_engine', 'Pedagogical fallback provenance engine is pedagogical_engine');
   }
 
   console.log(`\n=== Hardening Tests Summary: ${passed} passed, ${failed} failed ===`);

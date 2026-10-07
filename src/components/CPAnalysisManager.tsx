@@ -226,7 +226,7 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
         phase: context.phase,
         generalSummary: nextSummary,
         items: newItems,
-        generatedBy: isGemini ? 'AI' : 'TEACHER',
+        generatedBy: isGemini ? 'AI' : undefined,
         generationEngine: res.engine || (isGemini ? 'gemini' : 'pedagogical_engine'),
         provenance: {
           generatedBy: isGemini ? 'AI' : 'SYSTEM',

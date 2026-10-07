@@ -1469,3 +1469,59 @@ export function validateKKTPData(
     criteriaResults,
   };
 }
+
+export function deriveScopeCode(scopeText: string): string {
+  if (!scopeText || !scopeText.trim()) return 'MAT';
+  const words = scopeText.trim().replace(/[^a-zA-Z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  if (words.length >= 2) {
+    const code = words.map((w) => w[0].toUpperCase()).slice(0, 4).join('');
+    if (code.length >= 2) return code;
+  }
+  const word = (words[0] || 'MAT').toUpperCase();
+  if (word.length <= 4) return word;
+  return word.slice(0, 3);
+}
+
+export function generateSemanticTPCode(
+  selectedAnalysisItem: { id: string; elementId?: string; elementName?: string; scopeCode?: string; materialScope?: string },
+  cpElements: Array<{ id?: string; name: string; code?: string }> = [],
+  existingItems: TPItem[] = [],
+  currentEditingItemId?: string
+): string {
+  let elementCode = 'E1';
+  if (cpElements && cpElements.length > 0) {
+    const elemIdx = cpElements.findIndex(
+      (e) =>
+        (selectedAnalysisItem.elementId && e.id === selectedAnalysisItem.elementId) ||
+        (e.name && selectedAnalysisItem.elementName && e.name.toLowerCase().trim() === selectedAnalysisItem.elementName.toLowerCase().trim()) ||
+        (e.code && selectedAnalysisItem.elementId && e.code.toLowerCase().trim() === selectedAnalysisItem.elementId.toLowerCase().trim())
+    );
+    if (elemIdx >= 0) {
+      const matchedElem = cpElements[elemIdx];
+      elementCode = matchedElem.code && /^E\d+$/i.test(matchedElem.code)
+        ? matchedElem.code.toUpperCase()
+        : `E${elemIdx + 1}`;
+    }
+  }
+
+  const rawScope = (selectedAnalysisItem.scopeCode || '').trim().toUpperCase();
+  const scopeCode = rawScope && /^[A-Z0-9]{2,5}$/.test(rawScope)
+    ? rawScope
+    : deriveScopeCode(selectedAnalysisItem.materialScope || selectedAnalysisItem.elementName || 'Umum');
+
+  const prefix = `${elementCode}-${scopeCode}`;
+  let maxSeq = 0;
+  existingItems.forEach((it) => {
+    if (currentEditingItemId && it.id === currentEditingItemId) return;
+    if (it.code && it.code.toUpperCase().startsWith(`${prefix}-`)) {
+      const parts = it.code.split('-');
+      const num = parseInt(parts[parts.length - 1], 10);
+      if (!isNaN(num) && num > maxSeq) {
+        maxSeq = num;
+      }
+    }
+  });
+
+  const nextSeq = maxSeq + 1;
+  return `${prefix}-${String(nextSeq).padStart(2, '0')}`;
+}

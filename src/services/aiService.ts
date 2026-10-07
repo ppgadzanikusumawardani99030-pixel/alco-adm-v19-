@@ -189,7 +189,28 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
   // 1. Request PERTAMA tanpa local BYOK header agar server mendapat kesempatan memakai server key/fallback
   let res = await makeRequest(null);
 
-  // 2. Cek kondisi yang memerlukan BYOK/auth:
+  // 2. Jika response 200 adalah pedagogical_engine fallback DAN user punya local BYOK,
+  // beri prioritas pada Gemini dengan retry TEPAT SATU KALI memakai key user.
+  const localKey = getGeminiApiKey();
+  if (res.ok && localKey && localKey.trim()) {
+    try {
+      const cloned = res.clone();
+      const bodyJson = await cloned.json().catch(() => null);
+      if (bodyJson && bodyJson.engine === 'pedagogical_engine') {
+        const retryRes = await makeRequest(localKey.trim());
+        if (retryRes.ok) {
+          return retryRes;
+        }
+        // Jika retry gagal, gunakan hasil fallback pertama yang valid
+        return res;
+      }
+    } catch {
+      // not json or clone failed, return original res
+      return res;
+    }
+  }
+
+  // 3. Cek kondisi yang memerlukan BYOK/auth:
   // - 401/403 auth provider
   // - 503 + code AI_NOT_CONFIGURED
   let needsByok = res.status === 401 || res.status === 403;
@@ -210,7 +231,7 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
     }
   }
 
-  // 3. Jika server memerlukan BYOK/auth: buka modal lalu retry tepat satu kali dengan X-Gemini-API-Key
+  // 4. Jika server memerlukan BYOK/auth: buka modal lalu retry tepat satu kali dengan X-Gemini-API-Key
   if (needsByok) {
     let keyForRetry = getGeminiApiKey();
     if (!keyForRetry && modalOpenListeners.length > 0) {

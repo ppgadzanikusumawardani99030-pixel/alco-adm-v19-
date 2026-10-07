@@ -35,7 +35,11 @@ import {
 } from '../types';
 import { P3_DIMENSIONS } from '../data/curriculumDefaults';
 import { generateTPWithAI, refineTextWithAI } from '../services/aiService';
-import { validateTPDataWorkflow } from '../services/cpWorkflowService';
+import {
+  validateTPDataWorkflow,
+  deriveScopeCode,
+  generateSemanticTPCode,
+} from '../services/cpWorkflowService';
 import {
   buildTPDiagnosticReport,
   recordDiagnosticEvent,
@@ -44,62 +48,6 @@ import {
   runPreviewRouteProbe,
   formatPreviewRouteProbeReport,
 } from '../services/previewRouteProbe';
-
-function deriveScopeCode(scopeText?: string): string {
-  if (!scopeText || !scopeText.trim()) return 'MAT';
-  const words = scopeText.trim().replace(/[^a-zA-Z0-9\s]/g, '').split(/\s+/).filter(Boolean);
-  if (words.length >= 2) {
-    const code = words.map((w) => w[0].toUpperCase()).slice(0, 4).join('');
-    if (code.length >= 2) return code;
-  }
-  const word = (words[0] || 'MAT').toUpperCase();
-  if (word.length <= 4) return word;
-  return word.slice(0, 3);
-}
-
-function generateSemanticTPCode(
-  selectedAnalysisItem: { id: string; elementId?: string; elementName?: string; scopeCode?: string; materialScope?: string },
-  cpElements: Array<{ id?: string; name: string; code?: string }> = [],
-  existingItems: TPItem[] = [],
-  currentEditingItemId?: string
-): string {
-  let elementCode = 'E1';
-  if (cpElements && cpElements.length > 0) {
-    const elemIdx = cpElements.findIndex(
-      (e, idx) =>
-        (selectedAnalysisItem.elementId && e.id === selectedAnalysisItem.elementId) ||
-        (e.name && selectedAnalysisItem.elementName && e.name.toLowerCase().trim() === selectedAnalysisItem.elementName.toLowerCase().trim()) ||
-        (e.code && selectedAnalysisItem.elementId && e.code.toLowerCase().trim() === selectedAnalysisItem.elementId.toLowerCase().trim())
-    );
-    if (elemIdx >= 0) {
-      const matchedElem = cpElements[elemIdx];
-      elementCode = matchedElem.code && /^E\d+$/i.test(matchedElem.code)
-        ? matchedElem.code.toUpperCase()
-        : `E${elemIdx + 1}`;
-    }
-  }
-
-  const rawScope = (selectedAnalysisItem.scopeCode || '').trim().toUpperCase();
-  const scopeCode = rawScope && /^[A-Z0-9]{2,5}$/.test(rawScope)
-    ? rawScope
-    : deriveScopeCode(selectedAnalysisItem.materialScope || selectedAnalysisItem.elementName || 'Umum');
-
-  const prefix = `${elementCode}-${scopeCode}`;
-  let maxSeq = 0;
-  existingItems.forEach((it) => {
-    if (currentEditingItemId && it.id === currentEditingItemId) return;
-    if (it.code && it.code.toUpperCase().startsWith(`${prefix}-`)) {
-      const parts = it.code.split('-');
-      const num = parseInt(parts[parts.length - 1], 10);
-      if (!isNaN(num) && num > maxSeq) {
-        maxSeq = num;
-      }
-    }
-  });
-
-  const nextSeq = maxSeq + 1;
-  return `${prefix}-${String(nextSeq).padStart(2, '0')}`;
-}
 
 interface TPManagerProps {
   tp: TPData;
@@ -286,6 +234,7 @@ export const TPManager: React.FC<TPManagerProps> = ({
       const generated = generatedResult.items;
 
       setItems(generated);
+      const isGemini = generatedResult.engine === 'gemini';
       const candidateTP: TPData = {
         ...tp,
         academicSettingId: academicSetting.id,
@@ -297,8 +246,13 @@ export const TPManager: React.FC<TPManagerProps> = ({
         subjectCode: context.subject,
         phase: context.phase,
         items: generated,
-        generatedBy: items.length > 0 ? (tp.generatedBy || 'AI_EDITED_BY_TEACHER') : 'AI',
+        generatedBy: isGemini ? (items.length > 0 ? (tp.generatedBy || 'AI_EDITED_BY_TEACHER') : 'AI') : undefined,
         generationEngine: generatedResult.engine,
+        provenance: {
+          generatedBy: isGemini ? 'AI' : 'SYSTEM',
+          generatedAt: new Date().toISOString(),
+          engine: generatedResult.engine,
+        },
         generatedAt: new Date().toISOString(),
         needsReview: false,
         reviewReason: undefined,
@@ -969,8 +923,12 @@ export const TPManager: React.FC<TPManagerProps> = ({
                     onChange={(e) => {
                       const selId = e.target.value;
                       const matchedAna = cpAnalysis.items.find((a) => a.id === selId);
-                      let generatedCode = currentItem.code;
-                      let resolvedScopeCode = currentItem.scopeCode;
+                      let generatedCode = '';
+                      let resolvedScopeCode: string | undefined = undefined;
+                      let newElementName = '';
+                      let newCompetence = '';
+                      let newContentScope = '';
+
                       if (matchedAna) {
                         generatedCode = generateSemanticTPCode(
                           matchedAna,
@@ -981,16 +939,20 @@ export const TPManager: React.FC<TPManagerProps> = ({
                         resolvedScopeCode =
                           (matchedAna.scopeCode || '').trim().toUpperCase() ||
                           deriveScopeCode(matchedAna.materialScope || matchedAna.elementName || 'Umum');
+                        newElementName = matchedAna.elementName || '';
+                        newCompetence = matchedAna.cpCompetence || '';
+                        newContentScope = matchedAna.materialScope || '';
                       }
+
                       setCurrentItem({
                         ...currentItem,
                         code: generatedCode,
                         scopeCode: resolvedScopeCode,
                         cpAnalysisItemIds: selId ? [selId] : [],
                         cpAnalysisId: selId || undefined,
-                        elementName: matchedAna?.elementName || currentItem.elementName,
-                        competence: currentItem.competence || matchedAna?.cpCompetence || '',
-                        contentScope: currentItem.contentScope || matchedAna?.materialScope || '',
+                        elementName: newElementName,
+                        competence: newCompetence,
+                        contentScope: newContentScope,
                       });
                     }}
                     className="w-full text-sm px-3 py-2 rounded-xl border border-slate-300 focus:outline-hidden focus:ring-2 focus:ring-blue-600 bg-white"
