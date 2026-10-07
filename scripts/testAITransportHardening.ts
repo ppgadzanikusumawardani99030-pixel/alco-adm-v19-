@@ -944,6 +944,120 @@ async function runTests() {
     }
   }
 
+  // Test 22: Server 401 -> local key 401 -> modal fresh key 401 -> fresh key removed -> no 4th request / no loop
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    const capturedHeaders: Array<string | null> = [];
+
+    saveGeminiApiKey('AIzaSyInitialLocalKey');
+
+    let modalOpenedCount = 0;
+    const unsubscribe = subscribeApiKeyModal((isOpen) => {
+      if (isOpen) {
+        modalOpenedCount++;
+        setTimeout(() => {
+          submitApiKeyFromModal('AIzaSyFreshKeyThatFails401');
+        }, 10);
+      }
+    });
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      const headers = new Headers(init?.headers);
+      capturedHeaders.push(headers.get('x-gemini-api-key'));
+
+      // All requests return 401
+      return {
+        ok: false,
+        status: 401,
+        headers: {
+          get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+        },
+        json: async () => ({ error: 'Invalid API key (401)', code: 'INVALID_API_KEY' })
+      } as any;
+    };
+
+    try {
+      await generateTPWithAI(dummyParams);
+      assert(false, 'Should have thrown on 401 after fresh modal key failed');
+    } catch (err: any) {
+      assert(callCount === 3, `aiFetch stopped after exactly 3 requests (server 401 -> local 401 -> modal fresh 401) (callCount: ${callCount})`);
+      assert(capturedHeaders[0] === null, 'Request 1 sent without key');
+      assert(capturedHeaders[1] === 'AIzaSyInitialLocalKey', 'Request 2 sent with initial local key');
+      assert(capturedHeaders[2] === 'AIzaSyFreshKeyThatFails401', 'Request 3 sent with fresh key from modal');
+      assert(modalOpenedCount === 1, `Modal opened exactly once (count: ${modalOpenedCount})`);
+      assert(getGeminiApiKey() === null, 'Fresh invalid key from modal was removed from storage after 401');
+      assert(err.message.includes('Kunci API Gemini tidak valid') || err.message.includes('401'), 'Error message reflects invalid key');
+    } finally {
+      unsubscribe();
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
+  // Test 23: Server 503 AI_NOT_CONFIGURED -> local key 401 -> modal fresh key 401 -> fresh key removed -> no loop
+  {
+    const originalFetch = global.fetch;
+    let callCount = 0;
+    const capturedHeaders: Array<string | null> = [];
+
+    saveGeminiApiKey('AIzaSyLocalKeyFor503Then401');
+
+    let modalOpenedCount = 0;
+    const unsubscribe = subscribeApiKeyModal((isOpen) => {
+      if (isOpen) {
+        modalOpenedCount++;
+        setTimeout(() => {
+          submitApiKeyFromModal('AIzaSyFreshKeyFor503ThatFails401');
+        }, 10);
+      }
+    });
+
+    global.fetch = async (url, init) => {
+      callCount++;
+      const headers = new Headers(init?.headers);
+      capturedHeaders.push(headers.get('x-gemini-api-key'));
+
+      if (callCount === 1) {
+        return {
+          ok: false,
+          status: 503,
+          headers: {
+            get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+          },
+          clone: () => ({
+            json: async () => ({ code: 'AI_NOT_CONFIGURED', error: 'Layanan AI belum dikonfigurasi pada server.' })
+          }),
+          json: async () => ({ code: 'AI_NOT_CONFIGURED', error: 'Layanan AI belum dikonfigurasi pada server.' })
+        } as any;
+      }
+
+      // Request 2 & 3 return 401
+      return {
+        ok: false,
+        status: 401,
+        headers: {
+          get: (name: string) => name.toLowerCase() === 'content-type' ? 'application/json' : null
+        },
+        json: async () => ({ error: 'Invalid API key (401)', code: 'INVALID_API_KEY' })
+      } as any;
+    };
+
+    try {
+      await generateTPWithAI(dummyParams);
+      assert(false, 'Should have thrown on 401 after fresh modal key failed');
+    } catch (err: any) {
+      assert(callCount === 3, `aiFetch stopped after exactly 3 requests (503 -> local 401 -> modal fresh 401) (callCount: ${callCount})`);
+      assert(modalOpenedCount === 1, `Modal opened exactly once on 503 auth failure (count: ${modalOpenedCount})`);
+      assert(getGeminiApiKey() === null, 'Fresh invalid key from modal was removed from storage after 401 in 503 branch');
+    } finally {
+      unsubscribe();
+      removeGeminiApiKey();
+      global.fetch = originalFetch;
+    }
+  }
+
   console.log(`\n=== Hardening Tests Summary: ${passed} passed, ${failed} failed ===`);
   if (failed > 0) {
     process.exit(1);

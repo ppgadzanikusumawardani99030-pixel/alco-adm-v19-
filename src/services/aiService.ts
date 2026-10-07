@@ -235,7 +235,11 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
               'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
             );
             if (newKey && newKey.trim()) {
-              return await makeRequest(newKey.trim());
+              const freshRes = await makeRequest(newKey.trim());
+              if (freshRes.status === 401 || freshRes.status === 403) {
+                removeGeminiApiKey();
+              }
+              return freshRes;
             }
           } catch {
             // Modal cancelled
@@ -251,7 +255,11 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
             'Layanan AI memerlukan API Key Gemini (BYOK). Silakan masukkan API Key Anda:'
           );
           if (newKey && newKey.trim()) {
-            return await makeRequest(newKey.trim());
+            const freshRes = await makeRequest(newKey.trim());
+            if (freshRes.status === 401 || freshRes.status === 403) {
+              removeGeminiApiKey();
+            }
+            return freshRes;
           }
         } catch {
           // Modal cancelled
@@ -301,7 +309,11 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
               'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
             );
             if (freshKey && freshKey.trim()) {
-              return await makeRequest(freshKey.trim());
+              const freshRes = await makeRequest(freshKey.trim());
+              if (freshRes.status === 401 || freshRes.status === 403) {
+                removeGeminiApiKey();
+              }
+              return freshRes;
             }
           } catch {
             // Modal cancelled
