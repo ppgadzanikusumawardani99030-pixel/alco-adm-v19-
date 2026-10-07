@@ -183,14 +183,14 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
   const isK13Active = isK13(academicSetting);
   const [activeTab, setActiveTab] = useState<AdministrationTab>(() => {
     if (!isK13Active && initialTab === 'time_planning') {
-      return 'learning_plan';
+      return 'kktp';
     }
     return initialTab;
   });
 
   React.useEffect(() => {
     if (!isK13Active && activeTab === 'time_planning') {
-      setActiveTab('learning_plan');
+      setActiveTab('kktp');
     }
   }, [isK13Active, activeTab]);
 
@@ -268,59 +268,102 @@ export const AdministrationHub: React.FC<AdministrationHubProps> = ({
     );
   }, [timeAllocations]);
 
-  const tabs = [
-    ...(isK13Active ? [{
-      id: 'time_planning' as AdministrationTab,
-      label: 'Perencanaan Waktu',
-      sublabel: 'Kalender & Alokasi JP',
-      icon: CalendarDays,
-      badge: calendarBadge,
-    }] : []),
-    {
-      id: 'learning_plan' as AdministrationTab,
-      label: 'Rencana Pembelajaran',
-      sublabel: 'Modul Ajar / RPP',
-      icon: BookOpen,
-      badge: `${learningPlans?.length || 0} Draf`,
-    },
-    {
-      id: 'kktp' as AdministrationTab,
-      label: isK13Active ? 'Kriteria Ketercapaian' : 'Kriteria Capaian (KKTP)',
-      sublabel: isK13Active ? 'Kriteria KD / KKM' : 'Standar Tuntas TP',
-      icon: Award,
-      badge: isK13Active
-        ? `${k13Analysis?.items?.length || 0} KD`
-        : `${assessmentCriteria?.length || tp?.items?.length || 0} TP`,
-    },
-    {
-      id: 'assessment_grades' as AdministrationTab,
-      label: isK13Active ? 'Penilaian KD & Rapor' : 'Asesmen & Nilai',
-      sublabel: isK13Active ? 'Daftar Nilai K13' : 'Formatif & Sumatif',
-      icon: FileSpreadsheet,
-      badge: `${assessments?.length || 0} Asm`,
-    },
-    {
-      id: 'attendance' as AdministrationTab,
-      label: 'Daftar Hadir',
-      sublabel: 'Presensi Siswa',
-      icon: Users,
-      badge: `${students?.length || 0} Siswa`,
-    },
-    {
-      id: 'follow_up' as AdministrationTab,
-      label: 'Tindak Lanjut',
-      sublabel: 'Remedial & Pengayaan',
-      icon: LifeBuoy,
-      badge: `${(remedials?.length || 0) + (enrichments?.length || 0)}`,
-    },
-    {
-      id: 'export_docs' as AdministrationTab,
-      label: 'Pusat Dokumen',
-      sublabel: isK13Active ? 'Ekspor Dokumen K13' : 'Ekspor Seluruh File',
-      icon: FileText,
-      badge: isK13Active ? '10 Dokumen' : '13 Dokumen',
-    },
-  ];
+  const tabs = isK13Active
+    ? [
+        {
+          id: 'time_planning' as AdministrationTab,
+          label: 'Perencanaan Waktu',
+          sublabel: 'Kalender & Alokasi JP',
+          icon: CalendarDays,
+          badge: calendarBadge,
+        },
+        {
+          id: 'learning_plan' as AdministrationTab,
+          label: 'Rencana Pembelajaran',
+          sublabel: 'Modul Ajar / RPP',
+          icon: BookOpen,
+          badge: `${learningPlans?.length || 0} Draf`,
+        },
+        {
+          id: 'kktp' as AdministrationTab,
+          label: 'Kriteria Ketercapaian',
+          sublabel: 'Kriteria KD / KKM',
+          icon: Award,
+          badge: `${k13Analysis?.items?.length || 0} KD`,
+        },
+        {
+          id: 'assessment_grades' as AdministrationTab,
+          label: 'Penilaian KD & Rapor',
+          sublabel: 'Daftar Nilai K13',
+          icon: FileSpreadsheet,
+          badge: `${assessments?.length || 0} Asm`,
+        },
+        {
+          id: 'attendance' as AdministrationTab,
+          label: 'Daftar Hadir',
+          sublabel: 'Presensi Siswa',
+          icon: Users,
+          badge: `${students?.length || 0} Siswa`,
+        },
+        {
+          id: 'follow_up' as AdministrationTab,
+          label: 'Tindak Lanjut',
+          sublabel: 'Remedial & Pengayaan',
+          icon: LifeBuoy,
+          badge: `${(remedials?.length || 0) + (enrichments?.length || 0)}`,
+        },
+        {
+          id: 'export_docs' as AdministrationTab,
+          label: 'Pusat Dokumen',
+          sublabel: 'Ekspor Dokumen K13',
+          icon: FileText,
+          badge: '10 Dokumen',
+        },
+      ]
+    : [
+        {
+          id: 'kktp' as AdministrationTab,
+          label: 'Kriteria Capaian (KKTP)',
+          sublabel: 'Standar Tuntas TP',
+          icon: Award,
+          badge: `${assessmentCriteria?.length || tp?.items?.length || 0} TP`,
+        },
+        {
+          id: 'learning_plan' as AdministrationTab,
+          label: 'Rencana Pembelajaran',
+          sublabel: 'Modul Ajar / RPP',
+          icon: BookOpen,
+          badge: `${learningPlans?.length || 0} Draf`,
+        },
+        {
+          id: 'assessment_grades' as AdministrationTab,
+          label: 'Asesmen & Nilai',
+          sublabel: 'Formatif & Sumatif',
+          icon: FileSpreadsheet,
+          badge: `${assessments?.length || 0} Asm`,
+        },
+        {
+          id: 'attendance' as AdministrationTab,
+          label: 'Daftar Hadir',
+          sublabel: 'Presensi Siswa',
+          icon: Users,
+          badge: `${students?.length || 0} Siswa`,
+        },
+        {
+          id: 'follow_up' as AdministrationTab,
+          label: 'Tindak Lanjut',
+          sublabel: 'Remedial & Pengayaan',
+          icon: LifeBuoy,
+          badge: `${(remedials?.length || 0) + (enrichments?.length || 0)}`,
+        },
+        {
+          id: 'export_docs' as AdministrationTab,
+          label: 'Pusat Dokumen',
+          sublabel: 'Ekspor Seluruh File',
+          icon: FileText,
+          badge: '13 Dokumen',
+        },
+      ];
 
   return (
     <div className="space-y-6" id="administration-hub">
