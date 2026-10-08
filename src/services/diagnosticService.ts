@@ -234,9 +234,15 @@ export function buildLearningPlanDiagnosticReport(data: {
       scheduleStatus: item.schedule.status,
     }))
   );
-  const latestAIRequest = getRecentDiagnosticEvents('LEARNING_PLAN')
-    .filter((event) => event.action === 'LEARNING_PLAN_AI_REQUEST')
+  const aiEvents = getRecentDiagnosticEvents('LEARNING_PLAN')
+    .filter((event) => event.action === 'LEARNING_PLAN_AI_REQUEST');
+  const latestAIStarted = aiEvents
+    .filter((event) => event.status === 'STARTED')
     .slice(-1)[0];
+  const latestAIOutcome = aiEvents
+    .filter((event) => event.status !== 'STARTED')
+    .slice(-1)[0];
+
   const latestBulkSave = getRecentDiagnosticEvents('LEARNING_PLAN')
     .filter((event) => event.action === 'LEARNING_PLAN_BULK_SAVE')
     .slice(-1)[0];
@@ -244,15 +250,15 @@ export function buildLearningPlanDiagnosticReport(data: {
     .filter((event) => event.action === 'LEARNING_PLAN_DELETE')
     .slice(-1)[0];
 
-  const latestAIOutcomeLines = latestAIRequest
+  const latestAIOutcomeLines = latestAIOutcome
     ? [
-        line('status', latestAIRequest.status),
-        line('unitId', latestAIRequest.metadata?.unitId),
-        line('scopeId', latestAIRequest.metadata?.scopeId),
-        line('stage', latestAIRequest.metadata?.stage),
-        line('planId', latestAIRequest.metadata?.planId || latestAIRequest.metadata?.generatedPlanId),
-        line('errorMessage', latestAIRequest.metadata?.errorMessage),
-        line('saveResult', latestAIRequest.metadata?.saveResult),
+        line('status', latestAIOutcome.status),
+        line('unitId', latestAIOutcome.metadata?.unitId),
+        line('scopeId', latestAIOutcome.metadata?.scopeId),
+        line('stage', latestAIOutcome.metadata?.stage),
+        line('planId', latestAIOutcome.metadata?.planId || latestAIOutcome.metadata?.generatedPlanId),
+        line('errorMessage', latestAIOutcome.metadata?.errorMessage),
+        line('saveResult', latestAIOutcome.metadata?.saveResult),
       ]
     : ['- none'];
 
@@ -334,17 +340,17 @@ export function buildLearningPlanDiagnosticReport(data: {
       ])
     : ['- none'];
 
-  const aiInputLines = latestAIRequest
+  const aiInputLines = latestAIStarted
     ? [
-        line('unitId', latestAIRequest.metadata?.unitId),
-        line('TP sent', latestAIRequest.metadata?.tpCount),
-        line('ATP sent', latestAIRequest.metadata?.atpCount),
-        line('LearningMeeting IDs in scope', latestAIRequest.metadata?.learningMeetingCount),
-        line('Allocated JP sent', latestAIRequest.metadata?.allocatedJP),
-        line('Meeting structure sent to AI', latestAIRequest.metadata?.meetingStructureSent),
-        line('meetingStructureCount', latestAIRequest.metadata?.meetingStructureCount),
-        line('KKTP sent to AI', latestAIRequest.metadata?.kktpSent),
-        line('kktpCount', latestAIRequest.metadata?.kktpCount),
+        line('unitId', latestAIStarted.metadata?.unitId),
+        line('TP sent', latestAIStarted.metadata?.tpCount),
+        line('ATP sent', latestAIStarted.metadata?.atpCount),
+        line('LearningMeeting IDs in scope', latestAIStarted.metadata?.learningMeetingCount),
+        line('Allocated JP sent', latestAIStarted.metadata?.allocatedJP),
+        line('Meeting structure sent to AI', latestAIStarted.metadata?.meetingStructureSent),
+        line('meetingStructureCount', latestAIStarted.metadata?.meetingStructureCount),
+        line('KKTP sent to AI', latestAIStarted.metadata?.kktpSent),
+        line('kktpCount', latestAIStarted.metadata?.kktpCount),
       ]
     : ['- no request recorded'];
 

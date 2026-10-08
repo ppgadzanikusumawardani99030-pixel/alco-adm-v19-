@@ -333,4 +333,167 @@ assert(report.includes('GATE:'), 'Report harus mempertahankan section GATE');
 assert(report.includes('TP SOURCE:'), 'Report harus mempertahankan section TP SOURCE');
 assert(report.includes('Recent LEARNING_PLAN Events:'), 'Report harus mempertahankan Recent LEARNING_PLAN Events');
 
+// =========================================================================
+// M-LP-DIAG.1.1: 4 Regression Cases for AI INPUT & LATEST AI OUTCOME separation
+// =========================================================================
+console.log('--- Testing M-LP-DIAG.1.1: AI INPUT and LATEST AI OUTCOME Separation ---');
+
+// Case 1: STARTED -> SUCCESS
+// - AI INPUT tetap menampilkan tpCount, atpCount, meeting, JP, KKTP dari STARTED.
+// - outcome = SUCCESS.
+console.log('Regression Case 1: STARTED -> SUCCESS keeps AI INPUT and outcome SUCCESS');
+localStorage.clear();
+recordDiagnosticEvent({
+  scope: 'LEARNING_PLAN',
+  action: 'LEARNING_PLAN_AI_REQUEST',
+  status: 'STARTED',
+  metadata: {
+    unitId: 'unit-c1',
+    scopeId: 'scope-c1',
+    tpCount: 3,
+    atpCount: 4,
+    learningMeetingCount: 2,
+    allocatedJP: 6,
+    meetingStructureSent: true,
+    meetingStructureCount: 2,
+    kktpSent: true,
+    kktpCount: 3,
+  },
+});
+recordDiagnosticEvent({
+  scope: 'LEARNING_PLAN',
+  action: 'LEARNING_PLAN_AI_REQUEST',
+  status: 'SUCCESS',
+  metadata: {
+    unitId: 'unit-c1',
+    scopeId: 'scope-c1',
+    planId: 'plan-c1',
+    saveResult: true,
+  },
+});
+
+const reportCase1 = buildLearningPlanDiagnosticReport({});
+assert(reportCase1.includes('AI INPUT:\nunitId: unit-c1\nTP sent: 3\nATP sent: 4\nLearningMeeting IDs in scope: 2\nAllocated JP sent: 6\nMeeting structure sent to AI: true\nmeetingStructureCount: 2\nKKTP sent to AI: true\nkktpCount: 3'), 'Case 1: AI INPUT harus tetap mempertahankan semua metadata dari STARTED');
+assert(reportCase1.includes('LATEST AI OUTCOME:\nstatus: SUCCESS\nunitId: unit-c1\nscopeId: scope-c1\nstage: -\nplanId: plan-c1\nerrorMessage: -\nsaveResult: true'), 'Case 1: LATEST AI OUTCOME harus SUCCESS');
+
+// Case 2: STARTED -> FAILED
+// - AI INPUT tetap utuh.
+// - outcome menampilkan FAILED + stage + errorMessage.
+console.log('Regression Case 2: STARTED -> FAILED keeps AI INPUT and outcome FAILED with details');
+localStorage.clear();
+recordDiagnosticEvent({
+  scope: 'LEARNING_PLAN',
+  action: 'LEARNING_PLAN_AI_REQUEST',
+  status: 'STARTED',
+  metadata: {
+    unitId: 'unit-c2',
+    scopeId: 'scope-c2',
+    tpCount: 2,
+    atpCount: 2,
+    learningMeetingCount: 1,
+    allocatedJP: 4,
+    meetingStructureSent: true,
+    meetingStructureCount: 1,
+    kktpSent: false,
+    kktpCount: 0,
+  },
+});
+recordDiagnosticEvent({
+  scope: 'LEARNING_PLAN',
+  action: 'LEARNING_PLAN_AI_REQUEST',
+  status: 'FAILED',
+  metadata: {
+    unitId: 'unit-c2',
+    scopeId: 'scope-c2',
+    stage: 'SAVE',
+    errorMessage: 'Draf AI berhasil dibuat tetapi gagal disimpan.',
+  },
+});
+
+const reportCase2 = buildLearningPlanDiagnosticReport({});
+assert(reportCase2.includes('AI INPUT:\nunitId: unit-c2\nTP sent: 2\nATP sent: 2\nLearningMeeting IDs in scope: 1\nAllocated JP sent: 4\nMeeting structure sent to AI: true\nmeetingStructureCount: 1\nKKTP sent to AI: false\nkktpCount: 0'), 'Case 2: AI INPUT harus tetap utuh dari event STARTED');
+assert(reportCase2.includes('LATEST AI OUTCOME:\nstatus: FAILED\nunitId: unit-c2\nscopeId: scope-c2\nstage: SAVE\nplanId: -\nerrorMessage: Draf AI berhasil dibuat tetapi gagal disimpan.\nsaveResult: -'), 'Case 2: LATEST AI OUTCOME harus FAILED dengan stage dan error');
+
+// Case 3: STARTED saja
+// - AI INPUT terisi.
+// - outcome = none.
+console.log('Regression Case 3: STARTED only has populated AI INPUT and none outcome');
+localStorage.clear();
+recordDiagnosticEvent({
+  scope: 'LEARNING_PLAN',
+  action: 'LEARNING_PLAN_AI_REQUEST',
+  status: 'STARTED',
+  metadata: {
+    unitId: 'unit-c3',
+    scopeId: 'scope-c3',
+    tpCount: 1,
+    atpCount: 1,
+    learningMeetingCount: 1,
+    allocatedJP: 2,
+    meetingStructureSent: false,
+    meetingStructureCount: 0,
+    kktpSent: true,
+    kktpCount: 1,
+  },
+});
+
+const reportCase3 = buildLearningPlanDiagnosticReport({});
+assert(reportCase3.includes('AI INPUT:\nunitId: unit-c3\nTP sent: 1\nATP sent: 1\nLearningMeeting IDs in scope: 1\nAllocated JP sent: 2\nMeeting structure sent to AI: false\nmeetingStructureCount: 0\nKKTP sent to AI: true\nkktpCount: 1'), 'Case 3: AI INPUT harus terisi dari STARTED');
+assert(reportCase3.includes('LATEST AI OUTCOME:\n- none'), 'Case 3: LATEST AI OUTCOME harus none karena belum ada outcome');
+
+// Case 4: STARTED unit-1 -> FAILED unit-1 -> STARTED unit-2
+// - AI INPUT berasal dari unit-2.
+// - latest outcome tetap FAILED unit-1.
+console.log('Regression Case 4: STARTED unit-1 -> FAILED unit-1 -> STARTED unit-2');
+localStorage.clear();
+recordDiagnosticEvent({
+  scope: 'LEARNING_PLAN',
+  action: 'LEARNING_PLAN_AI_REQUEST',
+  status: 'STARTED',
+  metadata: {
+    unitId: 'unit-1',
+    scopeId: 'scope-1',
+    tpCount: 5,
+    atpCount: 5,
+    learningMeetingCount: 3,
+    allocatedJP: 10,
+    meetingStructureSent: true,
+    meetingStructureCount: 3,
+    kktpSent: true,
+    kktpCount: 5,
+  },
+});
+recordDiagnosticEvent({
+  scope: 'LEARNING_PLAN',
+  action: 'LEARNING_PLAN_AI_REQUEST',
+  status: 'FAILED',
+  metadata: {
+    unitId: 'unit-1',
+    scopeId: 'scope-1',
+    stage: 'AI_GENERATION',
+    errorMessage: 'Quota exceeded for unit-1',
+  },
+});
+recordDiagnosticEvent({
+  scope: 'LEARNING_PLAN',
+  action: 'LEARNING_PLAN_AI_REQUEST',
+  status: 'STARTED',
+  metadata: {
+    unitId: 'unit-2',
+    scopeId: 'scope-2',
+    tpCount: 2,
+    atpCount: 2,
+    learningMeetingCount: 1,
+    allocatedJP: 4,
+    meetingStructureSent: false,
+    meetingStructureCount: 0,
+    kktpSent: false,
+    kktpCount: 0,
+  },
+});
+
+const reportCase4 = buildLearningPlanDiagnosticReport({});
+assert(reportCase4.includes('AI INPUT:\nunitId: unit-2\nTP sent: 2\nATP sent: 2\nLearningMeeting IDs in scope: 1\nAllocated JP sent: 4\nMeeting structure sent to AI: false\nmeetingStructureCount: 0\nKKTP sent to AI: false\nkktpCount: 0'), 'Case 4: AI INPUT harus berasal dari event STARTED unit-2 yang terbaru');
+assert(reportCase4.includes('LATEST AI OUTCOME:\nstatus: FAILED\nunitId: unit-1\nscopeId: scope-1\nstage: AI_GENERATION\nplanId: -\nerrorMessage: Quota exceeded for unit-1\nsaveResult: -'), 'Case 4: LATEST AI OUTCOME harus tetap mempertahankan outcome non-STARTED terakhir dari unit-1');
+
 console.log('--- ALL LEARNING PLAN GENERATION DIAGNOSTIC REGRESSION TESTS PASSED ---');
