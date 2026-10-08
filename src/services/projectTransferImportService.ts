@@ -14,6 +14,7 @@ import {
   AdministrationWorkspaceV5,
 } from '../types/storageV5';
 import {
+  AcademicSetting,
   YearPlan,
   SemesterPlan,
   CPData,
@@ -29,6 +30,7 @@ import { validateProjectTransfer } from './projectTransferService';
 import {
   validateCPAnalysisDataWorkflow,
   validateTPDataWorkflow,
+  validateATPDataWorkflow,
 } from './cpWorkflowService';
 
 export interface ProjectTransferImportParams {
@@ -353,20 +355,14 @@ export function performImportProjectTransferInState(
   };
 
   if (isMerdeka && newCPAnalysisData) {
-    const tpValidation = validateTPDataWorkflow(
-      newTPData,
-      newCPData,
-      newCPAnalysisData
-    );
-
-    newTPData.workflowStatus =
-      tpItems.length === 0
-        ? 'BELUM_DIMULAI'
-        : newCPAnalysisData.workflowStatus === 'SIAP' && tpValidation.isSiap
-        ? 'SIAP'
-        : 'PERLU_DILENGKAPI';
-  } else {
-    newTPData.workflowStatus = 'DRAFT';
+    if (newCPAnalysisData.workflowStatus !== 'SIAP') {
+      newTPData.workflowStatus = 'DRAFT';
+      newTPData.status = 'DRAFT';
+    } else {
+      const tpValidation = validateTPDataWorkflow(newTPData, newCPData, newCPAnalysisData);
+      newTPData.workflowStatus = tpValidation.status;
+      newTPData.status = tpValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
+    }
   }
 
   // 7. Generate fresh internal IDs for ATPData and ATPItems
@@ -441,6 +437,25 @@ export function performImportProjectTransferInState(
     },
     updatedAt: now,
   };
+
+  const academicSettingForVal: AcademicSetting = {
+    id: newYearPlanId,
+    academicYear: targetAcademicYear,
+    schoolId: params.schoolId,
+    teacherProfileId: targetProfileId,
+    targetGrade: (pkg.grade || '').trim(),
+    curriculumType: pkg.curriculumType,
+    status: 'ACTIVE',
+    createdAt: now,
+    updatedAt: now,
+  };
+  const atpValidation = validateATPDataWorkflow(
+    newATPData,
+    newTPData,
+    academicSettingForVal
+  );
+  newATPData.workflowStatus = atpValidation.status;
+  newATPData.status = atpValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
 
   // 9. Save hierarchy & annualData entries for the new YearPlan
   state.yearPlans.push(newYearPlan);

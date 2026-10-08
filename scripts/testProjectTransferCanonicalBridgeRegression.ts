@@ -113,7 +113,7 @@ console.log('Testing Scenario A: Valid Merdeka v1...');
   assert(res.tp.items[0].cpAnalysisItemIds?.length === 1, 'TP item 0 harus memuat tepat 1 cpAnalysisItemId');
   assert(res.tp.items[0].cpAnalysisId === res.cpAnalysis?.items[0].id, 'TP item 0 cpAnalysisId harus merujuk ke item CPAnalysis 0');
   assert(res.tp.workflowStatus === 'SIAP', `TP workflowStatus harus SIAP (got ${res.tp.workflowStatus})`);
-  assert(res.tp.status === 'DRAFT', `TP status harus DRAFT (got ${res.tp.status})`);
+  assert(res.tp.status === 'SIAP', `TP status harus SIAP (got ${res.tp.status})`);
 
   assert(res.atp.items[0].linkedTpIds?.length === 1, 'ATP item 0 linkedTpIds harus berisikan ID TP');
   assert(res.atp.items[0].linkedTpIds?.[0] === res.tp.items[0].id, 'linkedTpIds[0] harus merujuk ke TPItem.id internal');
