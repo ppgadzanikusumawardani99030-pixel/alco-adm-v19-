@@ -237,6 +237,42 @@ export function buildLearningPlanDiagnosticReport(data: {
   const latestAIRequest = getRecentDiagnosticEvents('LEARNING_PLAN')
     .filter((event) => event.action === 'LEARNING_PLAN_AI_REQUEST')
     .slice(-1)[0];
+  const latestBulkSave = getRecentDiagnosticEvents('LEARNING_PLAN')
+    .filter((event) => event.action === 'LEARNING_PLAN_BULK_SAVE')
+    .slice(-1)[0];
+  const latestDelete = getRecentDiagnosticEvents('LEARNING_PLAN')
+    .filter((event) => event.action === 'LEARNING_PLAN_DELETE')
+    .slice(-1)[0];
+
+  const latestAIOutcomeLines = latestAIRequest
+    ? [
+        line('status', latestAIRequest.status),
+        line('unitId', latestAIRequest.metadata?.unitId),
+        line('scopeId', latestAIRequest.metadata?.scopeId),
+        line('stage', latestAIRequest.metadata?.stage),
+        line('planId', latestAIRequest.metadata?.planId || latestAIRequest.metadata?.generatedPlanId),
+        line('errorMessage', latestAIRequest.metadata?.errorMessage),
+        line('saveResult', latestAIRequest.metadata?.saveResult),
+      ]
+    : ['- none'];
+
+  const bulkSaveLines = latestBulkSave
+    ? [
+        line('latest status', latestBulkSave.status),
+        line('generatedCount', latestBulkSave.metadata?.generatedCount),
+        line('failedGenerationCount', latestBulkSave.metadata?.failedGenerationCount),
+        line('skippedExistingCount', latestBulkSave.metadata?.skippedExistingCount),
+      ]
+    : ['- none'];
+
+  const deleteLines = latestDelete
+    ? [
+        line('latest delete status', latestDelete.status),
+        line('planId', latestDelete.metadata?.planId),
+        line('countBefore', latestDelete.metadata?.learningPlanCountBefore),
+        line('expectedCountAfter', latestDelete.metadata?.expectedCountAfter),
+      ]
+    : ['- none'];
 
   const canonicalScopes = activeScopes.length > 0
     ? activeScopes.flatMap((scope) => [
@@ -385,6 +421,15 @@ export function buildLearningPlanDiagnosticReport(data: {
     '',
     'CANONICAL ASSESSMENT PLANS:',
     ...canonicalAssessmentPlans,
+    '',
+    'LATEST AI OUTCOME:',
+    ...latestAIOutcomeLines,
+    '',
+    'BULK SAVE:',
+    ...bulkSaveLines,
+    '',
+    'DELETE:',
+    ...deleteLines,
     '',
     'Recent LEARNING_PLAN Events:',
     ...formatEvents('LEARNING_PLAN'),

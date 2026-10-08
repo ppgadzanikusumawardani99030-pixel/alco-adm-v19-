@@ -134,6 +134,27 @@ export const checkScopeKKTPReadiness = (
   return { isReady: true, unreadyTpCount: 0 };
 };
 
+export const hasAssociatedPlan = (scope: LearningPlanScopeUnit, plans: LearningPlan[]): boolean => {
+  return plans.some((p) => {
+    if (scope.unitId) {
+      return p.unitId === scope.unitId;
+    }
+    if (scope.type === 'ATP_STEP' && scope.atpItem?.id) {
+      if (p.atpItemIds && p.atpItemIds.includes(scope.atpItem.id)) {
+        return true;
+      }
+      if ((!p.atpItemIds || p.atpItemIds.length === 0) && p.tpIds && p.tpIds.includes(scope.tpItem.id)) {
+        return true;
+      }
+    } else if (scope.tpItem?.id) {
+      if (p.tpIds && p.tpIds.includes(scope.tpItem.id)) {
+        return true;
+      }
+    }
+    return false;
+  });
+};
+
 interface LearningPlanManagerProps {
   profile: TeacherProfile;
   school: SchoolData;
@@ -476,27 +497,6 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
   const [isBulkGenerating, setIsBulkGenerating] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
 
-  const hasAssociatedPlan = (scope: LearningPlanScopeUnit, plans: LearningPlan[]): boolean => {
-    return plans.some((p) => {
-      if (scope.unitId) {
-        return p.unitId === scope.unitId;
-      }
-      if (scope.type === 'ATP_STEP' && scope.atpItem?.id) {
-        if (p.atpItemIds && p.atpItemIds.includes(scope.atpItem.id)) {
-          return true;
-        }
-        if ((!p.atpItemIds || p.atpItemIds.length === 0) && p.tpIds && p.tpIds.includes(scope.tpItem.id)) {
-          return true;
-        }
-      } else if (scope.tpItem?.id) {
-        if (p.tpIds && p.tpIds.includes(scope.tpItem.id)) {
-          return true;
-        }
-      }
-      return false;
-    });
-  };
-
   const generateAIDraftPlanForScope = async (scope: LearningPlanScopeUnit): Promise<LearningPlan> => {
     const kktpCheck = checkScopeKKTPReadiness(scope, assessmentCriteria);
     if (!kktpCheck.isReady) {
@@ -568,6 +568,8 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     const relevantCriteria = getReadyKKTPCriteriaForScope(scope, assessmentCriteria);
     const hasKktp = relevantCriteria.length > 0;
 
+    let stage: 'AI_GENERATION' | 'DRAFT_CREATION' | 'SAVE' | 'UNKNOWN' = 'AI_GENERATION';
+
     try {
       recordDiagnosticEvent({
         scope: 'LEARNING_PLAN',
@@ -575,6 +577,7 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
         status: 'STARTED',
         metadata: {
           unitId: scope.unitId || '-',
+          scopeId: scope.id,
           tpCount: scope.linkedTpIds?.length || 0,
           atpCount: scope.linkedAtpItemIds?.length || 0,
           learningMeetingCount: scope.learningMeetingIds?.length || 0,
@@ -583,11 +586,42 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
           meetingStructureCount: scope.meetings?.length || 0,
           kktpSent: hasKktp,
           kktpCount: relevantCriteria.length,
+          learningPlanCountBefore: learningPlans.length,
         },
       });
+
       const draftPlan = await generateAIDraftPlanForScope(scope);
 
-      onSavePlan(draftPlan);
+      recordDiagnosticEvent({
+        scope: 'LEARNING_PLAN',
+        action: 'LEARNING_PLAN_AI_REQUEST',
+        status: 'AI_RESPONSE_OK',
+        metadata: {
+          unitId: scope.unitId || '-',
+          scopeId: scope.id,
+          generatedPlanId: draftPlan.id,
+          learningPlanCountBefore: learningPlans.length,
+        },
+      });
+
+      stage = 'SAVE';
+      const saved = onSavePlan(draftPlan);
+      if (!saved) {
+        throw new Error('Draf AI berhasil dibuat tetapi gagal disimpan.');
+      }
+
+      recordDiagnosticEvent({
+        scope: 'LEARNING_PLAN',
+        action: 'LEARNING_PLAN_AI_REQUEST',
+        status: 'SUCCESS',
+        metadata: {
+          unitId: scope.unitId || '-',
+          scopeId: scope.id,
+          planId: draftPlan.id,
+          saveResult: true,
+        },
+      });
+
       setSelectedPlanId(draftPlan.id);
       setActiveTab('editor');
       showNotification(
@@ -596,7 +630,25 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
       );
     } catch (err: any) {
       console.error('Failed to generate AI Learning Plan:', err);
-      showNotification('error', `Draf AI tidak dibuat. Rancangan yang sedang terlihat adalah rancangan sebelumnya. ${err.message || 'Terjadi kesalahan'}`);
+      const errorMessage = err.message || 'Terjadi kesalahan';
+
+      recordDiagnosticEvent({
+        scope: 'LEARNING_PLAN',
+        action: 'LEARNING_PLAN_AI_REQUEST',
+        status: 'FAILED',
+        metadata: {
+          unitId: scope.unitId || '-',
+          scopeId: scope.id,
+          stage,
+          errorMessage,
+        },
+      });
+
+      const errorNotification = activePlan
+        ? `Draf AI tidak dibuat. Rancangan yang sedang terlihat adalah rancangan sebelumnya. ${errorMessage}`
+        : `Draf AI tidak berhasil dibuat. ${errorMessage}`;
+
+      showNotification('error', errorNotification);
     } finally {
       setIsGeneratingAI(false);
     }
@@ -778,6 +830,7 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
     const generatedPlans: LearningPlan[] = [];
     let processed = 0;
     for (const scope of pendingScopes) {
+      let stage: 'AI_GENERATION' | 'DRAFT_CREATION' | 'SAVE' | 'UNKNOWN' = 'AI_GENERATION';
       try {
         const kktpCheck = checkScopeKKTPReadiness(scope, assessmentCriteria);
         if (!kktpCheck.isReady) {
@@ -793,6 +846,7 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
           status: 'STARTED',
           metadata: {
             unitId: scope.unitId || '-',
+            scopeId: scope.id,
             tpCount: scope.linkedTpIds?.length || 0,
             atpCount: scope.linkedAtpItemIds?.length || 0,
             learningMeetingCount: scope.learningMeetingIds?.length || 0,
@@ -803,16 +857,39 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
             kktpCount: relevantCriteria.length,
           },
         });
+
         const draftPlan = await generateAIDraftPlanForScope(scope);
+
+        recordDiagnosticEvent({
+          scope: 'LEARNING_PLAN',
+          action: 'LEARNING_PLAN_AI_REQUEST',
+          status: 'AI_RESPONSE_OK',
+          metadata: {
+            unitId: scope.unitId || '-',
+            scopeId: scope.id,
+            generatedPlanId: draftPlan.id,
+          },
+        });
+
         generatedPlans.push(draftPlan);
         successCount++;
         lastGeneratedPlanId = draftPlan.id;
-        if (onSaveBulkPlans) {
-          onSaveBulkPlans([...generatedPlans]);
-        }
       } catch (err: any) {
         console.error(`Gagal menyusun draft untuk unit '${scope.title}':`, err);
+        const errorMessage = err.message || 'Terjadi kesalahan';
         failCount++;
+
+        recordDiagnosticEvent({
+          scope: 'LEARNING_PLAN',
+          action: 'LEARNING_PLAN_AI_REQUEST',
+          status: 'FAILED',
+          metadata: {
+            unitId: scope.unitId || '-',
+            scopeId: scope.id,
+            stage,
+            errorMessage,
+          },
+        });
       }
       processed++;
       setBulkProgress({ current: processed, total });
@@ -821,8 +898,28 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
 
     if (onSaveBulkPlans && generatedPlans.length > 0) {
       onSaveBulkPlans(generatedPlans);
+      recordDiagnosticEvent({
+        scope: 'LEARNING_PLAN',
+        action: 'LEARNING_PLAN_BULK_SAVE',
+        status: 'TRIGGERED',
+        metadata: {
+          generatedCount: generatedPlans.length,
+          failedGenerationCount: failCount,
+          skippedExistingCount: skippedCount,
+        },
+      });
     } else if (!onSaveBulkPlans && generatedPlans.length > 0) {
       generatedPlans.forEach((p) => onSavePlan(p));
+      recordDiagnosticEvent({
+        scope: 'LEARNING_PLAN',
+        action: 'LEARNING_PLAN_BULK_SAVE',
+        status: 'TRIGGERED',
+        metadata: {
+          generatedCount: generatedPlans.length,
+          failedGenerationCount: failCount,
+          skippedExistingCount: skippedCount,
+        },
+      });
     }
 
     setIsBulkGenerating(false);
@@ -2275,14 +2372,43 @@ export const LearningPlanManager: React.FC<LearningPlanManagerProps> = ({
                     handleRegenerateAI();
                   } else if (pendingAction === 'DELETE') {
                     const deletingId = activePlan.id;
+                    const countBefore = learningPlans.length;
                     setPendingAction(null);
+
+                    recordDiagnosticEvent({
+                      scope: 'LEARNING_PLAN',
+                      action: 'LEARNING_PLAN_DELETE',
+                      status: 'STARTED',
+                      metadata: {
+                        planId: deletingId,
+                        learningPlanCountBefore: countBefore,
+                      },
+                    });
 
                     const deleted = onDeletePlan(deletingId);
 
                     if (!deleted) {
+                      recordDiagnosticEvent({
+                        scope: 'LEARNING_PLAN',
+                        action: 'LEARNING_PLAN_DELETE',
+                        status: 'FAILED',
+                        metadata: {
+                          planId: deletingId,
+                        },
+                      });
                       showNotification('error', 'Modul Ajar gagal dihapus.');
                       return;
                     }
+
+                    recordDiagnosticEvent({
+                      scope: 'LEARNING_PLAN',
+                      action: 'LEARNING_PLAN_DELETE',
+                      status: 'SUCCESS',
+                      metadata: {
+                        planId: deletingId,
+                        expectedCountAfter: Math.max(0, countBefore - 1),
+                      },
+                    });
 
                     const remaining = learningPlans.filter((p) => p.id !== deletingId);
                     setSelectedPlanId(remaining[0]?.id || null);
