@@ -42,6 +42,8 @@ export function normalizeTransferCode(val: unknown): string {
   return normalizeSingleLineText(val).toUpperCase();
 }
 
+export const CANONICAL_MERDEKA_TP_CODE_REGEX = /^E\d+-[A-Z0-9]{2,5}-\d{2}$/;
+
 /**
  * Validates and normalizes schema version.
  * Accepts only supported v1 versions: '1.0' and alias 'v1'.
@@ -322,14 +324,25 @@ export function validateProjectTransfer(
       }
 
       if (!element) {
-        issues.push({
-          severity: 'WARNING',
-          code: 'EMPTY_CP_ELEMENT',
-          message: `Elemen CP "${code || index + 1}" belum diisi.`,
-          field: 'element',
-          path: `${path}.element`,
-          itemCode: code,
-        });
+        if (curriculumType === 'KURIKULUM_MERDEKA') {
+          issues.push({
+            severity: 'ERROR',
+            code: 'EMPTY_CP_ELEMENT',
+            message: `Elemen CP "${code || index + 1}" tidak boleh kosong pada Kurikulum Merdeka.`,
+            field: 'element',
+            path: `${path}.element`,
+            itemCode: code,
+          });
+        } else {
+          issues.push({
+            severity: 'WARNING',
+            code: 'EMPTY_CP_ELEMENT',
+            message: `Elemen CP "${code || index + 1}" belum diisi.`,
+            field: 'element',
+            path: `${path}.element`,
+            itemCode: code,
+          });
+        }
       }
 
       if (!content) {
@@ -380,17 +393,30 @@ export function validateProjectTransfer(
           field: 'code',
           path: `${path}.code`,
         });
-      } else if (tpCodeSet.has(code)) {
-        issues.push({
-          severity: 'ERROR',
-          code: 'DUPLICATE_TP_CODE',
-          message: `Kode TP "${code}" pada baris ke-${index + 1} duplikat. Setiap TP harus memiliki kode unik.`,
-          field: 'code',
-          path: `${path}.code`,
-          itemCode: code,
-        });
       } else {
-        tpCodeSet.add(code);
+        if (tpCodeSet.has(code)) {
+          issues.push({
+            severity: 'ERROR',
+            code: 'DUPLICATE_TP_CODE',
+            message: `Kode TP "${code}" pada baris ke-${index + 1} duplikat. Setiap TP harus memiliki kode unik.`,
+            field: 'code',
+            path: `${path}.code`,
+            itemCode: code,
+          });
+        } else {
+          tpCodeSet.add(code);
+        }
+
+        if (curriculumType === 'KURIKULUM_MERDEKA' && !CANONICAL_MERDEKA_TP_CODE_REGEX.test(code)) {
+          issues.push({
+            severity: 'ERROR',
+            code: 'INVALID_MERDEKA_TP_CODE',
+            message: `Kode TP "${code}" pada baris ke-${index + 1} tidak sesuai format canonical Kurikulum Merdeka (contoh: E1-PGD-01).`,
+            field: 'code',
+            path: `${path}.code`,
+            itemCode: code,
+          });
+        }
       }
 
       if (!statement) {
@@ -404,8 +430,19 @@ export function validateProjectTransfer(
         });
       }
 
-      // Check cpCode reference if provided
-      if (cpCode) {
+      // Check cpCode reference
+      if (!cpCode) {
+        if (curriculumType === 'KURIKULUM_MERDEKA') {
+          issues.push({
+            severity: 'ERROR',
+            code: 'EMPTY_TP_CP_REF',
+            message: `Rujukan kode CP (cpCode) pada TP "${code || index + 1}" wajib diisi untuk Kurikulum Merdeka.`,
+            field: 'cpCode',
+            path: `${path}.cpCode`,
+            itemCode: code,
+          });
+        }
+      } else {
         if (!cpCodeSet.has(cpCode)) {
           issues.push({
             severity: 'ERROR',
@@ -420,7 +457,7 @@ export function validateProjectTransfer(
 
       if (!competence) {
         issues.push({
-          severity: 'WARNING',
+          severity: curriculumType === 'KURIKULUM_MERDEKA' ? 'ERROR' : 'WARNING',
           code: 'EMPTY_TP_COMPETENCE',
           message: `Kompetensi pada TP "${code || index + 1}" belum terisi.`,
           field: 'competence',
@@ -431,7 +468,7 @@ export function validateProjectTransfer(
 
       if (!materialScope) {
         issues.push({
-          severity: 'WARNING',
+          severity: curriculumType === 'KURIKULUM_MERDEKA' ? 'ERROR' : 'WARNING',
           code: 'EMPTY_TP_MATERIAL_SCOPE',
           message: `Lingkup materi pada TP "${code || index + 1}" belum terisi.`,
           field: 'materialScope',

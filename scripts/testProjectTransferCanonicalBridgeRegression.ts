@@ -1,4 +1,5 @@
 import { performImportProjectTransferInState } from '../src/services/projectTransferImportService';
+import { validateProjectTransfer } from '../src/services/projectTransferService';
 import { createInitialStorageV5 } from '../src/services/storageV5';
 import { ProjectTransferPackage } from '../src/types/projectTransfer';
 
@@ -164,17 +165,23 @@ console.log('Testing Scenario B: Missing competence / materialScope...');
     ],
   };
 
-  const res = performImportProjectTransferInState(state, {
-    pkg,
-    profileId: 'prof-001',
-    schoolId: 'sch-001',
-  });
+  const validation = validateProjectTransfer(pkg);
+  assert(!validation.isValid, 'Validation harus gagal bila competence/materialScope kosong pada Merdeka');
+  assert(validation.errors.some((e) => e.code === 'EMPTY_TP_COMPETENCE'), 'Harus ada error EMPTY_TP_COMPETENCE');
+  assert(validation.errors.some((e) => e.code === 'EMPTY_TP_MATERIAL_SCOPE'), 'Harus ada error EMPTY_TP_MATERIAL_SCOPE');
 
-  assert(!!res.cpAnalysis, 'CPAnalysis harus tetap dibuat');
-  assert(res.cpAnalysis?.items[0].cpCompetence === '', 'cpCompetence harus kosong tanpa fake data');
-  assert(res.cpAnalysis?.items[0].materialScope === '', 'materialScope harus kosong tanpa fake data');
-  assert(res.cpAnalysis?.workflowStatus !== 'SIAP', 'CPAnalysis tidak boleh SIAP bila competence/materialScope kosong');
-  assert(res.tp.workflowStatus !== 'SIAP', 'TP tidak boleh SIAP bila competence/materialScope kosong');
+  let importThrew = false;
+  try {
+    performImportProjectTransferInState(state, {
+      pkg,
+      profileId: 'prof-001',
+      schoolId: 'sch-001',
+    });
+  } catch (err: any) {
+    importThrew = true;
+    assert(err.message.includes('ProjectTransferPackage tidak valid'), 'Pesan error import harus menunjukkan package tidak valid');
+  }
+  assert(importThrew, 'Import harus ditolak jika competence atau materialScope kosong pada Merdeka');
 }
 
 // ==========================================
@@ -215,14 +222,22 @@ console.log('Testing Scenario C: Invalid legacy TP code...');
     ],
   };
 
-  const res = performImportProjectTransferInState(state, {
-    pkg,
-    profileId: 'prof-001',
-    schoolId: 'sch-001',
-  });
+  const validation = validateProjectTransfer(pkg);
+  assert(!validation.isValid, 'Validation harus gagal untuk kode TP non-canonical pada Merdeka');
+  assert(validation.errors.some((e) => e.code === 'INVALID_MERDEKA_TP_CODE'), 'Harus ada error INVALID_MERDEKA_TP_CODE');
 
-  assert(res.tp.items[0].code === 'TP-01', 'Kode TP legacy tidak boleh di-rewrite secara diam-diam');
-  assert(res.tp.workflowStatus !== 'SIAP', 'TP dengan kode legacy invalid tidak boleh SIAP');
+  let importThrew = false;
+  try {
+    performImportProjectTransferInState(state, {
+      pkg,
+      profileId: 'prof-001',
+      schoolId: 'sch-001',
+    });
+  } catch (err: any) {
+    importThrew = true;
+    assert(err.message.includes('ProjectTransferPackage tidak valid'), 'Pesan error import harus menunjukkan package tidak valid');
+  }
+  assert(importThrew, 'Import harus ditolak untuk kode TP non-canonical pada Merdeka');
 }
 
 // ==========================================
@@ -365,14 +380,22 @@ console.log('Testing Scenario F: TP valid secara isi tapi cpCode kosong...');
     ],
   };
 
-  const res = performImportProjectTransferInState(state, {
-    pkg,
-    profileId: 'prof-001',
-    schoolId: 'sch-001',
-  });
+  const validation = validateProjectTransfer(pkg);
+  assert(!validation.isValid, 'Validation harus gagal bila cpCode kosong pada Merdeka');
+  assert(validation.errors.some((e) => e.code === 'EMPTY_TP_CP_REF'), 'Harus ada error EMPTY_TP_CP_REF');
 
-  assert(res.cpAnalysis?.workflowStatus !== 'SIAP', 'CPAnalysis workflowStatus tidak boleh SIAP bila cpCode kosong');
-  assert(res.tp.workflowStatus !== 'SIAP', 'TP workflowStatus tidak boleh SIAP bila cpCode kosong');
+  let importThrew = false;
+  try {
+    performImportProjectTransferInState(state, {
+      pkg,
+      profileId: 'prof-001',
+      schoolId: 'sch-001',
+    });
+  } catch (err: any) {
+    importThrew = true;
+    assert(err.message.includes('ProjectTransferPackage tidak valid'), 'Pesan error import harus menunjukkan package tidak valid');
+  }
+  assert(importThrew, 'Import harus ditolak bila cpCode kosong pada Merdeka');
 }
 
 // ==========================================
@@ -392,7 +415,7 @@ console.log('Testing Scenario G: CP element kosong & TP merujuk cpCode E1...');
     cp: [
       {
         code: 'E1',
-        element: '',
+        element: '', // element CP kosong!
         content: 'Konten CP valid',
       },
     ],
@@ -413,15 +436,22 @@ console.log('Testing Scenario G: CP element kosong & TP merujuk cpCode E1...');
     ],
   };
 
-  const res = performImportProjectTransferInState(state, {
-    pkg,
-    profileId: 'prof-001',
-    schoolId: 'sch-001',
-  });
+  const validation = validateProjectTransfer(pkg);
+  assert(!validation.isValid, 'Validation harus gagal bila CP element kosong pada Merdeka');
+  assert(validation.errors.some((e) => e.code === 'EMPTY_CP_ELEMENT'), 'Harus ada error EMPTY_CP_ELEMENT');
 
-  assert(res.cpAnalysis?.items[0].elementName === '', 'elementName CP Analysis harus kosong');
-  assert(res.cpAnalysis?.workflowStatus !== 'SIAP', 'CPAnalysis workflowStatus tidak boleh SIAP bila element kosong');
-  assert(res.tp.workflowStatus !== 'SIAP', 'TP workflowStatus tidak boleh SIAP bila CP element kosong');
+  let importThrew = false;
+  try {
+    performImportProjectTransferInState(state, {
+      pkg,
+      profileId: 'prof-001',
+      schoolId: 'sch-001',
+    });
+  } catch (err: any) {
+    importThrew = true;
+    assert(err.message.includes('ProjectTransferPackage tidak valid'), 'Pesan error import harus menunjukkan package tidak valid');
+  }
+  assert(importThrew, 'Import harus ditolak bila CP element kosong pada Merdeka');
 }
 
 // ==========================================
@@ -476,6 +506,56 @@ console.log('Testing Scenario H: K13 Field Isolation...');
   assert(res.atp.items[0].linkedTpIds === undefined, 'K13 atp.items[0].linkedTpIds harus undefined');
   assert(res.atp.subjectCode === undefined, 'K13 atp.subjectCode harus undefined');
   assert(res.atp.basedOnTpUpdatedAt === undefined, 'K13 atp.basedOnTpUpdatedAt harus undefined');
+}
+
+// ==========================================
+// SCENARIO I: K13 Permissive Contract (Non-Canonical TP, missing element/competence are warnings only)
+// ==========================================
+console.log('Testing Scenario I: K13 Permissive Contract...');
+{
+  const state = createTestState();
+  const pkg: ProjectTransferPackage = {
+    schemaVersion: '1.0',
+    academicYear: '2026/2027',
+    curriculumType: 'K13',
+    level: 'SD',
+    grade: 'Kelas 4',
+    phase: 'B',
+    subject: 'Matematika',
+    cp: [
+      {
+        code: 'KD3.1',
+        element: '', // Empty element allowed as warning in K13
+        content: 'Memahami sifat-sifat operasi hitung.',
+      },
+    ],
+    tp: [
+      {
+        code: 'TP-01', // Non-canonical code allowed in K13
+        statement: 'Menjelaskan sifat komutatif.',
+        competence: '', // Empty competence allowed as warning in K13
+        materialScope: '', // Empty materialScope allowed as warning in K13
+      },
+    ],
+    atp: [
+      {
+        order: 1,
+        tpCode: 'TP-01',
+      },
+    ],
+  };
+
+  const validation = validateProjectTransfer(pkg);
+  assert(validation.isValid, 'Validation harus valid untuk K13 meskipun element/competence/materialScope kosong atau TP code non-canonical');
+  assert(validation.errors.length === 0, 'K13 tidak boleh menghasilkan ERROR untuk kelonggaran tersebut');
+  assert(validation.warnings.length > 0, 'K13 harus menghasilkan WARNING untuk kelonggaran tersebut');
+
+  const res = performImportProjectTransferInState(state, {
+    pkg,
+    profileId: 'prof-001',
+    schoolId: 'sch-001',
+  });
+  assert(res.tp.items[0].code === 'TP-01', 'K13 import harus mempertahankan kode TP asli');
 }
 
 console.log('--- ALL REGRESSION TESTS PASSED SUCCESSFULLY ---');
