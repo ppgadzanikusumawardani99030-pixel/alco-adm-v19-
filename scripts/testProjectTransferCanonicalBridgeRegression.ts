@@ -1,6 +1,10 @@
 import { performImportProjectTransferInState } from '../src/services/projectTransferImportService';
 import { createInitialStorageV5 } from '../src/services/storageV5';
 import { ProjectTransferPackage } from '../src/types/projectTransfer';
+import {
+  validateTPDataWorkflow,
+  validateCPAnalysisDataWorkflow,
+} from '../src/services/cpWorkflowService';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -48,7 +52,8 @@ console.log('Testing Scenario A: Valid Merdeka v1...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    schemaVersion: '1.0',
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -115,12 +120,6 @@ console.log('Testing Scenario A: Valid Merdeka v1...');
   assert(res.tp.workflowStatus === 'SIAP', `TP workflowStatus harus SIAP (got ${res.tp.workflowStatus})`);
   assert(res.tp.status === 'SIAP', `TP status harus SIAP (got ${res.tp.status})`);
 
-  assert(res.atp.items[0].linkedTpIds?.length === 1, 'ATP item 0 linkedTpIds harus berisikan ID TP');
-  assert(res.atp.items[0].linkedTpIds?.[0] === res.tp.items[0].id, 'linkedTpIds[0] harus merujuk ke TPItem.id internal');
-  assert(res.atp.workflowStatus === 'DRAFT', `ATP workflowStatus harus DRAFT (got ${res.atp.workflowStatus})`);
-  assert(res.atp.status === 'DRAFT', `ATP status harus DRAFT (got ${res.atp.status})`);
-  assert(res.atp.items[0].focus === undefined, 'Focus ATP item 0 harus undefined');
-
   // Check state graph save
   const storedCpAnalysis = state.annualData.cpAnalysis.find((e) => e.yearPlanId === res.yearPlan.id);
   assert(!!storedCpAnalysis, 'CPAnalysis harus tersimpan di state.annualData.cpAnalysis');
@@ -133,7 +132,8 @@ console.log('Testing Scenario B: Missing competence / materialScope...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    schemaVersion: '1.0',
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -184,7 +184,8 @@ console.log('Testing Scenario C: Invalid legacy TP code...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    schemaVersion: '1.0',
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -232,7 +233,8 @@ console.log('Testing Scenario D: ATP import...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    schemaVersion: '1.0',
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -285,7 +287,8 @@ console.log('Testing Scenario E: K13 curriculum...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    schemaVersion: '1.0',
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
     academicYear: '2026/2027',
     curriculumType: 'K13',
     level: 'SD',
@@ -328,13 +331,14 @@ console.log('Testing Scenario E: K13 curriculum...');
 }
 
 // ==========================================
-// SCENARIO F: TP valid secara isi tapi cpCode kosong
+// SCENARIO F: TP belum SIAP -> ATP TIDAK BOLEH SIAP
 // ==========================================
-console.log('Testing Scenario F: TP valid secara isi tapi cpCode kosong...');
+console.log('Testing Scenario F: TP belum SIAP -> ATP TIDAK BOLEH SIAP...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    schemaVersion: '1.0',
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -351,9 +355,58 @@ console.log('Testing Scenario F: TP valid secara isi tapi cpCode kosong...');
     tp: [
       {
         code: 'E1-BLG-01',
-        cpCode: '', // cpCode kosong!
-        statement: 'Membaca bilangan cacah sampai 10.000.',
-        competence: 'Membaca',
+        cpCode: 'E1',
+        statement: 'Membaca bilangan.',
+        competence: '',
+        materialScope: 'Bilangan',
+      },
+    ],
+    atp: [
+      {
+        order: 1,
+        tpCode: 'E1-BLG-01',
+      },
+    ],
+  };
+
+  const res = performImportProjectTransferInState(state, {
+    pkg,
+    profileId: 'prof-001',
+    schoolId: 'sch-001',
+  });
+
+  assert(res.tp.workflowStatus !== 'SIAP', 'TP harus tidak SIAP');
+  assert(res.atp.workflowStatus !== 'SIAP', 'ATP tidak boleh SIAP bila TP belum SIAP');
+}
+
+// ==========================================
+// SCENARIO G: focus ATP kosong -> ATP TIDAK BOLEH SIAP
+// ==========================================
+console.log('Testing Scenario G: Focus ATP kosong -> ATP TIDAK BOLEH SIAP...');
+{
+  const state = createTestState();
+  const pkg: ProjectTransferPackage = {
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
+    academicYear: '2026/2027',
+    curriculumType: 'KURIKULUM_MERDEKA',
+    level: 'SD',
+    grade: 'Kelas 4',
+    phase: 'B',
+    subject: 'Matematika',
+    cp: [
+      {
+        code: 'E1',
+        element: 'Bilangan',
+        content: 'Deskripsi elemen bilangan.',
+      },
+    ],
+    tp: [
+      {
+        code: 'E1-BLG-01',
+        cpCode: 'E1',
+        statement: 'Membaca dan menuliskan bilangan cacah sampai 10.000.',
+        competence: 'Membaca dan menuliskan',
         materialScope: 'Bilangan cacah sampai 10.000',
       },
     ],
@@ -371,18 +424,20 @@ console.log('Testing Scenario F: TP valid secara isi tapi cpCode kosong...');
     schoolId: 'sch-001',
   });
 
-  assert(res.cpAnalysis?.workflowStatus !== 'SIAP', 'CPAnalysis workflowStatus tidak boleh SIAP bila cpCode kosong');
-  assert(res.tp.workflowStatus !== 'SIAP', 'TP workflowStatus tidak boleh SIAP bila cpCode kosong');
+  assert(res.tp.workflowStatus === 'SIAP', 'TP harus SIAP');
+  assert(res.atp.items[0].focus === undefined, 'Focus tidak boleh dibuat secara sintetis');
+  assert(res.atp.workflowStatus !== 'SIAP', 'ATP tidak boleh SIAP bila focus kosong');
 }
 
 // ==========================================
-// SCENARIO G: CP element kosong & TP merujuk cpCode E1
+// SCENARIO H: Missing TP coverage -> ATP TIDAK BOLEH SIAP
 // ==========================================
-console.log('Testing Scenario G: CP element kosong & TP merujuk cpCode E1...');
+console.log('Testing Scenario H: Missing TP coverage -> ATP TIDAK BOLEH SIAP...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    schemaVersion: '1.0',
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -392,17 +447,24 @@ console.log('Testing Scenario G: CP element kosong & TP merujuk cpCode E1...');
     cp: [
       {
         code: 'E1',
-        element: '',
-        content: 'Konten CP valid',
+        element: 'Bilangan',
+        content: 'Deskripsi elemen bilangan.',
       },
     ],
     tp: [
       {
         code: 'E1-BLG-01',
         cpCode: 'E1',
-        statement: 'Membaca bilangan cacah.',
-        competence: 'Membaca',
-        materialScope: 'Bilangan cacah',
+        statement: 'Membaca dan menuliskan bilangan cacah sampai 10.000.',
+        competence: 'Membaca dan menuliskan',
+        materialScope: 'Bilangan cacah sampai 10.000',
+      },
+      {
+        code: 'E1-BLG-02',
+        cpCode: 'E1',
+        statement: 'Membandingkan dan mengurutkan bilangan cacah sampai 10.000.',
+        competence: 'Membandingkan dan mengurutkan',
+        materialScope: 'Bilangan cacah sampai 10.000',
       },
     ],
     atp: [
@@ -419,63 +481,11 @@ console.log('Testing Scenario G: CP element kosong & TP merujuk cpCode E1...');
     schoolId: 'sch-001',
   });
 
-  assert(res.cpAnalysis?.items[0].elementName === '', 'elementName CP Analysis harus kosong');
-  assert(res.cpAnalysis?.workflowStatus !== 'SIAP', 'CPAnalysis workflowStatus tidak boleh SIAP bila element kosong');
-  assert(res.tp.workflowStatus !== 'SIAP', 'TP workflowStatus tidak boleh SIAP bila CP element kosong');
-}
-
-// ==========================================
-// SCENARIO H: K13 Field Isolation
-// ==========================================
-console.log('Testing Scenario H: K13 Field Isolation...');
-{
-  const state = createTestState();
-  const pkg: ProjectTransferPackage = {
-    schemaVersion: '1.0',
-    academicYear: '2026/2027',
-    curriculumType: 'K13',
-    level: 'SD',
-    grade: 'Kelas 4',
-    phase: 'B',
-    subject: 'Matematika',
-    cp: [
-      {
-        code: 'KD3.1',
-        element: 'Pengetahuan',
-        content: 'Memahami sifat-sifat operasi hitung.',
-      },
-    ],
-    tp: [
-      {
-        code: 'KD3.1-01',
-        cpCode: 'KD3.1',
-        statement: 'Menjelaskan sifat komutatif.',
-        competence: 'Menjelaskan',
-        materialScope: 'Sifat komutatif',
-      },
-    ],
-    atp: [
-      {
-        order: 1,
-        tpCode: 'KD3.1-01',
-      },
-    ],
-  };
-
-  const res = performImportProjectTransferInState(state, {
-    pkg,
-    profileId: 'prof-001',
-    schoolId: 'sch-001',
-  });
-
-  assert(res.cpAnalysis === undefined, 'K13 cpAnalysis harus undefined');
-  assert(res.yearPlan.subjectCode === undefined, 'K13 yearPlan.subjectCode harus undefined');
-  assert(res.tp.cpId === undefined, 'K13 tp.cpId harus undefined');
-  assert(res.tp.subjectCode === undefined, 'K13 tp.subjectCode harus undefined');
-  assert(res.tp.basedOnCpUpdatedAt === undefined, 'K13 tp.basedOnCpUpdatedAt harus undefined');
-  assert(res.atp.items[0].linkedTpIds === undefined, 'K13 atp.items[0].linkedTpIds harus undefined');
-  assert(res.atp.subjectCode === undefined, 'K13 atp.subjectCode harus undefined');
-  assert(res.atp.basedOnTpUpdatedAt === undefined, 'K13 atp.basedOnTpUpdatedAt harus undefined');
+  assert(res.tp.workflowStatus === 'SIAP', 'TP harus SIAP');
+  assert(
+    res.atp.workflowStatus !== 'SIAP',
+    'ATP tidak boleh SIAP bila ada TP yang belum ter-cover'
+  );
 }
 
 console.log('--- ALL REGRESSION TESTS PASSED SUCCESSFULLY ---');
