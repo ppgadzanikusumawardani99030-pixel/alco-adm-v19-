@@ -40,6 +40,195 @@ interface KKTPManagerProps {
   onSaveK13KKM?: (kkm: K13KKM) => void;
 }
 
+export function createDefaultKKTPCriterionForTP(params: {
+  tpItem: { id: string; statement: string; contentScope?: string; competency?: string };
+  academicSettingId: string;
+  basedOnTpUpdatedAt?: string;
+  approach?: 'rubrik' | 'deskripsi' | 'skala_interval' | 'legacy_kkm';
+  existingId?: string;
+  kompleksitas?: number | null;
+  dayaDukung?: number | null;
+  intake?: number | null;
+  passingThreshold?: number | null;
+}): AssessmentCriterion {
+  const {
+    tpItem,
+    academicSettingId,
+    basedOnTpUpdatedAt,
+    approach = 'rubrik',
+    existingId,
+    kompleksitas,
+    dayaDukung,
+    intake,
+    passingThreshold,
+  } = params;
+
+  const scope = tpItem.contentScope || tpItem.statement;
+  const comp = tpItem.competency || 'kompetensi inti';
+
+  const aiIndicators = [
+    `Mengidentifikasi dan menjelaskan materi: ${scope}`,
+    `Mempraktikkan atau menganalisis ${comp} dalam situasi kontekstual`,
+    `Menyelesaikan evaluasi terkait ${scope} secara mandiri dan akurat`,
+  ];
+
+  const aiLevels: KKTPLevel[] = [
+    {
+      level: 'Perlu Bimbingan',
+      label: 'Perlu Bimbingan',
+      description: `Belum mampu menguasai konsep dasar ${scope}, masih membutuhkan pendampingan penuh dari pendidik.`,
+    },
+    {
+      level: 'Cukup',
+      label: 'Cukup',
+      description: `Mampu memahami sebagian materi ${scope}, namun masih memerlukan bimbingan berkala.`,
+    },
+    {
+      level: 'Baik',
+      label: 'Baik',
+      description: `Mampu menguasai materi ${scope} secara tepat dan mandiri sesuai kriteria esensial.`,
+    },
+    {
+      level: 'Sangat Baik',
+      label: 'Sangat Baik',
+      description: `Menguasai materi ${scope} melampaui kriteria esensial, mampu bernalar kritis dan membimbing rekan.`,
+    },
+  ];
+
+  return {
+    id: existingId || `criterion-${Date.now()}-${Math.random().toString(36).slice(2, 7)}-${tpItem.id}`,
+    academicSettingId,
+    tpId: tpItem.id,
+    description: `Kriteria Ketercapaian: ${tpItem.statement}`,
+    approach,
+    passingThreshold: approach === 'legacy_kkm' ? (passingThreshold ?? null) : null,
+    kompleksitas: approach === 'legacy_kkm' ? (kompleksitas ?? undefined) : undefined,
+    dayaDukung: approach === 'legacy_kkm' ? (dayaDukung ?? undefined) : undefined,
+    intake: approach === 'legacy_kkm' ? (intake ?? undefined) : undefined,
+    indicators: aiIndicators,
+    levels: aiLevels,
+    basedOnTpUpdatedAt,
+    workflowStatus: 'DRAFT',
+    generatedBy: 'AI',
+    needsReview: false,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function isCriterionProtectedFromAIOverwrite(criterion?: AssessmentCriterion): boolean {
+  if (!criterion) return false;
+  return (
+    criterion.workflowStatus === 'SIAP' ||
+    criterion.generatedBy === 'TEACHER' ||
+    criterion.generatedBy === 'AI_EDITED_BY_TEACHER'
+  );
+}
+
+export interface BulkKKTPResult {
+  canGenerate: boolean;
+  blockedReason?: string;
+  totalTPCount: number;
+  existingCount: number;
+  missingCount: number;
+  newCriteria: AssessmentCriterion[];
+  finalCriteria: AssessmentCriterion[];
+}
+
+export function performBulkKKTPGeneration(params: {
+  tp?: TPData;
+  academicSetting: AcademicSetting;
+  existingCriteria: AssessmentCriterion[];
+  isK13Curriculum?: boolean;
+}): BulkKKTPResult {
+  const { tp, academicSetting, existingCriteria, isK13Curriculum = false } = params;
+
+  if (isK13Curriculum) {
+    return {
+      canGenerate: false,
+      blockedReason: 'Fitur bulk generate KKTP hanya didukung untuk Kurikulum Merdeka.',
+      totalTPCount: 0,
+      existingCount: existingCriteria.length,
+      missingCount: 0,
+      newCriteria: [],
+      finalCriteria: existingCriteria,
+    };
+  }
+
+  if (!tp || !tp.items || tp.items.length === 0) {
+    return {
+      canGenerate: false,
+      blockedReason: 'Data Tujuan Pembelajaran (TP) tidak tersedia atau kosong.',
+      totalTPCount: 0,
+      existingCount: existingCriteria.length,
+      missingCount: 0,
+      newCriteria: [],
+      finalCriteria: existingCriteria,
+    };
+  }
+
+  if (tp.workflowStatus !== 'SIAP') {
+    return {
+      canGenerate: false,
+      blockedReason: `TP belum berstatus SIAP (${tp.workflowStatus || 'BELUM_DIMULAI'}). Selesaikan TP terlebih dahulu.`,
+      totalTPCount: tp.items.length,
+      existingCount: existingCriteria.length,
+      missingCount: 0,
+      newCriteria: [],
+      finalCriteria: existingCriteria,
+    };
+  }
+
+  if (tp.needsReview) {
+    return {
+      canGenerate: false,
+      blockedReason: 'TP membutuhkan peninjauan ulang (needsReview). Tinjau TP sebelum membuat KKTP.',
+      totalTPCount: tp.items.length,
+      existingCount: existingCriteria.length,
+      missingCount: 0,
+      newCriteria: [],
+      finalCriteria: existingCriteria,
+    };
+  }
+
+  const existingTpIdSet = new Set(existingCriteria.map((c) => c.tpId));
+  const missingTpItems = tp.items.filter((item) => !existingTpIdSet.has(item.id));
+
+  const totalTPCount = tp.items.length;
+  const missingCount = missingTpItems.length;
+  const existingCount = totalTPCount - missingCount;
+
+  if (missingCount === 0) {
+    return {
+      canGenerate: true,
+      totalTPCount,
+      existingCount,
+      missingCount: 0,
+      newCriteria: [],
+      finalCriteria: existingCriteria,
+    };
+  }
+
+  const newCriteria: AssessmentCriterion[] = missingTpItems.map((item) =>
+    createDefaultKKTPCriterionForTP({
+      tpItem: item,
+      academicSettingId: academicSetting.id,
+      basedOnTpUpdatedAt: tp.updatedAt,
+      approach: 'rubrik',
+    })
+  );
+
+  const finalCriteria = [...existingCriteria, ...newCriteria];
+
+  return {
+    canGenerate: true,
+    totalTPCount,
+    existingCount,
+    missingCount,
+    newCriteria,
+    finalCriteria,
+  };
+}
+
 export const KKTPManager: React.FC<KKTPManagerProps> = ({
   school,
   profile,
@@ -163,6 +352,8 @@ export const KKTPManager: React.FC<KKTPManagerProps> = ({
     ? calculateLegacyKKM(kompleksitas, dayaDukung, intake)
     : null;
 
+  const [isBulkGenerating, setIsBulkGenerating] = useState(false);
+
   const handleGenerateAI = () => {
     if (!activeItem) return;
     if (!isK13Curriculum && (!tp || tp.workflowStatus !== 'SIAP' || tp.needsReview)) {
@@ -173,59 +364,31 @@ export const KKTPManager: React.FC<KKTPManagerProps> = ({
       setTimeout(() => setNotification(null), 4000);
       return;
     }
-    const scope = activeItem.contentScope || activeItem.statement;
-    const comp = activeItem.competency || 'kompetensi inti';
 
-    const aiIndicators = [
-      `Mengidentifikasi dan menjelaskan materi: ${scope}`,
-      `Mempraktikkan atau menganalisis ${comp} dalam situasi kontekstual`,
-      `Menyelesaikan evaluasi terkait ${scope} secara mandiri dan akurat`,
-    ];
-    setIndicators(aiIndicators);
+    if (isCriterionProtectedFromAIOverwrite(activeCriterion)) {
+      setNotification({
+        message:
+          'Kriteria ini sudah berstatus SIAP atau telah diedit oleh guru. Silakan tinjau atau ubah secara manual agar tidak tertimpa.',
+        type: 'warning',
+      });
+      setTimeout(() => setNotification(null), 4000);
+      return;
+    }
 
-    const aiLevels: KKTPLevel[] = [
-      {
-        level: 'Perlu Bimbingan',
-        label: 'Perlu Bimbingan',
-        description: `Belum mampu menguasai konsep dasar ${scope}, masih membutuhkan pendampingan penuh dari pendidik.`,
-      },
-      {
-        level: 'Cukup',
-        label: 'Cukup',
-        description: `Mampu memahami sebagian materi ${scope}, namun masih memerlukan bimbingan berkala.`,
-      },
-      {
-        level: 'Baik',
-        label: 'Baik',
-        description: `Mampu menguasai materi ${scope} secara tepat dan mandiri sesuai kriteria esensial.`,
-      },
-      {
-        level: 'Sangat Baik',
-        label: 'Sangat Baik',
-        description: `Menguasai materi ${scope} melampaui kriteria esensial, mampu bernalar kritis dan membimbing rekan.`,
-      },
-    ];
-    setLevels(aiLevels);
-
-    // Create DRAFT recommendation criterion
-    const candidateCriterion: AssessmentCriterion = {
-      id: activeCriterion?.id || `criterion-${Date.now()}-${activeItem.id}`,
+    const candidateCriterion = createDefaultKKTPCriterionForTP({
+      tpItem: activeItem,
       academicSettingId: academicSetting.id,
-      tpId: activeItem.id,
-      description: `Kriteria Ketercapaian: ${activeItem.statement}`,
-      approach,
-      passingThreshold: approach === 'legacy_kkm' ? calculatedKkm : null,
-      kompleksitas: approach === 'legacy_kkm' ? kompleksitas : undefined,
-      dayaDukung: approach === 'legacy_kkm' ? dayaDukung : undefined,
-      intake: approach === 'legacy_kkm' ? intake : undefined,
-      indicators: aiIndicators,
-      levels: aiLevels,
       basedOnTpUpdatedAt: tp?.updatedAt,
-      workflowStatus: 'DRAFT',
-      generatedBy: 'AI',
-      needsReview: false,
-      updatedAt: new Date().toISOString(),
-    };
+      approach,
+      existingId: activeCriterion?.id,
+      kompleksitas,
+      dayaDukung,
+      intake,
+      passingThreshold: calculatedKkm,
+    });
+
+    setIndicators(candidateCriterion.indicators || []);
+    setLevels(candidateCriterion.levels || []);
 
     const updated = criteriaList.filter((c) => c.tpId !== activeItem.id).concat(candidateCriterion);
     setCriteriaList(updated);
@@ -236,6 +399,49 @@ export const KKTPManager: React.FC<KKTPManagerProps> = ({
       type: 'info',
     });
     setTimeout(() => setNotification(null), 4000);
+  };
+
+  const handleBulkGenerate = () => {
+    if (isBulkGenerating) return;
+    setIsBulkGenerating(true);
+
+    try {
+      const result = performBulkKKTPGeneration({
+        tp,
+        academicSetting,
+        existingCriteria: criteriaList,
+        isK13Curriculum,
+      });
+
+      if (!result.canGenerate) {
+        setNotification({
+          message: result.blockedReason || 'Gagal memproses bulk generate KKTP.',
+          type: 'warning',
+        });
+        setTimeout(() => setNotification(null), 4000);
+        return;
+      }
+
+      if (result.missingCount === 0) {
+        setNotification({
+          message: 'Semua TP sudah memiliki KKTP. Tidak ada DRAFT baru yang dibuat.',
+          type: 'info',
+        });
+        setTimeout(() => setNotification(null), 4000);
+        return;
+      }
+
+      setCriteriaList(result.finalCriteria);
+      onSaveCriteria(result.finalCriteria);
+
+      setNotification({
+        message: `${result.missingCount} KKTP DRAFT dibuat, ${result.existingCount} dilewati karena sudah memiliki KKTP.`,
+        type: 'success',
+      });
+      setTimeout(() => setNotification(null), 4000);
+    } finally {
+      setIsBulkGenerating(false);
+    }
   };
 
   const handleSaveCurrent = () => {
@@ -439,6 +645,20 @@ export const KKTPManager: React.FC<KKTPManagerProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            {!isK13Curriculum && (
+              <button
+                id="btn-bulk-generate-kktp"
+                type="button"
+                onClick={handleBulkGenerate}
+                disabled={isBulkGenerating}
+                className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 rounded-lg border border-indigo-200 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <Sparkles className="w-4 h-4 text-indigo-600" />
+                <span>
+                  {isBulkGenerating ? 'Membuat DRAFT...' : 'Generate KKTP yang Belum Ada'}
+                </span>
+              </button>
+            )}
             <button
               id="btn-export-kktp"
               type="button"

@@ -24,13 +24,11 @@ import {
   TPItem,
   ATPData,
   ATPItem,
-  AcademicSetting,
 } from '../types';
 import { validateProjectTransfer } from './projectTransferService';
 import {
   validateCPAnalysisDataWorkflow,
   validateTPDataWorkflow,
-  validateATPDataWorkflow,
 } from './cpWorkflowService';
 
 export interface ProjectTransferImportParams {
@@ -138,7 +136,7 @@ export function performImportProjectTransferInState(
     grade: targetGrade,
     ...(targetClassSection ? { classSection: targetClassSection } : {}),
     subject: targetSubject,
-    subjectCode: targetSubject,
+    ...(isMerdeka ? { subjectCode: targetSubject } : {}),
     ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
     curriculumLock: {
       curriculumType: pkg.curriculumType,
@@ -187,7 +185,7 @@ export function performImportProjectTransferInState(
     const code = c.code && c.code.trim() ? c.code.trim() : undefined;
     return {
       id: `elem-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 7)}`,
-      ...(code ? { code } : {}),
+      ...(isMerdeka && code ? { code } : {}),
       name: (c.element || c.code || `Elemen ${idx + 1}`).trim(),
       content: (c.content || '').trim(),
     };
@@ -337,13 +335,13 @@ export function performImportProjectTransferInState(
     id: newTPDataId,
     academicSettingId: newYearPlanId,
     workspaceId: newWorkspaceId,
-    cpId: newCPData.id,
+    ...(isMerdeka ? { cpId: newCPData.id } : {}),
     ...(isMerdeka && newCPAnalysisData ? { cpAnalysisId: newCPAnalysisData.id } : {}),
     academicYear: targetAcademicYear,
-    subjectCode: targetSubject,
+    ...(isMerdeka ? { subjectCode: targetSubject } : {}),
     ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
     items: tpItems,
-    basedOnCpUpdatedAt: newCPData.updatedAt,
+    ...(isMerdeka ? { basedOnCpUpdatedAt: newCPData.updatedAt } : {}),
     ...(isMerdeka && newCPAnalysisData ? { basedOnAnalysisUpdatedAt: newCPAnalysisData.updatedAt } : {}),
     status: 'DRAFT',
     workflowStatus: 'DRAFT',
@@ -355,17 +353,20 @@ export function performImportProjectTransferInState(
   };
 
   if (isMerdeka && newCPAnalysisData) {
-    if (newCPAnalysisData.workflowStatus !== 'SIAP') {
-      newTPData.workflowStatus = 'DRAFT';
-      newTPData.status = 'DRAFT';
-    } else {
-      const tpValidation = validateTPDataWorkflow(newTPData, newCPData, newCPAnalysisData);
-      newTPData.workflowStatus = tpValidation.status;
-      newTPData.status = tpValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
-    }
+    const tpValidation = validateTPDataWorkflow(
+      newTPData,
+      newCPData,
+      newCPAnalysisData
+    );
+
+    newTPData.workflowStatus =
+      tpItems.length === 0
+        ? 'BELUM_DIMULAI'
+        : newCPAnalysisData.workflowStatus === 'SIAP' && tpValidation.isSiap
+        ? 'SIAP'
+        : 'PERLU_DILENGKAPI';
   } else {
     newTPData.workflowStatus = 'DRAFT';
-    newTPData.status = 'DRAFT';
   }
 
   // 7. Generate fresh internal IDs for ATPData and ATPItems
@@ -400,7 +401,7 @@ export function performImportProjectTransferInState(
       id: freshATPItemId,
       stepNumber: a.order ?? idx + 1,
       sequence: a.order ?? idx + 1,
-      linkedTpIds: [matchedTPItem.id],
+      ...(isMerdeka ? { linkedTpIds: [matchedTPItem.id] } : {}),
       tpId: matchedTPItem.id,
       tpCode: matchedTPItem.code,
       tpStatement: matchedTPItem.statement,
@@ -424,14 +425,14 @@ export function performImportProjectTransferInState(
     workspaceId: newWorkspaceId,
     tpDataId: newTPDataId,
     academicYear: targetAcademicYear,
-    subjectCode: targetSubject,
+    ...(isMerdeka ? { subjectCode: targetSubject } : {}),
     ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
     items: atpItems,
     totalJP: knownTotalJP > 0 ? knownTotalJP : undefined,
     knownTotalJP,
     hasUnknownJP,
     allocationComplete: false,
-    basedOnTpUpdatedAt: newTPData.updatedAt,
+    ...(isMerdeka ? { basedOnTpUpdatedAt: newTPData.updatedAt } : {}),
     status: 'DRAFT',
     workflowStatus: 'DRAFT',
     provenance: {
@@ -440,29 +441,6 @@ export function performImportProjectTransferInState(
     },
     updatedAt: now,
   };
-
-  const academicSettingForVal: AcademicSetting = {
-    id: newYearPlanId,
-    schoolId: state.activeProfileId || '',
-    workspaceId: newWorkspaceId,
-    academicYear: targetAcademicYear,
-    subjectCode: targetSubject,
-    grade: targetGrade,
-    ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
-    curriculumType: pkg.curriculumType,
-    updatedAt: now,
-  };
-
-  const atpValidation = validateATPDataWorkflow(
-    newATPData,
-    newTPData,
-    academicSettingForVal,
-    newCPData,
-    isMerdeka ? newCPAnalysisData : undefined
-  );
-
-  newATPData.workflowStatus = atpValidation.status;
-  newATPData.status = atpValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
 
   // 9. Save hierarchy & annualData entries for the new YearPlan
   state.yearPlans.push(newYearPlan);
