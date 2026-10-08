@@ -1,10 +1,6 @@
 import { performImportProjectTransferInState } from '../src/services/projectTransferImportService';
 import { createInitialStorageV5 } from '../src/services/storageV5';
 import { ProjectTransferPackage } from '../src/types/projectTransfer';
-import {
-  validateTPDataWorkflow,
-  validateCPAnalysisDataWorkflow,
-} from '../src/services/cpWorkflowService';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -52,8 +48,7 @@ console.log('Testing Scenario A: Valid Merdeka v1...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    version: '1.0',
-    exportedAt: new Date().toISOString(),
+    schemaVersion: '1.0',
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -132,8 +127,7 @@ console.log('Testing Scenario B: Missing competence / materialScope...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    version: '1.0',
-    exportedAt: new Date().toISOString(),
+    schemaVersion: '1.0',
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -184,8 +178,7 @@ console.log('Testing Scenario C: Invalid legacy TP code...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    version: '1.0',
-    exportedAt: new Date().toISOString(),
+    schemaVersion: '1.0',
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -233,8 +226,7 @@ console.log('Testing Scenario D: ATP import...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    version: '1.0',
-    exportedAt: new Date().toISOString(),
+    schemaVersion: '1.0',
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -287,8 +279,7 @@ console.log('Testing Scenario E: K13 curriculum...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    version: '1.0',
-    exportedAt: new Date().toISOString(),
+    schemaVersion: '1.0',
     academicYear: '2026/2027',
     curriculumType: 'K13',
     level: 'SD',
@@ -337,8 +328,7 @@ console.log('Testing Scenario F: TP belum SIAP -> ATP TIDAK BOLEH SIAP...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    version: '1.0',
-    exportedAt: new Date().toISOString(),
+    schemaVersion: '1.0',
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -386,8 +376,7 @@ console.log('Testing Scenario G: Focus ATP kosong -> ATP TIDAK BOLEH SIAP...');
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    version: '1.0',
-    exportedAt: new Date().toISOString(),
+    schemaVersion: '1.0',
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',
@@ -436,8 +425,7 @@ console.log('Testing Scenario H: Missing TP coverage -> ATP TIDAK BOLEH SIAP...'
 {
   const state = createTestState();
   const pkg: ProjectTransferPackage = {
-    version: '1.0',
-    exportedAt: new Date().toISOString(),
+    schemaVersion: '1.0',
     academicYear: '2026/2027',
     curriculumType: 'KURIKULUM_MERDEKA',
     level: 'SD',

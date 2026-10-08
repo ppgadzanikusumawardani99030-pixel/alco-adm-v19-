@@ -14,7 +14,6 @@ import {
   AdministrationWorkspaceV5,
 } from '../types/storageV5';
 import {
-  AcademicSetting,
   YearPlan,
   SemesterPlan,
   CPData,
@@ -30,7 +29,6 @@ import { validateProjectTransfer } from './projectTransferService';
 import {
   validateCPAnalysisDataWorkflow,
   validateTPDataWorkflow,
-  validateATPDataWorkflow,
 } from './cpWorkflowService';
 
 export interface ProjectTransferImportParams {
@@ -440,27 +438,6 @@ export function performImportProjectTransferInState(
     },
     updatedAt: now,
   };
-
-  const academicSettingForVal: AcademicSetting = {
-    id: newYearPlanId,
-    schoolId: state.activeProfileId || '',
-    workspaceId: newWorkspaceId,
-    academicYear: targetAcademicYear,
-    subjectCode: targetSubject,
-    grade: targetGrade,
-    ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
-    curriculumType: pkg.curriculumType,
-    updatedAt: now,
-  };
-  const atpValidation = validateATPDataWorkflow(
-    newATPData,
-    newTPData,
-    academicSettingForVal,
-    newCPData,
-    isMerdeka ? newCPAnalysisData : undefined
-  );
-  newATPData.workflowStatus = atpValidation.status;
-  newATPData.status = atpValidation.status === 'SIAP' ? 'SIAP' : 'DRAFT';
 
   // 9. Save hierarchy & annualData entries for the new YearPlan
   state.yearPlans.push(newYearPlan);
