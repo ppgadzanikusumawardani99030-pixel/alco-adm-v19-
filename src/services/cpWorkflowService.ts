@@ -492,8 +492,12 @@ export function validateTPDataWorkflow(
     }
   }
 
-  // Check CP Analysis validity if CP Analysis is provided
-  if (cpAnalysis) {
+  // Check CP Analysis validity
+  if (!cpAnalysis) {
+    if (tp.items && tp.items.length > 0) {
+      issues.push('Analisis CP rujukan belum tersedia.');
+    }
+  } else {
     const cpAnalysisValidation = validateCPAnalysisDataWorkflow(cpAnalysis, cp);
     if (!cpAnalysisValidation.isSiap) {
       issues.push('Analisis CP rujukan belum memenuhi status SIAP.');

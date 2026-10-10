@@ -19,6 +19,7 @@ import {
   normalizeDeepLearningContext,
   normalizeAIResources,
 } from './learningPlanService';
+import { recordDiagnosticEvent } from './diagnosticService';
 
 export interface CanonicalCPAnalysisResult {
   generalSummary: string;
@@ -951,13 +952,31 @@ export async function generateATPWithAI(
 ): Promise<GenerateATPResult> {
   try {
     // 1. Health preflight
-    const health = options?.backendReady || (await waitForAIBackendReady());
+    let health: AIBackendReadyResult;
+    try {
+      health = options?.backendReady || (await waitForAIBackendReady());
+    } catch (healthErr: any) {
+      const attempts = (healthErr as any)?.attempts || 6;
+      const reason = healthErr?.message || 'Backend health check gagal.';
+      recordDiagnosticEvent({
+        scope: 'ATP',
+        action: 'ATP_BACKEND_NOT_READY',
+        status: 'FAILED',
+        metadata: {
+          healthAttempts: attempts,
+          reason,
+        },
+      });
+      throw healthErr;
+    }
 
     // 2. Resolve key source
     let preferLocalKey = options?.preferLocalKeyOnFirstRequest;
+    let localKey = getGeminiApiKey();
+    let keySource: 'SERVER' | 'LOCAL' = health.geminiConfigured ? 'SERVER' : 'LOCAL';
+
     if (preferLocalKey === undefined) {
       if (!health.geminiConfigured) {
-        let localKey = getGeminiApiKey();
         if (!localKey || !localKey.trim()) {
           try {
             localKey = await ensureGeminiApiKey();
@@ -969,10 +988,27 @@ export async function generateATPWithAI(
           }
         }
         preferLocalKey = true;
+        keySource = 'LOCAL';
       } else {
         preferLocalKey = false;
+        keySource = 'SERVER';
       }
+    } else {
+      keySource = preferLocalKey ? 'LOCAL' : 'SERVER';
     }
+
+    // Catat ATP_BACKEND_READY SEBELUM Generate ATP POST dikirim
+    recordDiagnosticEvent({
+      scope: 'ATP',
+      action: 'ATP_BACKEND_READY',
+      status: 'READY',
+      metadata: {
+        healthAttempts: health.attempts,
+        serverGeminiConfigured: health.geminiConfigured,
+        localKeyPresent: Boolean(localKey && localKey.trim()),
+        keySource,
+      },
+    });
 
     // 3. POST ATP TEPAT SATU KALI
     const res = await aiFetch(

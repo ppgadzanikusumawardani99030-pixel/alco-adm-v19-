@@ -3,6 +3,7 @@ import { validateProjectTransfer } from '../src/services/projectTransferService'
 import { createInitialStorageV5 } from '../src/services/storageV5';
 import { ProjectTransferPackage } from '../src/types/projectTransfer';
 import { validateWorkflowDependencies } from '../src/services/workflowEngine';
+import { validateTPDataWorkflow } from '../src/services/cpWorkflowService';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -108,7 +109,6 @@ console.log('Testing Scenario A: Valid Merdeka v1...');
   assert(res.cp.elements.length === 1, 'CP elements count harus 1');
   assert(res.cp.elements[0].code === 'E1', 'Internal code CP element harus E1');
   assert(res.cp.workflowStatus === 'PERLU_DILENGKAPI', `CP workflowStatus harus PERLU_DILENGKAPI (got ${res.cp.workflowStatus})`);
-  assert(res.cp.status === 'DRAFT', `CP status harus DRAFT (got ${res.cp.status})`);
 
   // CP Analysis must NOT be created synthetically from TP
   assert(res.cpAnalysis === undefined, 'CPAnalysis tidak boleh dibuat secara sintetis saat import Merdeka');
@@ -118,7 +118,8 @@ console.log('Testing Scenario A: Valid Merdeka v1...');
   // TP checks: draft seed, review flagged, workflowStatus PERLU_DILENGKAPI
   assert(res.tp.items.length === 2, 'TP items count harus 2');
   assert(res.tp.items[0].cpAnalysisItemIds === undefined, 'TP item 0 cpAnalysisItemIds harus undefined (tidak ada fake linkage)');
-  assert(res.tp.items[0].needsReview === true, 'TP item 0 needsReview harus true');
+  assert((res.tp.items[0] as any).needsReview === undefined, 'TPItem tidak boleh memiliki needsReview');
+  assert(res.tp.needsReview === true, 'TPData needsReview harus true');
   assert(res.tp.workflowStatus === 'PERLU_DILENGKAPI', `TP workflowStatus harus PERLU_DILENGKAPI (got ${res.tp.workflowStatus})`);
   assert(res.tp.status === 'DRAFT', `TP status harus DRAFT (got ${res.tp.status})`);
 
@@ -643,7 +644,8 @@ console.log('Testing Scenario J: PJOK Legacy Seed Import & Workflow Chain Author
   assert(res.tp.items[0].competence === 'Mempraktikkan', 'Competence TP asli dipertahankan');
   assert(res.tp.items[0].contentScope === 'Pola gerak dasar 1', 'ContentScope TP asli dipertahankan');
   assert(res.tp.items[0].cpAnalysisItemIds === undefined, 'TP tidak boleh memiliki fake cpAnalysisItemIds');
-  assert(res.tp.items[0].needsReview === true, 'TP needsReview harus true');
+  assert((res.tp.items[0] as any).needsReview === undefined, 'TPItem tidak boleh memiliki needsReview');
+  assert(res.tp.needsReview === true, 'TPData needsReview harus true');
   assert(res.tp.workflowStatus === 'PERLU_DILENGKAPI', 'TP workflowStatus harus PERLU_DILENGKAPI');
 
   // D. ATP Assertions
@@ -687,6 +689,66 @@ console.log('Testing Scenario J: PJOK Legacy Seed Import & Workflow Chain Author
   assert(wf.stepStates.tp.status === 'BLOCKED', 'Workflow TP harus BLOCKED sebelum CP Analysis SIAP');
   assert(wf.stepStates.atp.isComplete === false, 'Workflow ATP tidak boleh COMPLETE');
   assert(wf.stepStates.atp.status === 'BLOCKED', 'Workflow ATP harus BLOCKED sebelum TP SIAP');
+}
+
+// ==========================================
+// SCENARIO K: TP Validator fail-closed saat CP Analysis undefined
+// ==========================================
+console.log('Testing Scenario K: TP Validator fail-closed saat CP Analysis undefined...');
+{
+  const testCP = {
+    id: 'cp-001',
+    academicSettingId: 'yp-001',
+    generalDescription: 'Peserta didik memahami konsep bilangan bulat dan operasinya.',
+    elements: [
+      { id: 'elem-01', code: 'E1', name: 'Bilangan', content: 'Memahami bilangan cacah.' },
+    ],
+    source: {
+      title: 'CP Matematika Fase B',
+      institution: 'Kemendikbudristek',
+      retrievedAt: new Date().toISOString(),
+      verificationStatus: 'verified_official',
+    },
+    workflowStatus: 'SIAP' as const,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const testTP = {
+    id: 'tp-001',
+    academicSettingId: 'yp-001',
+    academicYear: '2024/2025',
+    subjectCode: 'Matematika',
+    phase: 'B',
+    items: [
+      {
+        id: 'tp-item-01',
+        code: 'E1-BLG-01',
+        elementName: 'Bilangan',
+        statement: 'Membaca dan menuliskan bilangan cacah sampai 10.000.',
+        competence: 'Membaca dan menuliskan',
+        contentScope: 'Bilangan cacah sampai 10.000',
+        order: 1,
+        sequence: 1,
+        status: 'DRAFT' as const,
+      },
+    ],
+    workflowStatus: 'PERLU_DILENGKAPI' as const,
+    updatedAt: new Date().toISOString(),
+  };
+
+  const validation = validateTPDataWorkflow(testTP, testCP as any, undefined, {
+    id: 'yp-001',
+    subject: 'Matematika',
+    academicYear: '2024/2025',
+    phase: 'B',
+  } as any);
+
+  assert(validation.isSiap === false, 'validateTPDataWorkflow(...).isSiap harus false saat cpAnalysis undefined');
+  assert(validation.status === 'PERLU_DILENGKAPI', 'status harus PERLU_DILENGKAPI saat cpAnalysis undefined');
+  assert(
+    validation.issues.includes('Analisis CP rujukan belum tersedia.'),
+    'issues harus mengandung "Analisis CP rujukan belum tersedia."'
+  );
 }
 
 console.log('--- ALL REGRESSION TESTS PASSED SUCCESSFULLY ---');

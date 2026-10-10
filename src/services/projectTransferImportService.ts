@@ -207,7 +207,6 @@ export function performImportProjectTransferInState(
     academicSettingId: newYearPlanId,
     generalDescription: cpGeneralDescription,
     elements: cpElements,
-    status: 'DRAFT',
     workflowStatus: isMerdeka ? 'PERLU_DILENGKAPI' : 'DRAFT',
     lastEditedAt: now,
     updatedAt: now,
@@ -240,12 +239,6 @@ export function performImportProjectTransferInState(
       order: idx + 1,
       sequence: idx + 1,
       status: 'DRAFT',
-      ...(isMerdeka
-        ? {
-            needsReview: true,
-            reviewReason: 'TP hasil import perlu diselaraskan dengan Analisis CP canonical.',
-          }
-        : {}),
       provenance: {
         generatedBy: 'USER',
         generatedAt: now,
