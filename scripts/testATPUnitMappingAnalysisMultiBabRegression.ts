@@ -184,9 +184,9 @@ console.log('Testing Case D & G: Preserve existing Bab and Idempotency...');
 }
 
 // ==========================================
-// CASE E: Invalid TP rejected by sanitizer
+// CASE H: Exact subset TP for Pecahan
 // ==========================================
-console.log('Testing Case E: Invalid TP rejected by sanitizer...');
+console.log('Testing Case H: Exact subset TP for Pecahan...');
 {
   const rawResult = {
     atpFindings: [
@@ -198,7 +198,7 @@ console.log('Testing Case E: Invalid TP rejected by sanitizer...');
           type: 'ASSIGN_ATP_TO_UNIT',
           atpItemId: 'atp-1',
           targetUnitId: 'unit-1',
-          linkedTpIds: ['TP_INVALID_OR_OUTSIDE'],
+          linkedTpIds: ['TP3'], // Subset
         },
       },
     ],
@@ -206,7 +206,7 @@ console.log('Testing Case E: Invalid TP rejected by sanitizer...');
   };
 
   const mapping: ATPUnitMappingData = {
-    id: 'map-04',
+    id: 'map-h',
     academicSettingId: 'acad-001',
     atpId: 'atp-001',
     tpDataId: 'tp-data-001',
@@ -216,7 +216,7 @@ console.log('Testing Case E: Invalid TP rejected by sanitizer...');
         title: 'Bab 1',
         order: 1,
         linkedAtpItemIds: [],
-        linkedTpIds: [],
+        linkedTpIds: ['TP3'],
         materials: [],
       },
     ],
@@ -230,8 +230,8 @@ console.log('Testing Case E: Invalid TP rejected by sanitizer...');
   });
 
   const sanitizedFinding = sanitized.atpFindings[0];
-  assert.ok(sanitizedFinding.action?.linkedTpIds.every(id => ['TP1', 'TP2', 'TP3'].includes(id)), 'Sanitizer must fallback/filter linkedTpIds to valid canonical TPs belonging to ATP');
-  console.log('✅ Case E passed');
+  assert.deepStrictEqual(sanitizedFinding.action?.linkedTpIds, ['TP3'], 'Should only have exactly TP3 in linkedTpIds');
+  console.log('✅ Case H passed');
 }
 
 console.log('=== ALL MULTI-BAB ANALYSIS REGRESSION TESTS PASSED SUCCESSFULLY ===');

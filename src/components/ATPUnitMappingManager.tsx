@@ -990,11 +990,14 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       (m) => m.action && selectedAnalysisActionIds.has(m.id)
     );
 
-    // 1. Apply ASSIGN_ATP_TO_UNIT actions (Support multi-unit ATP: do not remove from other units)
-    selectedAtpFindings.forEach((f) => {
+    // 1. Apply ASSIGN_ATP_TO_UNIT actions
+    for (const f of selectedAtpFindings) {
       const action = f.action!;
       const atpItemId = action.atpItemId;
       const targetUnitId = action.targetUnitId;
+      const actionLinkedTpIds = Array.isArray(action.linkedTpIds) ? action.linkedTpIds : [];
+      
+      if (actionLinkedTpIds.length === 0) continue; // Skip if no valid TP subset provided
 
       nextUnits = nextUnits.map((u) => {
         if (u.id !== targetUnitId) return u;
@@ -1002,26 +1005,16 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         if (!nextLinkedAtp.includes(atpItemId)) {
           nextLinkedAtp.push(atpItemId);
         }
-        const atpItem = atpItemMap.get(atpItemId);
-        const actionLinkedTpIds = Array.isArray(action.linkedTpIds) && action.linkedTpIds.length > 0
-          ? action.linkedTpIds
-          : [];
-        const fallbackTps = Array.isArray(atpItem?.linkedTpIds) && atpItem.linkedTpIds.length > 0
-          ? atpItem.linkedTpIds
-          : atpItem?.tpId
-          ? [atpItem.tpId]
-          : [];
-        const itemTps = actionLinkedTpIds.length > 0 ? actionLinkedTpIds : fallbackTps;
-        const nextTpIds = Array.from(new Set([...(u.linkedTpIds || []), ...itemTps]));
+        const nextTpIds = Array.from(new Set([...(u.linkedTpIds || []), ...actionLinkedTpIds]));
 
         return {
           ...u,
           linkedAtpItemIds: nextLinkedAtp,
           linkedTpIds: nextTpIds,
-          materials: u.materials, // FIX 1: Preserve materials exactly as-is
+          materials: u.materials,
         };
       });
-    });
+    }
 
     // 2. Apply ADD_MATERIAL_TO_UNIT actions
     selectedMaterialFindings.forEach((m) => {

@@ -274,7 +274,7 @@ TUGAS ANDA ADALAH MELAKUKAN ANALISIS PEMETAAN (READ-ONLY ANALYSIS) antara Bab & 
    - Membuat Bab baru (ID Bab fiktif dilarang)
    - Membuat TP fiktif atau ATP fiktif
    - Mengubah urutan langkah ATP
-3. KONTRAK CANONICAL ATP: Setiap langkah ATP dapat mendukung 1..n Bab/Unit. Langkah ATP tidak dibatasi hanya untuk satu Bab tunggal. Setiap Bab/Materi berhak memilih subset TP yang relevan dari ATP tersebut. ATP YANG SUDAH DIPETAKAN KE SATU BAB TETAP BOLEH DIREKOMENDASIKAN KE BAB LAIN jika secara semantik relevan. Jangan memindahkan ATP. Tambahkan relasi ke Bab lain. Untuk setiap ASSIGN_ATP_TO_UNIT wajib mengembalikan linkedTpIds yang merupakan subset TP canonical dari ATP tersebut.
+3. KONTRAK CANONICAL ATP: Evaluasi setiap ATP terhadap semua Bab yang belum memiliki ATP tersebut. ATP yang sudah berada di satu atau lebih Bab tetap boleh direkomendasikan ke Bab lain jika evidence semantic kuat. Jangan memindahkan ATP. ASSIGN_ATP_TO_UNIT wajib membawa linkedTpIds berupa subset TP canonical yang relevan terhadap target Bab. Jika subset tidak dapat ditentukan dengan yakin, REVIEW tanpa action.
    Format action ASSIGN_ATP_TO_UNIT:
    {
      "type": "ASSIGN_ATP_TO_UNIT",
@@ -463,10 +463,12 @@ export function sanitizeMappingAnalysisResult(
         const atpObj = atpMap.get(atpItemId);
         const canonicalTpIds = getCanonicalTpsForAtpItem(atpObj).filter(id => validTpIds.has(id));
         const rawLinkedTps = (Array.isArray(f.action.linkedTpIds) ? f.action.linkedTpIds : [])
-          .map((id: any) => String(id).trim())
-          .filter((id: string) => validTpIds.has(id) && canonicalTpIds.includes(id));
+          .map((id: any) => String(id).trim());
 
-        if (rawLinkedTps.length > 0) {
+        const allValid = rawLinkedTps.length > 0 &&
+                         rawLinkedTps.every(id => validTpIds.has(id) && canonicalTpIds.includes(id));
+
+        if (allValid) {
           const targetMatId = f.action.targetMaterialId;
           const targetMatValid = targetMatId && validMaterialMap.get(targetMatId) === targetUnitId;
 
