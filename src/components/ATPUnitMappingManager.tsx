@@ -1003,11 +1003,15 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
           nextLinkedAtp.push(atpItemId);
         }
         const atpItem = atpItemMap.get(atpItemId);
-        const itemTps = Array.isArray(atpItem?.linkedTpIds) && atpItem.linkedTpIds.length > 0
+        const actionLinkedTpIds = Array.isArray(action.linkedTpIds) && action.linkedTpIds.length > 0
+          ? action.linkedTpIds
+          : [];
+        const fallbackTps = Array.isArray(atpItem?.linkedTpIds) && atpItem.linkedTpIds.length > 0
           ? atpItem.linkedTpIds
           : atpItem?.tpId
           ? [atpItem.tpId]
           : [];
+        const itemTps = actionLinkedTpIds.length > 0 ? actionLinkedTpIds : fallbackTps;
         const nextTpIds = Array.from(new Set([...(u.linkedTpIds || []), ...itemTps]));
 
         return {
@@ -1179,7 +1183,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       saveButtonClass = 'text-white bg-blue-800 hover:bg-blue-900 ring-2 ring-blue-500/20 cursor-pointer shadow-xs';
     } else {
       // Condition A: mapping ADA + !hasChanges
-      saveButtonText = '✓ Tersimpan';
+      saveButtonText = localValidation.isValid && !localValidation.isComplete ? '✓ Draf tersimpan' : '✓ Tersimpan';
       isSaveButtonDisabled = true;
       saveButtonClass = 'text-emerald-700 bg-emerald-50 border border-emerald-200 cursor-default opacity-90';
     }

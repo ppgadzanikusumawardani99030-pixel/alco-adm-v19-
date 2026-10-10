@@ -1254,6 +1254,7 @@ export interface MappingAnalysisResult {
       type: 'ASSIGN_ATP_TO_UNIT';
       atpItemId: string;
       targetUnitId: string;
+      linkedTpIds: string[];
       targetMaterialId?: string;
     };
   }>;

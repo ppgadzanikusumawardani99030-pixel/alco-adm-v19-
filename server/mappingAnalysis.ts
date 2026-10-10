@@ -31,6 +31,7 @@ export interface MappingAnalysisResult {
       type: 'ASSIGN_ATP_TO_UNIT';
       atpItemId: string;
       targetUnitId: string;
+      linkedTpIds: string[];
       targetMaterialId?: string;
     };
   }>;
@@ -273,7 +274,15 @@ TUGAS ANDA ADALAH MELAKUKAN ANALISIS PEMETAAN (READ-ONLY ANALYSIS) antara Bab & 
    - Membuat Bab baru (ID Bab fiktif dilarang)
    - Membuat TP fiktif atau ATP fiktif
    - Mengubah urutan langkah ATP
-3. KONTRAK CANONICAL ATP: Setiap langkah ATP dapat mendukung 1..n Bab/Unit. Langkah ATP tidak dibatasi hanya untuk satu Bab tunggal. Setiap Bab/Materi berhak memilih subset TP yang relevan dari ATP tersebut.
+3. KONTRAK CANONICAL ATP: Setiap langkah ATP dapat mendukung 1..n Bab/Unit. Langkah ATP tidak dibatasi hanya untuk satu Bab tunggal. Setiap Bab/Materi berhak memilih subset TP yang relevan dari ATP tersebut. ATP YANG SUDAH DIPETAKAN KE SATU BAB TETAP BOLEH DIREKOMENDASIKAN KE BAB LAIN jika secara semantik relevan. Jangan memindahkan ATP. Tambahkan relasi ke Bab lain. Untuk setiap ASSIGN_ATP_TO_UNIT wajib mengembalikan linkedTpIds yang merupakan subset TP canonical dari ATP tersebut.
+   Format action ASSIGN_ATP_TO_UNIT:
+   {
+     "type": "ASSIGN_ATP_TO_UNIT",
+     "atpItemId": "string",
+     "targetUnitId": "string",
+     "linkedTpIds": ["string"],
+     "targetMaterialId": "string (opsional)"
+   }
 4. ANALISIS SEMANTIK KONSERVATIF:
    - Jangan menyarankan Bab tanpa bukti keselarasan yang kuat/jelas.
    - Jika suatu langkah ATP memiliki keterkaitan ambigu ke beberapa Bab, atau tidak ada Bab yang cocok, beri status "REVIEW" tanpa action otomatis.
@@ -440,22 +449,36 @@ export function sanitizeMappingAnalysisResult(
 
     let action: MappingAnalysisResult['atpFindings'][0]['action'] = undefined;
     if (
-      status === 'UNMAPPED' &&
       f?.action &&
       f.action.type === 'ASSIGN_ATP_TO_UNIT' &&
       f.action.atpItemId === atpItemId &&
       f.action.targetUnitId &&
       validUnitIds.has(f.action.targetUnitId)
     ) {
-      const targetMatId = f.action.targetMaterialId;
-      const targetMatValid = targetMatId && validMaterialMap.get(targetMatId) === f.action.targetUnitId;
+      const targetUnitId = f.action.targetUnitId;
+      const targetUnit = (currentMapping.units || []).find(u => u.id === targetUnitId);
+      const alreadyHasAtp = (targetUnit?.linkedAtpItemIds || []).includes(atpItemId);
 
-      action = {
-        type: 'ASSIGN_ATP_TO_UNIT',
-        atpItemId,
-        targetUnitId: f.action.targetUnitId,
-        targetMaterialId: targetMatValid ? targetMatId : undefined,
-      };
+      if (!alreadyHasAtp) {
+        const atpObj = atpMap.get(atpItemId);
+        const canonicalTpIds = getCanonicalTpsForAtpItem(atpObj).filter(id => validTpIds.has(id));
+        const rawLinkedTps = (Array.isArray(f.action.linkedTpIds) ? f.action.linkedTpIds : [])
+          .map((id: any) => String(id).trim())
+          .filter((id: string) => validTpIds.has(id) && canonicalTpIds.includes(id));
+
+        const linkedTpIds = rawLinkedTps.length > 0 ? rawLinkedTps : canonicalTpIds;
+
+        const targetMatId = f.action.targetMaterialId;
+        const targetMatValid = targetMatId && validMaterialMap.get(targetMatId) === targetUnitId;
+
+        action = {
+          type: 'ASSIGN_ATP_TO_UNIT',
+          atpItemId,
+          targetUnitId,
+          linkedTpIds,
+          targetMaterialId: targetMatValid ? targetMatId : undefined,
+        };
+      }
     }
 
     // Multi-Bab subset validation check
@@ -917,6 +940,33 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
     const best = scores[0];
     const second = scores[1];
 
+    const unassignedScores = scores.filter((s) => !(s.unit.linkedAtpItemIds || []).includes(item.id));
+    unassignedScores.sort((a, b) => b.totalScore - a.totalScore);
+    const bestUnassigned = unassignedScores[0];
+
+    let multiBabAction: any = undefined;
+    if (bestUnassigned && bestUnassigned.totalScore >= 3.0 && (bestUnassigned.primaryScore > 0 || bestUnassigned.totalScore >= 4.0)) {
+      const canonicalTps = rawLinked;
+      const relevantTps = canonicalTps.filter((tpId) => {
+        const t = tpMap.get(tpId);
+        const tTokens = extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''}`);
+        const unitTokens = bestUnassigned.unit.title ? extractSubstantiveTokens(bestUnassigned.unit.title) : [];
+        const matTokens = (bestUnassigned.unit.materials || []).flatMap(m => extractSubstantiveTokens(m.title || ''));
+        const combined = [...unitTokens, ...matTokens];
+        return tTokens.some(tok => combined.includes(tok));
+      });
+      const finalLinkedTps = relevantTps.length > 0 ? relevantTps : canonicalTps;
+      const matchingMat = (bestUnassigned.unit.materials || []).find((m) => extractSubstantiveTokens(m.title || '').some((t) => allItemTokens.includes(t)));
+
+      multiBabAction = {
+        type: 'ASSIGN_ATP_TO_UNIT',
+        atpItemId: item.id,
+        targetUnitId: bestUnassigned.unit.id,
+        linkedTpIds: finalLinkedTps,
+        targetMaterialId: matchingMat?.id,
+      };
+    }
+
     if (isMapped) {
       if (mappedUnits.length > 1) {
         const canonicalTpIds = rawLinked.filter((id) => tpMap.has(id));
@@ -938,6 +988,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
             supportingTpIds: canonicalTpIds,
             strength: 'STRONG',
             reason: `Langkah ATP ini mendukung ${mappedUnits.length} Bab (${babList}) dengan pembagian subset TP yang valid dan lengkap.`,
+            action: multiBabAction,
           });
         } else {
           atpFindings.push({
@@ -947,6 +998,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
             supportingTpIds: canonicalTpIds,
             strength: 'LOW',
             reason: `Pembagian TP untuk langkah ATP ini lintas Bab (${babList}) belum lengkap atau belum valid.`,
+            action: multiBabAction,
           });
         }
       } else {
@@ -963,25 +1015,25 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
           reason: isAligned 
             ? `Langkah ATP dan rumusan TP tertaut selaras dengan fokus Bab ${currentUnit.order}: '${currentUnit.title}'.`
             : 'Hubungan ATP dengan Bab saat ini belum cukup kuat untuk dinyatakan selaras secara otomatis.',
+          action: multiBabAction,
         });
       }
     } else {
-      if (!best || best.totalScore < 3.0 || (best.primaryScore === 0 && best.totalScore < 4.0)) {
+      if (!bestUnassigned || bestUnassigned.totalScore < 3.0 || (bestUnassigned.primaryScore === 0 && bestUnassigned.totalScore < 4.0)) {
         atpFindings.push({ id: `atp-find-${idx + 1}`, atpItemId: item.id, status: 'REVIEW', supportingTpIds: rawLinked, strength: 'LOW', reason: 'Belum ditemukan bukti keselarasan yang cukup kuat dengan Bab yang ada.' });
-      } else if (second && second.totalScore > 0 && best.totalScore - second.totalScore < 1.5 && best.totalScore < 6.0) {
-        atpFindings.push({ id: `atp-find-${idx + 1}`, atpItemId: item.id, status: 'REVIEW', supportingTpIds: rawLinked, strength: 'LOW', reason: `Langkah ATP memiliki keterkaitan yang hampir sama dengan beberapa Bab (Bab ${best.unit.order} & Bab ${second.unit.order}).` });
       } else {
-        const matchingMat = (best.unit.materials || []).find((m) => extractSubstantiveTokens(m.title || '').some((t) => allItemTokens.includes(t)));
+        const targetUnit = bestUnassigned.unit;
+        const matchingMat = (targetUnit.materials || []).find((m) => extractSubstantiveTokens(m.title || '').some((t) => allItemTokens.includes(t)));
         atpFindings.push({
           id: `atp-find-${idx + 1}`,
           atpItemId: item.id,
           status: 'UNMAPPED',
-          suggestedUnitId: best.unit.id,
+          suggestedUnitId: targetUnit.id,
           suggestedMaterialId: matchingMat?.id,
           supportingTpIds: rawLinked,
-          strength: best.totalScore >= 6.0 ? 'STRONG' : 'MODERATE',
-          reason: `Topik langkah ATP memiliki keterkaitan substantif dengan tema Bab ${best.unit.order}: '${best.unit.title}'.`,
-          action: { type: 'ASSIGN_ATP_TO_UNIT', atpItemId: item.id, targetUnitId: best.unit.id, targetMaterialId: matchingMat?.id },
+          strength: bestUnassigned.totalScore >= 6.0 ? 'STRONG' : 'MODERATE',
+          reason: `Topik langkah ATP memiliki keterkaitan substantif dengan tema Bab ${targetUnit.order}: '${targetUnit.title}'.`,
+          action: multiBabAction || { type: 'ASSIGN_ATP_TO_UNIT', atpItemId: item.id, targetUnitId: targetUnit.id, linkedTpIds: rawLinked, targetMaterialId: matchingMat?.id },
         });
       }
     }
