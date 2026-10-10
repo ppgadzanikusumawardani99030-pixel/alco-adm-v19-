@@ -466,18 +466,18 @@ export function sanitizeMappingAnalysisResult(
           .map((id: any) => String(id).trim())
           .filter((id: string) => validTpIds.has(id) && canonicalTpIds.includes(id));
 
-        const linkedTpIds = rawLinkedTps.length > 0 ? rawLinkedTps : canonicalTpIds;
+        if (rawLinkedTps.length > 0) {
+          const targetMatId = f.action.targetMaterialId;
+          const targetMatValid = targetMatId && validMaterialMap.get(targetMatId) === targetUnitId;
 
-        const targetMatId = f.action.targetMaterialId;
-        const targetMatValid = targetMatId && validMaterialMap.get(targetMatId) === targetUnitId;
-
-        action = {
-          type: 'ASSIGN_ATP_TO_UNIT',
-          atpItemId,
-          targetUnitId,
-          linkedTpIds,
-          targetMaterialId: targetMatValid ? targetMatId : undefined,
-        };
+          action = {
+            type: 'ASSIGN_ATP_TO_UNIT',
+            atpItemId,
+            targetUnitId,
+            linkedTpIds: rawLinkedTps,
+            targetMaterialId: targetMatValid ? targetMatId : undefined,
+          };
+        }
       }
     }
 
@@ -946,25 +946,31 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
 
     let multiBabAction: any = undefined;
     if (bestUnassigned && bestUnassigned.totalScore >= 3.0 && (bestUnassigned.primaryScore > 0 || bestUnassigned.totalScore >= 4.0)) {
-      const canonicalTps = rawLinked;
-      const relevantTps = canonicalTps.filter((tpId) => {
-        const t = tpMap.get(tpId);
-        const tTokens = extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''}`);
-        const unitTokens = bestUnassigned.unit.title ? extractSubstantiveTokens(bestUnassigned.unit.title) : [];
-        const matTokens = (bestUnassigned.unit.materials || []).flatMap(m => extractSubstantiveTokens(m.title || ''));
-        const combined = [...unitTokens, ...matTokens];
-        return tTokens.some(tok => combined.includes(tok));
-      });
-      const finalLinkedTps = relevantTps.length > 0 ? relevantTps : canonicalTps;
-      const matchingMat = (bestUnassigned.unit.materials || []).find((m) => extractSubstantiveTokens(m.title || '').some((t) => allItemTokens.includes(t)));
-
-      multiBabAction = {
-        type: 'ASSIGN_ATP_TO_UNIT',
-        atpItemId: item.id,
-        targetUnitId: bestUnassigned.unit.id,
-        linkedTpIds: finalLinkedTps,
-        targetMaterialId: matchingMat?.id,
-      };
+      const secondUnassigned = unassignedScores[1];
+      if (!secondUnassigned || bestUnassigned.totalScore - secondUnassigned.totalScore >= 1.5 || (bestUnassigned.totalScore >= 6.0)) {
+        const canonicalTps = rawLinked;
+        const relevantTps = canonicalTps.filter((tpId) => {
+          const t = tpMap.get(tpId);
+          const tTokens = extractSubstantiveTokens(`${t?.statement || ''} ${t?.contentScope || ''}`);
+          const unitTokens = bestUnassigned.unit.title ? extractSubstantiveTokens(bestUnassigned.unit.title) : [];
+          const matTokens = (bestUnassigned.unit.materials || []).flatMap(m => extractSubstantiveTokens(m.title || ''));
+          const combined = [...unitTokens, ...matTokens];
+          return tTokens.some(tok => combined.includes(tok));
+        });
+        
+        if (relevantTps.length > 0 || canonicalTps.length === 1) {
+          const finalLinkedTps = relevantTps.length > 0 ? relevantTps : canonicalTps;
+          const matchingMat = (bestUnassigned.unit.materials || []).find((m) => extractSubstantiveTokens(m.title || '').some((t) => allItemTokens.includes(t)));
+          
+          multiBabAction = {
+            type: 'ASSIGN_ATP_TO_UNIT',
+            atpItemId: item.id,
+            targetUnitId: bestUnassigned.unit.id,
+            linkedTpIds: finalLinkedTps,
+            targetMaterialId: matchingMat?.id,
+          };
+        }
+      }
     }
 
     if (isMapped) {

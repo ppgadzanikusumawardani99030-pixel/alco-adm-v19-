@@ -1565,7 +1565,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
                           Pemetaan Bab sudah tersimpan. Struktur hasil import hanya akan mengganti draf saat ini. Data tersimpan baru berubah setelah Anda menekan Simpan Perubahan.
                         </p>
                         <p className="text-[11px] text-amber-800">
-                          Jika pemetaan ini sudah digunakan oleh Perencanaan Tahunan, perubahan struktur Bab/Materi yang disimpan dapat membuat data downstream perlu ditinjau ulang.
+                          Perubahan pada struktur Bab/Materi dapat memengaruhi pemetaan Tujuan Pembelajaran (TP) yang sudah ada sebelumnya.
                         </p>
                       </div>
                     </div>
