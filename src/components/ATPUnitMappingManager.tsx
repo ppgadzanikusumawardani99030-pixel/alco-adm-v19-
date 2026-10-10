@@ -17,6 +17,7 @@ import {
   BookOpen,
   FileSpreadsheet,
   X,
+  Download,
 } from 'lucide-react';
 import {
   ATPData,
@@ -35,6 +36,7 @@ import {
 import { validateATPUnitMappingCanonical } from '../services/atpUnitMappingValidationService';
 import {
   parseBabMateriXlsx,
+  downloadBabMateriTemplateXlsx,
   ATPUnitMappingImportResult,
 } from '../services/atpUnitMappingImportService';
 
@@ -1420,6 +1422,18 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
 
           {/* Action Buttons: Import, AI Generate, AI Analyze */}
           <div className="flex items-center gap-2.5 flex-wrap">
+            {/* Download Template Button */}
+            <button
+              id="btn-download-bab-materi-template"
+              type="button"
+              onClick={() => downloadBabMateriTemplateXlsx()}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold shadow-2xs transition cursor-pointer"
+              title="Download template Excel untuk struktur Bab & Materi"
+            >
+              <Download className="w-4 h-4 text-slate-600" />
+              <span>Download Template</span>
+            </button>
+
             {/* Import Bab & Materi Button */}
             <input
               ref={fileInputRef}

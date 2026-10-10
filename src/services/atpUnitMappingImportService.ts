@@ -322,3 +322,43 @@ export function parseBabMateriXlsx(data: ArrayBuffer | Uint8Array): ATPUnitMappi
     };
   }
 }
+
+/**
+ * Downloads a client-side Excel template for Bab & Materi.
+ */
+export function downloadBabMateriTemplateXlsx(): void {
+  const templateData = [
+    {
+      babOrder: 1,
+      babTitle: 'Bab 1: Judul Bab',
+      materialOrder: 1,
+      materialTitle: 'Lingkup Materi 1',
+    },
+    {
+      babOrder: 1,
+      babTitle: 'Bab 1: Judul Bab',
+      materialOrder: 2,
+      materialTitle: 'Lingkup Materi 2',
+    },
+    {
+      babOrder: 2,
+      babTitle: 'Bab 2: Judul Bab',
+      materialOrder: 1,
+      materialTitle: 'Lingkup Materi 1',
+    },
+  ];
+
+  const worksheet = XLSX.utils.json_to_sheet(templateData);
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'BAB_MATERI');
+
+  worksheet['!cols'] = [
+    { wch: 10 },
+    { wch: 30 },
+    { wch: 15 },
+    { wch: 35 },
+  ];
+
+  XLSX.writeFile(workbook, 'Template_Bab_Materi.xlsx');
+}
+
