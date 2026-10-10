@@ -667,6 +667,7 @@ console.log('Testing Scenario J: PJOK Legacy Seed Import & Workflow Chain Author
     academicSetting: {
       id: res.yearPlan.id,
       profileId: state.profiles[0].id,
+      curriculum: 'Kurikulum Merdeka',
       curriculumType: 'KURIKULUM_MERDEKA',
       academicYear: res.yearPlan.academicYear,
       level: res.yearPlan.level,
@@ -674,6 +675,7 @@ console.log('Testing Scenario J: PJOK Legacy Seed Import & Workflow Chain Author
       phase: 'Fase A',
       subject: res.yearPlan.subject,
       semester: '1 (Ganjil)',
+      updatedAt: new Date().toISOString(),
     },
     cp: res.cp,
     cpAnalysis: res.cpAnalysis,
