@@ -19,17 +19,12 @@ import {
   CPData,
   CPElem,
   CPAnalysisData,
-  CPAnalysisItem,
   TPData,
   TPItem,
   ATPData,
   ATPItem,
 } from '../types';
 import { validateProjectTransfer } from './projectTransferService';
-import {
-  validateCPAnalysisDataWorkflow,
-  validateTPDataWorkflow,
-} from './cpWorkflowService';
 
 export interface ProjectTransferImportParams {
   pkg: ProjectTransferPackage;
@@ -182,11 +177,10 @@ export function performImportProjectTransferInState(
   // 5. Generate fresh internal IDs for CPData and its elements
   const newCPDataId = `cp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const cpElements: CPElem[] = (pkg.cp || []).map((c: ProjectTransferCP, idx: number) => {
-    const code = c.code && c.code.trim() ? c.code.trim() : undefined;
     return {
       id: `elem-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 7)}`,
-      ...(isMerdeka && code ? { code } : {}),
-      name: (c.element || c.code || `Elemen ${idx + 1}`).trim(),
+      ...(isMerdeka ? { code: `E${idx + 1}` } : c.code && c.code.trim() ? { code: c.code.trim() } : {}),
+      name: (c.element || '').trim(),
       content: (c.content || '').trim(),
     };
   });
@@ -203,17 +197,6 @@ export function performImportProjectTransferInState(
     }
   });
 
-  const cpElemByCodeMap = new Map<string, CPElem>();
-  (pkg.cp || []).forEach((c, idx) => {
-    const elem = cpElements[idx];
-    if (c.code && c.code.trim()) {
-      cpElemByCodeMap.set(c.code.trim().toUpperCase(), elem);
-    }
-    if (c.element && c.element.trim()) {
-      cpElemByCodeMap.set(c.element.trim().toUpperCase(), elem);
-    }
-  });
-
   const cpGeneralDescription =
     cpElements.length > 0
       ? cpElements.map((el) => `${el.name}: ${el.content}`).join('\n\n')
@@ -224,67 +207,17 @@ export function performImportProjectTransferInState(
     academicSettingId: newYearPlanId,
     generalDescription: cpGeneralDescription,
     elements: cpElements,
-    workflowStatus: 'DRAFT',
+    status: 'DRAFT',
+    workflowStatus: isMerdeka ? 'PERLU_DILENGKAPI' : 'DRAFT',
     lastEditedAt: now,
     updatedAt: now,
   };
 
-  // 5.b Build CP Analysis for Kurikulum Merdeka
-  let newCPAnalysisData: CPAnalysisData | undefined = undefined;
+  // 5.b Do NOT create synthetic CPAnalysis from TP for Kurikulum Merdeka.
+  // The canonical authority chain is CP -> Analisis CP -> TP, not TP -> Analisis CP.
+  const newCPAnalysisData: CPAnalysisData | undefined = undefined;
 
-  if (isMerdeka) {
-    const cpAnalysisItems: CPAnalysisItem[] = (pkg.tp || []).map((t: ProjectTransferTP, idx: number) => {
-      const rawCpCode = (t.cpCode || '').trim().toUpperCase();
-      const matchedElem = rawCpCode ? cpElemByCodeMap.get(rawCpCode) : undefined;
-      const matchedSourceCP = rawCpCode
-        ? sourceCpByCodeMap.get(rawCpCode) || sourceCpByElementMap.get(rawCpCode)
-        : undefined;
-
-      const competence = (t.competence || '').trim();
-      const materialScope = (t.materialScope || '').trim();
-      const statement = (t.statement || '').trim();
-
-      const analysisItemId = `ana-item-${Date.now()}-${idx + 1}-${Math.random().toString(36).slice(2, 7)}`;
-
-      return {
-        id: analysisItemId,
-        elementId: matchedElem ? matchedElem.id : undefined,
-        elementName: matchedSourceCP ? (matchedSourceCP.element || '').trim() : '',
-        cpText: matchedSourceCP ? (matchedSourceCP.content || '').trim() : '',
-        cpCompetence: competence,
-        materialScope: materialScope,
-        suggestedTp: statement,
-        order: idx + 1,
-      };
-    });
-
-    const newCPAnalysisDataId = `cpa-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-
-    newCPAnalysisData = {
-      id: newCPAnalysisDataId,
-      academicSettingId: newYearPlanId,
-      workspaceId: newWorkspaceId,
-      cpId: newCPData.id,
-      academicYear: targetAcademicYear,
-      subjectCode: targetSubject,
-      ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
-      items: cpAnalysisItems,
-      status: 'DRAFT',
-      workflowStatus: 'DRAFT',
-      basedOnCpUpdatedAt: newCPData.updatedAt,
-      generatedBy: 'TEACHER',
-      provenance: {
-        generatedBy: 'USER',
-        generatedAt: now,
-      },
-      updatedAt: now,
-    };
-
-    const anaValidation = validateCPAnalysisDataWorkflow(newCPAnalysisData, newCPData);
-    newCPAnalysisData.workflowStatus = anaValidation.status;
-  }
-
-  // 6. Generate fresh internal IDs for TPData and TPItems
+  // 6. Generate fresh internal IDs for TPData and TPItems as draft/seed
   // Map portable TP code -> internal TPItem
   const newTPDataId = `tp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const tpCodeToItemMap = new Map<string, TPItem>();
@@ -297,20 +230,9 @@ export function performImportProjectTransferInState(
       ? sourceCpByCodeMap.get(rawCpCode) || sourceCpByElementMap.get(rawCpCode)
       : undefined;
 
-    let cpAnalysisId: string | undefined = undefined;
-    let cpAnalysisItemIds: string[] | undefined = undefined;
-
-    if (isMerdeka && newCPAnalysisData && newCPAnalysisData.items[idx]) {
-      const analysisItem = newCPAnalysisData.items[idx];
-      cpAnalysisId = analysisItem.id;
-      cpAnalysisItemIds = [analysisItem.id];
-    }
-
     const item: TPItem = {
       id: freshTPItemId,
       code: cleanCode,
-      ...(cpAnalysisId ? { cpAnalysisId } : {}),
-      ...(cpAnalysisItemIds ? { cpAnalysisItemIds } : {}),
       elementName: matchedSourceCP ? (matchedSourceCP.element || '').trim() || undefined : undefined,
       statement: (t.statement || '').trim(),
       competence: (t.competence || '').trim(),
@@ -318,6 +240,12 @@ export function performImportProjectTransferInState(
       order: idx + 1,
       sequence: idx + 1,
       status: 'DRAFT',
+      ...(isMerdeka
+        ? {
+            needsReview: true,
+            reviewReason: 'TP hasil import perlu diselaraskan dengan Analisis CP canonical.',
+          }
+        : {}),
       provenance: {
         generatedBy: 'USER',
         generatedAt: now,
@@ -336,38 +264,25 @@ export function performImportProjectTransferInState(
     academicSettingId: newYearPlanId,
     workspaceId: newWorkspaceId,
     ...(isMerdeka ? { cpId: newCPData.id } : {}),
-    ...(isMerdeka && newCPAnalysisData ? { cpAnalysisId: newCPAnalysisData.id } : {}),
     academicYear: targetAcademicYear,
     ...(isMerdeka ? { subjectCode: targetSubject } : {}),
     ...(pkg.phase ? { phase: pkg.phase.trim() } : {}),
     items: tpItems,
     ...(isMerdeka ? { basedOnCpUpdatedAt: newCPData.updatedAt } : {}),
-    ...(isMerdeka && newCPAnalysisData ? { basedOnAnalysisUpdatedAt: newCPAnalysisData.updatedAt } : {}),
     status: 'DRAFT',
-    workflowStatus: 'DRAFT',
+    workflowStatus: isMerdeka ? 'PERLU_DILENGKAPI' : 'DRAFT',
+    ...(isMerdeka
+      ? {
+          needsReview: true,
+          reviewReason: 'TP hasil import perlu diselaraskan dengan Analisis CP canonical.',
+        }
+      : {}),
     provenance: {
       generatedBy: 'USER',
       generatedAt: now,
     },
     updatedAt: now,
   };
-
-  if (isMerdeka && newCPAnalysisData) {
-    const tpValidation = validateTPDataWorkflow(
-      newTPData,
-      newCPData,
-      newCPAnalysisData
-    );
-
-    newTPData.workflowStatus =
-      tpItems.length === 0
-        ? 'BELUM_DIMULAI'
-        : newCPAnalysisData.workflowStatus === 'SIAP' && tpValidation.isSiap
-        ? 'SIAP'
-        : 'PERLU_DILENGKAPI';
-  } else {
-    newTPData.workflowStatus = 'DRAFT';
-  }
 
   // 7. Generate fresh internal IDs for ATPData and ATPItems
   // 8. Resolve ATP tpCode -> internal TPItem.id and set ATPItem.tpId as canonical linkage

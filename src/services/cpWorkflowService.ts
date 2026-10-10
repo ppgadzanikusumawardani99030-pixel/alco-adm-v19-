@@ -110,6 +110,14 @@ export function validateCPAnalysisDataWorkflow(
     };
   }
 
+  // Canonical CP dependency: CP must be SIAP
+  if (cp) {
+    const cpValidation = validateCPDataWorkflow(cp);
+    if (!cpValidation.isSiap) {
+      issues.push('Capaian Pembelajaran (CP) rujukan belum memenuhi status SIAP.');
+    }
+  }
+
   // Check if CP version changed or review needed
   if (cpAnalysis.needsReview) {
     issues.push(
@@ -486,6 +494,10 @@ export function validateTPDataWorkflow(
 
   // Check CP Analysis validity if CP Analysis is provided
   if (cpAnalysis) {
+    const cpAnalysisValidation = validateCPAnalysisDataWorkflow(cpAnalysis, cp);
+    if (!cpAnalysisValidation.isSiap) {
+      issues.push('Analisis CP rujukan belum memenuhi status SIAP.');
+    }
     if (cpAnalysis.needsReview) {
       issues.push('Analisis CP rujukan memerlukan peninjauan ulang.');
     }

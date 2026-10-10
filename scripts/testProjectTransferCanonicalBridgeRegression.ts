@@ -2,6 +2,7 @@ import { performImportProjectTransferInState } from '../src/services/projectTran
 import { validateProjectTransfer } from '../src/services/projectTransferService';
 import { createInitialStorageV5 } from '../src/services/storageV5';
 import { ProjectTransferPackage } from '../src/types/projectTransfer';
+import { validateWorkflowDependencies } from '../src/services/workflowEngine';
 
 function assert(condition: boolean, msg: string) {
   if (!condition) {
@@ -103,28 +104,30 @@ console.log('Testing Scenario A: Valid Merdeka v1...');
     schoolId: 'sch-001',
   });
 
-  assert(!!res.cpAnalysis, 'CPAnalysis harus dibuat untuk Merdeka');
-  assert(res.cpAnalysis?.items.length === 2, 'CPAnalysis items count harus 2');
-  assert(res.cpAnalysis?.workflowStatus === 'SIAP', `CPAnalysis workflowStatus harus SIAP (got ${res.cpAnalysis?.workflowStatus})`);
-  assert(res.cpAnalysis?.status === 'DRAFT', `CPAnalysis status harus DRAFT (got ${res.cpAnalysis?.status})`);
-  assert(res.cpAnalysis?.items[0].elementName === 'Bilangan', 'elementName CP Analysis harus dari data asli ProjectTransferCP');
-  assert(res.cpAnalysis?.items[0].cpText.includes('bilangan cacah'), 'cpText CP Analysis harus dari data asli ProjectTransferCP');
+  // CP checks
+  assert(res.cp.elements.length === 1, 'CP elements count harus 1');
+  assert(res.cp.elements[0].code === 'E1', 'Internal code CP element harus E1');
+  assert(res.cp.workflowStatus === 'PERLU_DILENGKAPI', `CP workflowStatus harus PERLU_DILENGKAPI (got ${res.cp.workflowStatus})`);
+  assert(res.cp.status === 'DRAFT', `CP status harus DRAFT (got ${res.cp.status})`);
 
+  // CP Analysis must NOT be created synthetically from TP
+  assert(res.cpAnalysis === undefined, 'CPAnalysis tidak boleh dibuat secara sintetis saat import Merdeka');
+  const storedCpAnalysis = state.annualData.cpAnalysis.find((e) => e.yearPlanId === res.yearPlan.id);
+  assert(!storedCpAnalysis, 'CPAnalysis tidak boleh tersimpan di state.annualData.cpAnalysis saat import');
+
+  // TP checks: draft seed, review flagged, workflowStatus PERLU_DILENGKAPI
   assert(res.tp.items.length === 2, 'TP items count harus 2');
-  assert(res.tp.items[0].cpAnalysisItemIds?.length === 1, 'TP item 0 harus memuat tepat 1 cpAnalysisItemId');
-  assert(res.tp.items[0].cpAnalysisId === res.cpAnalysis?.items[0].id, 'TP item 0 cpAnalysisId harus merujuk ke item CPAnalysis 0');
-  assert(res.tp.workflowStatus === 'SIAP', `TP workflowStatus harus SIAP (got ${res.tp.workflowStatus})`);
+  assert(res.tp.items[0].cpAnalysisItemIds === undefined, 'TP item 0 cpAnalysisItemIds harus undefined (tidak ada fake linkage)');
+  assert(res.tp.items[0].needsReview === true, 'TP item 0 needsReview harus true');
+  assert(res.tp.workflowStatus === 'PERLU_DILENGKAPI', `TP workflowStatus harus PERLU_DILENGKAPI (got ${res.tp.workflowStatus})`);
   assert(res.tp.status === 'DRAFT', `TP status harus DRAFT (got ${res.tp.status})`);
 
+  // ATP checks
   assert(res.atp.items[0].linkedTpIds?.length === 1, 'ATP item 0 linkedTpIds harus berisikan ID TP');
   assert(res.atp.items[0].linkedTpIds?.[0] === res.tp.items[0].id, 'linkedTpIds[0] harus merujuk ke TPItem.id internal');
   assert(res.atp.workflowStatus === 'DRAFT', `ATP workflowStatus harus DRAFT (got ${res.atp.workflowStatus})`);
   assert(res.atp.status === 'DRAFT', `ATP status harus DRAFT (got ${res.atp.status})`);
   assert(res.atp.items[0].focus === undefined, 'Focus ATP item 0 harus undefined');
-
-  // Check state graph save
-  const storedCpAnalysis = state.annualData.cpAnalysis.find((e) => e.yearPlanId === res.yearPlan.id);
-  assert(!!storedCpAnalysis, 'CPAnalysis harus tersimpan di state.annualData.cpAnalysis');
 }
 
 // ==========================================
@@ -179,7 +182,7 @@ console.log('Testing Scenario B: Missing competence / materialScope...');
 
   assert(res.tp.items[0].competence === '', 'Import harus mempertahankan competence kosong apa adanya tanpa sintesis');
   assert(res.tp.items[0].contentScope === '', 'Import harus mempertahankan contentScope kosong apa adanya tanpa sintesis');
-  assert(res.cpAnalysis?.workflowStatus === 'PERLU_DILENGKAPI', 'CP Analysis harus berstatus PERLU_DILENGKAPI');
+  assert(res.cpAnalysis === undefined, 'CP Analysis tidak boleh dibuat saat import');
   assert(res.tp.workflowStatus === 'PERLU_DILENGKAPI', 'TP harus berstatus PERLU_DILENGKAPI sehingga ATP terkunci');
 }
 
@@ -443,8 +446,10 @@ console.log('Testing Scenario G: CP element kosong & TP merujuk cpCode E1...');
     schoolId: 'sch-001',
   });
 
-  assert(res.cpAnalysis?.items[0].elementName === '', 'Import harus mempertahankan elementName kosong apa adanya tanpa sintesis');
-  assert(res.cpAnalysis?.workflowStatus === 'PERLU_DILENGKAPI', 'CP Analysis harus berstatus PERLU_DILENGKAPI');
+  assert(res.cp.elements[0].name === '', 'Import harus mempertahankan elementName kosong apa adanya tanpa sintesis');
+  assert(res.cp.elements[0].code === 'E1', 'Internal element code harus E1');
+  assert(res.cp.workflowStatus === 'PERLU_DILENGKAPI', 'CP Analysis harus berstatus PERLU_DILENGKAPI');
+  assert(res.cpAnalysis === undefined, 'CP Analysis tidak boleh dibuat saat import');
   assert(res.tp.workflowStatus === 'PERLU_DILENGKAPI', 'TP harus berstatus PERLU_DILENGKAPI sehingga ATP terkunci');
 }
 
@@ -550,6 +555,138 @@ console.log('Testing Scenario I: K13 Permissive Contract...');
     schoolId: 'sch-001',
   });
   assert(res.tp.items[0].code === 'TP-01', 'K13 import harus mempertahankan kode TP asli');
+}
+
+// ==========================================
+// SCENARIO J: PJOK Legacy Seed Import & Workflow Chain Authority
+// ==========================================
+console.log('Testing Scenario J: PJOK Legacy Seed Import & Workflow Chain Authority...');
+{
+  const state = createTestState();
+
+  const cpList = [
+    { code: 'CP-01', element: 'Keterampilan Gerak', content: 'Mempraktikkan keterampilan pola gerak dasar.' },
+    { code: 'CP-02', element: 'Pengetahuan Gerak', content: 'Memahami prosedur keterampilan pola gerak dasar.' },
+    { code: 'CP-03', element: 'Pemanfaatan Gerak', content: 'Mempraktikkan aktivitas jasmani untuk kesehatan.' },
+    { code: 'CP-04', element: 'Pengembangan Karakter', content: 'Menunjukkan perilaku bertanggung jawab dalam aktivitas jasmani.' },
+  ];
+
+  const tpList = Array.from({ length: 17 }, (_, i) => {
+    const idx = i + 1;
+    const code = `TP-${idx < 10 ? '0' + idx : idx}`;
+    const cpCode = `CP-0${(i % 4) + 1}`;
+    return {
+      code,
+      cpCode,
+      statement: `Mempraktikkan aktivitas pembelajaran gerak dasar ${idx}.`,
+      competence: 'Mempraktikkan',
+      materialScope: `Pola gerak dasar ${idx}`,
+    };
+  });
+
+  const atpList = Array.from({ length: 17 }, (_, i) => {
+    const idx = i + 1;
+    const tpCode = `TP-${idx < 10 ? '0' + idx : idx}`;
+    return {
+      order: idx,
+      tpCode,
+      material: `Pola gerak dasar ${idx}`,
+    };
+  });
+
+  const pkg: ProjectTransferPackage = {
+    schemaVersion: '1.0',
+    academicYear: '2026/2027',
+    curriculumType: 'KURIKULUM_MERDEKA',
+    level: 'SD',
+    grade: 'Kelas 1',
+    phase: 'Fase A',
+    subject: 'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)',
+    cp: cpList,
+    tp: tpList,
+    atp: atpList,
+  };
+
+  // 1. Validation Pre-Import
+  const validation = validateProjectTransfer(pkg);
+  assert(validation.isValid, 'Validation harus berhasil (isValid: true) meskipun kode TP legacy dan JP kosong');
+  assert(validation.errors.length === 0, 'Tidak boleh ada blocking errors');
+  assert(validation.warnings.some((w) => w.code === 'INVALID_MERDEKA_TP_CODE'), 'Harus ada warning INVALID_MERDEKA_TP_CODE');
+  assert(validation.warnings.some((w) => w.code === 'ATP_MISSING_JP'), 'Harus ada warning ATP_MISSING_JP');
+
+  // 2. Perform Import
+  const res = performImportProjectTransferInState(state, {
+    pkg,
+    profileId: 'prof-001',
+    schoolId: 'sch-001',
+  });
+
+  // A. CP Assertions
+  assert(res.cp.elements.length === 4, 'CP elements count harus 4');
+  assert(res.cp.elements[0].code === 'E1', 'CP element 0 code harus E1');
+  assert(res.cp.elements[1].code === 'E2', 'CP element 1 code harus E2');
+  assert(res.cp.elements[2].code === 'E3', 'CP element 2 code harus E3');
+  assert(res.cp.elements[3].code === 'E4', 'CP element 3 code harus E4');
+  assert(res.cp.elements[0].name === 'Keterampilan Gerak', 'Isi nama elemen CP harus tetap sama seperti Excel');
+  assert(res.cp.workflowStatus === 'PERLU_DILENGKAPI', 'CP workflowStatus harus PERLU_DILENGKAPI');
+
+  // B. CP Analysis Assertions (must NOT be created synthetically)
+  assert(res.cpAnalysis === undefined, 'CPAnalysis tidak boleh dibuat secara sintetis dari 17 TP');
+  const storedCpAnalysis = state.annualData.cpAnalysis.find((e) => e.yearPlanId === res.yearPlan.id);
+  assert(!storedCpAnalysis, 'CPAnalysis tidak boleh disimpan di state.annualData.cpAnalysis');
+
+  // C. TP Assertions
+  assert(res.tp.items.length === 17, 'TP items count harus 17');
+  assert(res.tp.items[0].code === 'TP-01', 'Kode TP asli Excel harus dipertahankan');
+  assert(res.tp.items[16].code === 'TP-17', 'Kode TP 17 asli Excel harus dipertahankan');
+  assert(res.tp.items[0].statement === 'Mempraktikkan aktivitas pembelajaran gerak dasar 1.', 'Statement TP asli dipertahankan');
+  assert(res.tp.items[0].competence === 'Mempraktikkan', 'Competence TP asli dipertahankan');
+  assert(res.tp.items[0].contentScope === 'Pola gerak dasar 1', 'ContentScope TP asli dipertahankan');
+  assert(res.tp.items[0].cpAnalysisItemIds === undefined, 'TP tidak boleh memiliki fake cpAnalysisItemIds');
+  assert(res.tp.items[0].needsReview === true, 'TP needsReview harus true');
+  assert(res.tp.workflowStatus === 'PERLU_DILENGKAPI', 'TP workflowStatus harus PERLU_DILENGKAPI');
+
+  // D. ATP Assertions
+  assert(res.atp.items.length === 17, 'ATP items count harus 17');
+  assert(res.atp.workflowStatus === 'DRAFT', 'ATP workflowStatus harus DRAFT');
+  for (let i = 0; i < 17; i++) {
+    const atpItem = res.atp.items[i];
+    const expectedTpItem = res.tp.items[i];
+    assert(atpItem.linkedTpIds?.length === 1, `ATP item ${i + 1} linkedTpIds harus berisikan 1 ID`);
+    assert(atpItem.linkedTpIds?.[0] === expectedTpItem.id, `ATP item ${i + 1} linkedTpIds[0] harus menunjuk ke TPItem internal`);
+    assert(atpItem.allocatedJP === null, `ATP item ${i + 1} allocatedJP harus null karena Excel kosong`);
+    assert(atpItem.jp === null, `ATP item ${i + 1} jp harus null karena Excel kosong`);
+  }
+
+  // E. Workflow Chain Authority Assertions
+  const wf = validateWorkflowDependencies({
+    profile: state.profiles[0],
+    school: state.schools[0],
+    academicSetting: {
+      id: res.yearPlan.id,
+      profileId: state.profiles[0].id,
+      curriculumType: 'KURIKULUM_MERDEKA',
+      academicYear: res.yearPlan.academicYear,
+      level: res.yearPlan.level,
+      grade: res.yearPlan.grade,
+      phase: 'Fase A',
+      subject: res.yearPlan.subject,
+      semester: '1 (Ganjil)',
+    },
+    cp: res.cp,
+    cpAnalysis: res.cpAnalysis,
+    tp: res.tp,
+    atp: res.atp,
+  });
+
+  assert(wf.stepStates.cp.isComplete === false, 'Workflow CP tidak boleh COMPLETE (harus direview)');
+  assert(wf.stepStates.cp.status === 'IN_PROGRESS', 'Workflow CP harus IN_PROGRESS');
+  assert(wf.stepStates['cp-analysis'].isComplete === false, 'Workflow CP Analysis tidak boleh COMPLETE');
+  assert(wf.stepStates['cp-analysis'].status === 'BLOCKED', 'Workflow CP Analysis harus BLOCKED sebelum CP SIAP');
+  assert(wf.stepStates.tp.isComplete === false, 'Workflow TP tidak boleh COMPLETE');
+  assert(wf.stepStates.tp.status === 'BLOCKED', 'Workflow TP harus BLOCKED sebelum CP Analysis SIAP');
+  assert(wf.stepStates.atp.isComplete === false, 'Workflow ATP tidak boleh COMPLETE');
+  assert(wf.stepStates.atp.status === 'BLOCKED', 'Workflow ATP harus BLOCKED sebelum TP SIAP');
 }
 
 console.log('--- ALL REGRESSION TESTS PASSED SUCCESSFULLY ---');

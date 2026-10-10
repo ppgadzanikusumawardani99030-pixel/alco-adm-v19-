@@ -26,7 +26,7 @@ import { validateAcademicSettingReadiness } from './academicSettingReadiness';
 import { resolveCurriculumContext, resolveSubjectInput } from '../data/curriculum/resolver';
 import { ResolvedCurriculumContext } from '../data/curriculum/types';
 import { getPhaseFromGrade } from '../data/curriculumDefaults';
-import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences, validateTPDataWorkflow, validateCPAnalysisDataWorkflow, validateATPDataWorkflow } from './cpWorkflowService';
+import { validateKKTPData, resolveCriterionTPReference, resolveATPItemTPReferences, validateTPDataWorkflow, validateCPAnalysisDataWorkflow, validateATPDataWorkflow, validateCPDataWorkflow } from './cpWorkflowService';
 import { loadStorageV5, getSemesterDataV5 } from './storageV5';
 import { resolveSemesterCapacityV5 } from './jpEngine';
 import { validateUnitExecutionPlan } from './unitExecutionPlanService';
@@ -369,16 +369,29 @@ export function validateWorkflowDependencies(
     // ==========================================
 
     // 1. CP
-    const hasCPText = !!(cp?.generalDescription && cp.generalDescription.trim().length > 10);
-    const hasCPElements = !!(cp?.elements && cp.elements.length > 0);
-    const isCPComplete = hasCPText || hasCPElements;
+    const cpValidation = cp ? validateCPDataWorkflow(cp, academicSetting) : undefined;
+    const isCPCanonicalSiap = Boolean(cp && cpValidation?.isSiap);
+    const hasCPContent = Boolean(
+      (cp?.generalDescription && cp.generalDescription.trim().length > 10) ||
+      (cp?.elements && cp.elements.length > 0)
+    );
+    const isCPComplete = isCPCanonicalSiap;
 
     stepStates.cp = {
       id: 'cp',
-      status: isCPComplete ? 'COMPLETE' : stepStates.academic.isComplete ? 'READY' : 'BLOCKED',
+      status: isCPCanonicalSiap
+        ? 'COMPLETE'
+        : hasCPContent
+        ? 'IN_PROGRESS'
+        : stepStates.academic.isComplete
+        ? 'READY'
+        : 'BLOCKED',
       isBlocked: !stepStates.academic.isComplete,
-      isComplete: isCPComplete,
+      isComplete: isCPCanonicalSiap,
       isStale: false,
+      reason: !isCPCanonicalSiap && hasCPContent && cpValidation?.issues[0]
+        ? cpValidation.issues[0]
+        : undefined,
     };
 
     // 2. CP Analysis (Explicit Canonical Dependency of TP)
@@ -401,16 +414,16 @@ export function validateWorkflowDependencies(
         ? 'IN_PROGRESS'
         : 'READY',
       isBlocked: !isCPComplete,
-      isComplete: isAnalysisCanonicalSiap && !isAnalysisStale,
+      isComplete: isAnalysisCanonicalSiap && isCPComplete && !isAnalysisStale,
       isStale: isAnalysisStale,
       reason: !isCPComplete
-        ? 'Memerlukan data Capaian Pembelajaran (CP) terlebih dahulu'
+        ? 'Memerlukan Capaian Pembelajaran (CP) yang berstatus SIAP terlebih dahulu'
         : isAnalysisStale
         ? 'Data CP telah diperbarui, analisis CP perlu diselaraskan'
         : !isAnalysisCanonicalSiap && analysisItems.length > 0 && cpAnalysisValidation.issues[0]
         ? cpAnalysisValidation.issues[0]
         : undefined,
-      missingDependencies: !isCPComplete ? ['Capaian Pembelajaran (CP)'] : undefined,
+      missingDependencies: !isCPComplete ? ['Capaian Pembelajaran (CP) SIAP'] : undefined,
     };
 
     if (!isCPComplete && analysisItems.length > 0) {
@@ -418,7 +431,7 @@ export function validateWorkflowDependencies(
         severity: 'WARNING',
         module: 'cp-analysis',
         code: 'ORPHAN_CP_ANALYSIS',
-        message: 'Analisis CP ada tetapi data CP induk belum lengkap.',
+        message: 'Analisis CP ada tetapi data CP induk belum memenuhi status SIAP.',
       });
     }
 
@@ -433,14 +446,15 @@ export function validateWorkflowDependencies(
 
     // 3. TP (Tujuan Pembelajaran - Requires CP Analysis & Canonical Validation)
     const tpItems = tp?.items || [];
+    const isAnalysisReadyForTP = isCPComplete && isAnalysisCanonicalSiap && !isAnalysisStale;
+    const isTPBlocked = !isAnalysisReadyForTP;
     const isTPStale =
+      !isTPBlocked &&
       tpItems.length > 0 &&
       (isUpstreamStale(cpAnalysis?.updatedAt, tp?.basedOnAnalysisUpdatedAt) ||
         isUpstreamStale(cp?.updatedAt, tp?.basedOnCpUpdatedAt) ||
         Boolean(tp?.needsReview) ||
         isAnalysisStale);
-    const isAnalysisReadyForTP = isCPComplete && isAnalysisCanonicalSiap && !isAnalysisStale;
-    const isTPBlocked = !isAnalysisReadyForTP && !isTPStale;
 
     const tpValidation = !isTPBlocked && tp && tpItems.length > 0
       ? validateTPDataWorkflow(tp, cp, cpAnalysis, academicSetting)
@@ -461,16 +475,16 @@ export function validateWorkflowDependencies(
       isBlocked: isTPBlocked,
       isComplete: isTPDataValid && !isTPBlocked && !isTPStale,
       isStale: isTPStale,
-      reason: isTPStale
-        ? 'Analisis CP atau CP induk telah diperbarui, daftar TP perlu diselaraskan'
-        : isTPBlocked
+      reason: isTPBlocked
         ? (!isAnalysisCanonicalSiap && analysisItems.length > 0 && cpAnalysisValidation.issues[0]
             ? `Analisis CP belum lengkap: ${cpAnalysisValidation.issues[0]}`
             : 'Memerlukan Analisis CP yang lengkap dan siap terlebih dahulu sebagai rujukan resmi TP')
+        : isTPStale
+        ? 'Analisis CP atau CP induk telah diperbarui, daftar TP perlu diselaraskan'
         : !isTPDataValid && tpItems.length > 0 && tpValidation?.issues?.[0]
         ? tpValidation.issues[0]
         : undefined,
-      missingDependencies: !isAnalysisReadyForTP && !isTPStale ? ['Analisis CP'] : undefined,
+      missingDependencies: isTPBlocked ? ['Analisis CP'] : undefined,
     };
 
     if (tpItems.length > 0 && !isAnalysisReadyForTP) {

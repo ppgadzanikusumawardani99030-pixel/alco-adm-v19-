@@ -172,7 +172,83 @@ export async function ensureGeminiApiKey(): Promise<string> {
   return '';
 }
 
-export async function aiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+export interface AIBackendReadyResult {
+  ready: boolean;
+  geminiConfigured: boolean;
+  attempts: number;
+}
+
+/**
+ * Probes the backend /api/health endpoint to ensure preview server is fully warm
+ * and retrieves the server-side Gemini configuration state.
+ * Performs bounded health check polling (up to maxAttempts) to handle cold starts.
+ */
+export async function waitForAIBackendReady(
+  maxAttempts: number = 6,
+  intervalMs: number = 750
+): Promise<AIBackendReadyResult> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch('/api/health', {
+        method: 'GET',
+        cache: 'no-store',
+        headers: {
+          'cache-control': 'no-cache',
+        },
+      });
+
+      const contentType = res.headers.get('Content-Type') || '';
+      if (contentType.toLowerCase().includes('application/json')) {
+        let payload: any = null;
+        try {
+          payload = await res.json();
+        } catch {
+          payload = null;
+        }
+
+        if (payload && typeof payload === 'object' && payload.status === 'ok') {
+          return {
+            ready: true,
+            geminiConfigured: Boolean(payload.geminiConfigured),
+            attempts: attempt,
+          };
+        }
+      } else {
+        const text = await res.text().catch(() => '');
+        lastError = new Error(
+          text.includes('Starting Server')
+            ? 'Runtime preview sedang memulai ulang.'
+            : `Endpoint health mengembalikan format non-JSON (Status ${res.status}).`
+        );
+      }
+    } catch (err: any) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
+  const err = new Error(
+    'Runtime preview belum siap menerima request API. Backend health check gagal.'
+  );
+  (err as any).attempts = maxAttempts;
+  (err as any).lastError = lastError;
+  throw err;
+}
+
+export interface AIFetchPolicy {
+  preferLocalKeyOnFirstRequest?: boolean;
+}
+
+export async function aiFetch(
+  url: string,
+  options: RequestInit = {},
+  policy: AIFetchPolicy = {}
+): Promise<Response> {
   const makeRequest = async (currentKey?: string | null): Promise<Response> => {
     const headers = new Headers(options.headers || {});
     if (currentKey && currentKey.trim()) {
@@ -186,19 +262,27 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
     });
   };
 
-  // 1. Request PERTAMA tanpa local BYOK header agar server mendapat kesempatan memakai server key/fallback
-  let res = await makeRequest(null);
+  const localKey = getGeminiApiKey();
+
+  // 1. Request PERTAMA: jika policy.preferLocalKeyOnFirstRequest === true dan localKey tersedia,
+  // gunakan local BYOK pada request pertama; jika tidak, request pertama dikirim tanpa key (server key first).
+  const firstKey =
+    policy.preferLocalKeyOnFirstRequest && localKey && localKey.trim()
+      ? localKey.trim()
+      : null;
+
+  let res = await makeRequest(firstKey);
 
   // 2. Jika response 200 adalah pedagogical_engine fallback DAN user punya local BYOK,
   // beri prioritas pada Gemini dengan retry TEPAT SATU KALI memakai key user.
-  const localKey = getGeminiApiKey();
-  if (res.ok && localKey && localKey.trim()) {
+  const activeLocalKey = getGeminiApiKey();
+  if (res.ok && activeLocalKey && activeLocalKey.trim()) {
     try {
       const cloned = typeof res.clone === 'function' ? res.clone() : res;
       const bodyJson = await cloned.json().catch(() => null);
       if (bodyJson && bodyJson.engine === 'pedagogical_engine') {
         try {
-          const retryRes = await makeRequest(localKey.trim());
+          const retryRes = await makeRequest(activeLocalKey.trim());
           if (retryRes.status === 401 || retryRes.status === 403) {
             removeGeminiApiKey();
             // Kembalikan fallback valid pertama agar proses tidak gagal
@@ -274,10 +358,30 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
     return res;
   }
 
-  // 3. Penanganan 401 / 403 pada request pertama (berasal dari server key / provider server, BUKAN local BYOK user):
+  // 3. Penanganan 401 / 403:
   if (res.status === 401 || res.status === 403) {
-    if (localKey && localKey.trim()) {
-      // Jangan hapus local key karena belum pernah dikirim. Retry tepat satu kali dengan local key.
+    if (firstKey) {
+      // Request pertama sudah membawa local key dan ditolak 401/403
+      removeGeminiApiKey();
+      if (modalOpenListeners.length > 0) {
+        try {
+          const newKey = await openApiKeyModal(
+            'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
+          );
+          if (newKey && newKey.trim()) {
+            const freshRes = await makeRequest(newKey.trim());
+            if (freshRes.status === 401 || freshRes.status === 403) {
+              removeGeminiApiKey();
+            }
+            return freshRes;
+          }
+        } catch {
+          // Modal cancelled
+        }
+      }
+      return res;
+    } else if (localKey && localKey.trim()) {
+      // Request pertama tanpa key (server key). Retry tepat satu kali dengan local key.
       const retryRes = await makeRequest(localKey.trim());
       if (retryRes.ok) {
         return retryRes;
@@ -391,6 +495,12 @@ export function formatAIErrorMessage(error: any, actionName: string = 'memproses
   if (!error) return `Terjadi kendala saat ${actionName}. Silakan coba lagi.`;
   const raw = (error.message || String(error)).toLowerCase();
 
+  if (raw.includes('dibatalkan') || raw.includes('batal')) {
+    return error.message || 'Proses penyusunan AI dibatalkan.';
+  }
+  if (raw.includes('backend health check gagal') || raw.includes('health check gagal')) {
+    return error.message;
+  }
   if (raw.includes('layanan ai belum dikonfigurasi') || raw.includes('ai_not_configured')) {
     return 'Layanan AI belum dikonfigurasi pada server.';
   }
@@ -830,52 +940,71 @@ export async function generateLearningPlanWithAI(params: GenerateLearningPlanPar
   }
 }
 
-export async function generateATPWithAI(params: GenerateATPParams): Promise<GenerateATPResult> {
+export interface GenerateATPOptions {
+  backendReady?: AIBackendReadyResult;
+  preferLocalKeyOnFirstRequest?: boolean;
+}
+
+export async function generateATPWithAI(
+  params: GenerateATPParams,
+  options?: GenerateATPOptions
+): Promise<GenerateATPResult> {
   try {
-    const requestATP = () =>
-      aiFetch('/api/ai/generate-atp', {
+    // 1. Health preflight
+    const health = options?.backendReady || (await waitForAIBackendReady());
+
+    // 2. Resolve key source
+    let preferLocalKey = options?.preferLocalKeyOnFirstRequest;
+    if (preferLocalKey === undefined) {
+      if (!health.geminiConfigured) {
+        let localKey = getGeminiApiKey();
+        if (!localKey || !localKey.trim()) {
+          try {
+            localKey = await ensureGeminiApiKey();
+          } catch (modalErr: any) {
+            throw new Error(modalErr?.message || 'Penyusunan ATP dengan AI dibatalkan: Kunci API Gemini diperlukan.');
+          }
+          if (!localKey || !localKey.trim()) {
+            throw new Error('Penyusunan ATP dengan AI dibatalkan: Kunci API Gemini diperlukan.');
+          }
+        }
+        preferLocalKey = true;
+      } else {
+        preferLocalKey = false;
+      }
+    }
+
+    // 3. POST ATP TEPAT SATU KALI
+    const res = await aiFetch(
+      '/api/ai/generate-atp',
+      {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(params),
-      });
-
-    let res = await requestATP();
+      },
+      {
+        preferLocalKeyOnFirstRequest: preferLocalKey,
+      }
+    );
 
     let contentType = res.headers.get('Content-Type') || '';
     if (!contentType.toLowerCase().includes('application/json')) {
       const text = await res.text().catch(() => '');
 
       if (text.includes('Starting Server')) {
-        // Cold-start / intercept retry exactly once after short delay
-        await new Promise((resolve) => setTimeout(resolve, 700));
-        res = await requestATP();
-        contentType = res.headers.get('Content-Type') || '';
-
-        if (!contentType.toLowerCase().includes('application/json')) {
-          const retryText = await res.text().catch(() => '');
-          if (retryText.includes('Starting Server')) {
-            throw new Error(
-              'Runtime preview masih belum siap setelah satu kali percobaan ulang.'
-            );
-          }
-          const retryMime =
-            contentType.split(';')[0]?.trim() ||
-            contentType ||
-            'unknown';
-          throw new Error(
-            `Endpoint AI ATP tidak mengembalikan JSON (received ${retryMime}). (Status ${res.status})`
-          );
-        }
-      } else {
-        const mime =
-          contentType.split(';')[0]?.trim() ||
-          contentType ||
-          'unknown';
-
         throw new Error(
-          `Endpoint AI ATP tidak mengembalikan JSON (received ${mime}). (Status ${res.status})`
+          'Runtime preview sedang memulai ulang atau mengintersep respons API.'
         );
       }
+
+      const mime =
+        contentType.split(';')[0]?.trim() ||
+        contentType ||
+        'unknown';
+
+      throw new Error(
+        `Endpoint AI ATP tidak mengembalikan JSON (received ${mime}). (Status ${res.status})`
+      );
     }
 
     if (!res.ok) {
