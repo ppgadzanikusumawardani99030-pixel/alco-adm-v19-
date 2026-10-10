@@ -39,6 +39,7 @@ import {
   downloadBabMateriTemplateXlsx,
   ATPUnitMappingImportResult,
 } from '../services/atpUnitMappingImportService';
+import { validateATPDataWorkflow } from '../services/cpWorkflowService';
 
 export interface ATPUnitMappingManagerProps {
   atp: ATPData;
@@ -833,19 +834,20 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   const [importErrors, setImportErrors] = useState<string[] | null>(null);
   const [importSuccessNotice, setImportSuccessNotice] = useState<string | null>(null);
 
-  // Section 6: ATP Readiness Gate for Import Bab & Materi
-  const isATPReady = Boolean(
-    atp &&
-    atp.workflowStatus === 'SIAP' &&
-    Array.isArray(atp.items) &&
-    atp.items.length > 0 &&
-    !atp.needsReview
-  );
+  // Section 6: ATP Readiness Gate for Import Bab & Materi (using canonical workflow authority)
+  const notReadyMessage = 'ATP perlu ditinjau atau diperbarui sebelum mengimpor struktur Bab & Materi.';
+
+  const atpWorkflowValidation = useMemo(() => {
+    return validateATPDataWorkflow(atp, tp, academicSetting);
+  }, [atp, tp, academicSetting]);
+
+  const isATPReady = Boolean(atpWorkflowValidation.isSiap);
 
   const handleImportClick = () => {
     if (!isATPReady) {
       setImportErrors([
-        'Selesaikan ATP terlebih dahulu sebelum mengimpor struktur Bab & Materi.',
+        notReadyMessage,
+        ...(atpWorkflowValidation.issues || []),
       ]);
       return;
     }
@@ -861,7 +863,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
 
     if (!isATPReady) {
       setImportErrors([
-        'Selesaikan ATP terlebih dahulu sebelum mengimpor struktur Bab & Materi.',
+        notReadyMessage,
+        ...(atpWorkflowValidation.issues || []),
       ]);
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
@@ -1552,7 +1555,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
                           Pemetaan Bab sudah tersimpan. Struktur hasil import hanya akan mengganti draf saat ini. Data tersimpan baru berubah setelah Anda menekan Simpan Perubahan.
                         </p>
                         <p className="text-[11px] text-amber-800">
-                          Pemetaan ini sudah digunakan oleh Perencanaan Tahunan. Jika struktur baru disimpan, data downstream dapat menjadi stale dan perlu ditinjau ulang.
+                          Jika pemetaan ini sudah digunakan oleh Perencanaan Tahunan, perubahan struktur Bab/Materi yang disimpan dapat membuat data downstream perlu ditinjau ulang.
                         </p>
                       </div>
                     </div>

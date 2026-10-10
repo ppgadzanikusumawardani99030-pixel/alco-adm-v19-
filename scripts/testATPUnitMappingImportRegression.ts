@@ -3,8 +3,10 @@ import * as XLSX from 'xlsx';
 import {
   validateAndBuildATPUnitMappings,
   parseBabMateriXlsx,
+  createBabMateriTemplateWorkbook,
   RawBabMateriRow,
 } from '../src/services/atpUnitMappingImportService';
+import { validateATPDataWorkflow } from '../src/services/cpWorkflowService';
 
 console.log('=== RUNNING TESTS: ATP Unit & Material Import Service ===');
 
@@ -174,6 +176,163 @@ console.log('Testing Case F: Missing sheet BAB_MATERI -> ERROR...');
   assert.strictEqual(result.success, false, 'Should fail when sheet BAB_MATERI missing');
   assert.ok(result.errors?.some((err) => err.includes('BAB_MATERI')));
   console.log('✅ Case F passed');
+}
+
+// ==========================================
+// ROUND-TRIP TEMPLATE REGRESSION
+// ==========================================
+console.log('Testing Round-Trip Template Regression...');
+{
+  const templateWb = createBabMateriTemplateWorkbook();
+  assert.strictEqual(templateWb.SheetNames.includes('BAB_MATERI'), true, 'Sheet name must be BAB_MATERI');
+  const buf = XLSX.write(templateWb, { type: 'array', bookType: 'xlsx' });
+  const result = parseBabMateriXlsx(buf);
+
+  assert.strictEqual(result.success, true, 'Round-trip template parse success must be true');
+  assert.strictEqual(result.units?.length, 2, 'Template must have 2 babs');
+  assert.strictEqual(result.stats?.totalMaterials, 3, 'Template must have 3 materials total');
+  
+  result.units?.forEach((u) => {
+    assert.strictEqual(u.linkedAtpItemIds.length, 0, 'Unit linkedAtpItemIds must be 0');
+    assert.strictEqual(u.linkedTpIds.length, 0, 'Unit linkedTpIds must be 0');
+    u.materials.forEach((m) => {
+      assert.strictEqual(m.linkedAtpItemIds.length, 0, 'Material linkedAtpItemIds must be 0');
+      assert.strictEqual(m.linkedTpIds.length, 0, 'Material linkedTpIds must be 0');
+    });
+  });
+  console.log('✅ Round-Trip Template Regression passed');
+}
+
+// ==========================================
+// READINESS REGRESSION (Cases A, B, C, D)
+// ==========================================
+console.log('Testing Readiness Regression (Cases A, B, C, D)...');
+{
+  const mockCP = {
+    id: 'cp-001',
+    academicSettingId: 'acad-001',
+    workflowStatus: 'SIAP' as const,
+    needsReview: false,
+    updatedAt: '2026-01-01T00:00:00Z',
+    generalDescription: 'Deskripsi umum capaian pembelajaran matematika.',
+    elements: [{ id: 'elem-1', name: 'Bilangan', content: 'Memahami bilangan cacah.' }],
+    source: { type: 'MERDEKA' as const, verificationStatus: 'VERIFIED', title: 'SK BSKAP' },
+  };
+  const mockCPAnalysis = {
+    id: 'cpa-001',
+    academicSettingId: 'acad-001',
+    workflowStatus: 'SIAP' as const,
+    needsReview: false,
+    updatedAt: '2026-01-01T00:00:00Z',
+    items: [
+      {
+        id: 'ana-001',
+        elementId: 'elem-1',
+        elementName: 'Bilangan',
+        cpText: 'Memahami bilangan cacah.',
+        cpCompetence: 'Memahami',
+        materialScope: 'Bilangan Cacah',
+        suggestedTp: 'Peserta didik memahami bilangan cacah.',
+        order: 1,
+      }
+    ],
+    basedOnCpUpdatedAt: '2026-01-01T00:00:00Z',
+  };
+  const mockTP = {
+    id: 'tp-data-001',
+    academicSettingId: 'acad-001',
+    cpId: 'cp-001',
+    cpAnalysisId: 'cpa-001',
+    academicYear: '2025/2026',
+    subjectCode: 'Matematika',
+    phase: 'B',
+    workflowStatus: 'SIAP' as const,
+    needsReview: false,
+    updatedAt: '2026-01-02T00:00:00Z',
+    items: [
+      {
+        id: 'tp-001',
+        code: 'E1-BLG-01',
+        elementName: 'Bilangan',
+        statement: 'Peserta didik memahami bilangan cacah.',
+        competence: 'Memahami',
+        contentScope: 'Bilangan Cacah',
+        cpAnalysisId: 'ana-001',
+        cpAnalysisItemIds: ['ana-001'],
+        order: 1,
+      }
+    ],
+  };
+
+  const mockAcademicSetting = {
+    id: 'acad-001',
+    profileId: 'prof-001',
+    curriculumType: 'KURIKULUM_MERDEKA' as const,
+    academicYear: '2025/2026',
+    level: 'SD' as const,
+    grade: 'Kelas 4',
+    phase: 'B' as const,
+    semester: '1 (Ganjil)' as const,
+  };
+
+  const baseATP = {
+    id: 'atp-001',
+    academicSettingId: 'acad-001',
+    tpId: 'tp-data-001',
+    tpDataId: 'tp-data-001',
+    academicYear: '2025/2026',
+    subjectCode: 'Matematika',
+    phase: 'B' as const,
+    workflowStatus: 'SIAP' as const,
+    needsReview: false,
+    basedOnTpUpdatedAt: mockTP.updatedAt,
+    items: [
+      {
+        id: 'atp-item-1',
+        stepNumber: 1,
+        linkedTpIds: ['tp-001'],
+        focus: 'Penguasaan Bilangan Cacah',
+        tpCode: 'E1-BLG-01',
+        tpStatement: 'Peserta didik memahami bilangan cacah.',
+        jp: 4,
+        semester: '1 (Ganjil)',
+      }
+    ],
+    updatedAt: '2026-01-03T00:00:00Z',
+  };
+
+  // Case A: ATP SIAP, TP unchanged, ATP not stale -> canImportBabMateri === true
+  const resA = validateATPDataWorkflow(baseATP, mockTP as any, mockAcademicSetting as any, mockCP as any, mockCPAnalysis as any);
+  if (!resA.isSiap) {
+    console.log('Case A issues:', resA.issues);
+  }
+  assert.strictEqual(resA.isSiap, true, 'Case A: canImportBabMateri must be true');
+
+  // Case B: ATP workflowStatus = SIAP, needsReview = false, TP.updatedAt > ATP.basedOnTpUpdatedAt -> canImportBabMateri === false
+  const staleTP = {
+    ...mockTP,
+    updatedAt: '2026-01-05T00:00:00Z',
+  };
+  const resB = validateATPDataWorkflow(baseATP, staleTP as any, mockAcademicSetting as any, mockCP as any, mockCPAnalysis as any);
+  assert.strictEqual(resB.isSiap, false, 'Case B: canImportBabMateri must be false when TP is newer than ATP lineage');
+
+  // Case C: ATP workflowStatus = PERLU_DILENGKAPI -> expected false
+  const draftATP = {
+    ...baseATP,
+    workflowStatus: 'PERLU_DILENGKAPI' as const,
+  };
+  const resC = validateATPDataWorkflow(draftATP, mockTP as any, mockAcademicSetting as any, mockCP as any, mockCPAnalysis as any);
+  assert.strictEqual(resC.isSiap, false, 'Case C: canImportBabMateri must be false when ATP status is not SIAP');
+
+  // Case D: ATP needsReview = true -> expected false
+  const reviewedATP = {
+    ...baseATP,
+    needsReview: true,
+  };
+  const resD = validateATPDataWorkflow(reviewedATP, mockTP as any, mockAcademicSetting as any, mockCP as any, mockCPAnalysis as any);
+  assert.strictEqual(resD.isSiap, false, 'Case D: canImportBabMateri must be false when ATP needsReview is true');
+
+  console.log('✅ Readiness Regression (Cases A, B, C, D) passed');
 }
 
 console.log('=== ALL REGRESSION TESTS PASSED SUCCESSFULLY ===');

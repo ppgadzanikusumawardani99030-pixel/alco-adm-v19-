@@ -324,9 +324,9 @@ export function parseBabMateriXlsx(data: ArrayBuffer | Uint8Array): ATPUnitMappi
 }
 
 /**
- * Downloads a client-side Excel template for Bab & Materi.
+ * Creates client-side Excel workbook for Bab & Materi template.
  */
-export function downloadBabMateriTemplateXlsx(): void {
+export function createBabMateriTemplateWorkbook(): XLSX.WorkBook {
   const templateData = [
     {
       babOrder: 1,
@@ -359,6 +359,14 @@ export function downloadBabMateriTemplateXlsx(): void {
     { wch: 35 },
   ];
 
+  return workbook;
+}
+
+/**
+ * Downloads a client-side Excel template for Bab & Materi.
+ */
+export function downloadBabMateriTemplateXlsx(): void {
+  const workbook = createBabMateriTemplateWorkbook();
   XLSX.writeFile(workbook, 'Template_Bab_Materi.xlsx');
 }
 
