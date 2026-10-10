@@ -326,9 +326,9 @@ export function validateProjectTransfer(
       if (!element) {
         if (curriculumType === 'KURIKULUM_MERDEKA') {
           issues.push({
-            severity: 'ERROR',
+            severity: 'WARNING',
             code: 'EMPTY_CP_ELEMENT',
-            message: `Elemen CP "${code || index + 1}" tidak boleh kosong pada Kurikulum Merdeka.`,
+            message: `Elemen CP "${code || index + 1}" belum diisi. Project tetap dapat diimpor, tetapi elemen perlu dilengkapi agar Analisis CP dan TP dapat berstatus SIAP.`,
             field: 'element',
             path: `${path}.element`,
             itemCode: code,
@@ -409,9 +409,9 @@ export function validateProjectTransfer(
 
         if (curriculumType === 'KURIKULUM_MERDEKA' && !CANONICAL_MERDEKA_TP_CODE_REGEX.test(code)) {
           issues.push({
-            severity: 'ERROR',
+            severity: 'WARNING',
             code: 'INVALID_MERDEKA_TP_CODE',
-            message: `Kode TP "${code}" pada baris ke-${index + 1} tidak sesuai format canonical Kurikulum Merdeka (contoh: E1-PGD-01).`,
+            message: `Kode TP "${code}" pada baris ke-${index + 1} belum memenuhi format canonical Kurikulum Merdeka (contoh: E1-BLG-01). Project tetap dapat diimpor, tetapi TP belum dapat berstatus SIAP sampai kode diperbaiki.`,
             field: 'code',
             path: `${path}.code`,
             itemCode: code,
@@ -457,9 +457,12 @@ export function validateProjectTransfer(
 
       if (!competence) {
         issues.push({
-          severity: curriculumType === 'KURIKULUM_MERDEKA' ? 'ERROR' : 'WARNING',
+          severity: 'WARNING',
           code: 'EMPTY_TP_COMPETENCE',
-          message: `Kompetensi pada TP "${code || index + 1}" belum terisi.`,
+          message:
+            curriculumType === 'KURIKULUM_MERDEKA'
+              ? `Kompetensi pada TP "${code || index + 1}" belum terisi. Project tetap dapat diimpor, tetapi kompetensi perlu dilengkapi agar TP dapat berstatus SIAP.`
+              : `Kompetensi pada TP "${code || index + 1}" belum terisi.`,
           field: 'competence',
           path: `${path}.competence`,
           itemCode: code,
@@ -468,9 +471,12 @@ export function validateProjectTransfer(
 
       if (!materialScope) {
         issues.push({
-          severity: curriculumType === 'KURIKULUM_MERDEKA' ? 'ERROR' : 'WARNING',
+          severity: 'WARNING',
           code: 'EMPTY_TP_MATERIAL_SCOPE',
-          message: `Lingkup materi pada TP "${code || index + 1}" belum terisi.`,
+          message:
+            curriculumType === 'KURIKULUM_MERDEKA'
+              ? `Lingkup materi pada TP "${code || index + 1}" belum terisi. Project tetap dapat diimpor, tetapi lingkup materi perlu dilengkapi agar TP dapat berstatus SIAP.`
+              : `Lingkup materi pada TP "${code || index + 1}" belum terisi.`,
           field: 'materialScope',
           path: `${path}.materialScope`,
           itemCode: code,

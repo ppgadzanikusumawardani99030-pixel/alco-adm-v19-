@@ -49,7 +49,7 @@ function runRegressionSuite() {
       {
         id: 'tp-101',
         order: 1,
-        code: 'TP 7.1',
+        code: 'E1-AP-01',
         statement: 'Memahami konsep dasar algoritma dan pemrograman.',
         competence: 'Memahami',
         contentScope: 'Algoritma Pemrograman',
@@ -70,8 +70,10 @@ function runRegressionSuite() {
       {
         id: 'atp-201',
         stepNumber: 1,
+        focus: 'Konsep dasar algoritma',
+        linkedTpIds: ['tp-101'],
         tpId: 'tp-101',
-        tpCode: 'TP 7.1',
+        tpCode: 'E1-AP-01',
         tpStatement: 'Memahami konsep dasar algoritma dan pemrograman.',
         materialScope: 'Algoritma Pemrograman',
         jp: 4,
@@ -92,13 +94,24 @@ function runRegressionSuite() {
     id: 'lp-001',
     academicSettingId: 'setting-merdeka-1',
     curriculumType: 'KURIKULUM_MERDEKA',
+    sourceType: 'MANUAL',
     status: 'SIAP',
     confirmedAt: new Date().toISOString(),
+    createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     topic: 'Pengenalan Algoritma',
     tpIds: ['tp-101'],
     atpItemIds: ['atp-201'],
     allocatedJP: 4,
+    objectives: [
+      {
+        id: 'obj-1',
+        tpId: 'tp-101',
+        code: 'E1-AP-01',
+        statement: 'Memahami konsep dasar algoritma dan pemrograman.',
+        materialScope: 'Algoritma Pemrograman',
+      },
+    ],
     learningExperiences: [
       { id: 'exp-1', phase: 'UNDERSTAND', description: 'Memahami bagan alur sederhana', durationMinutes: 30 },
       { id: 'exp-2', phase: 'APPLY', description: 'Menerapkan logika pada algoritma', durationMinutes: 60 },
@@ -142,7 +155,11 @@ function runRegressionSuite() {
 
   // Assert specific Modul Ajar readiness error messages
   const hasCompetencyError = modulAjarValA.errors.some((e) => e.includes('Kompetensi Awal belum diisi'));
-  const hasDimensionError = modulAjarValA.errors.some((e) => e.includes('Dimensi Profil Lulusan belum dipilih'));
+  const hasDimensionError = modulAjarValA.errors.some(
+    (e) =>
+      e.includes('Dimensi Profil Lulusan belum dipilih') ||
+      e.includes('Dimensi Profil Lulusan harus berupa daftar')
+  );
   const hasResourcesError = modulAjarValA.errors.some((e) => e.includes('Sarana dan prasarana / sumber belajar belum diisi'));
   const hasLearningModelError = modulAjarValA.errors.some((e) => e.includes('Model/praktik pembelajaran belum diisi'));
 
@@ -174,7 +191,7 @@ function runRegressionSuite() {
   const completeModulAjarPlan: LearningPlan = {
     ...canonicalBasePlan,
     initialCompetency: 'Peserta didik telah mengenal penggunaan gawai dan instruksi terurut.',
-    graduateProfileDimensions: ['Penalaran Kritis', 'Mandiri'],
+    graduateProfileDimensions: ['Penalaran Kritis', 'Kemandirian'],
     resources: [
       { id: 'res-1', title: 'Buku Panduan Guru Informatika SMP Kelas VII', source: 'Kemdikbudristek' },
     ],
