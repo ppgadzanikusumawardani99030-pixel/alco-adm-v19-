@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Wand2,
   AlertTriangle,
+  Clipboard,
 } from 'lucide-react';
 import { ATPData, ATPItem, TPData, CPData, CPAnalysisData, AcademicSetting, TeacherProfile, ActiveContext } from '../types';
 import { generateATPWithAI, refineTextWithAI } from '../services/aiService';
@@ -23,6 +24,7 @@ import {
   resolveATPItemTPReferences,
   validateTPDataWorkflow,
 } from '../services/cpWorkflowService';
+import { buildTPDiagnosticReport } from '../services/diagnosticService';
 
 interface ATPManagerProps {
   atp: ATPData;
@@ -59,6 +61,7 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [currentItem, setCurrentItem] = useState<ATPItem | null>(null);
   const [isRefiningRationale, setIsRefiningRationale] = useState(false);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setRationale(atp.rationale || '');
@@ -75,6 +78,47 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
             ? (tp.reviewReason || 'TP ditandai perlu ditinjau ulang (needsReview).')
             : 'TP belum dikonfirmasi atau disimpan sebagai SIAP.'))
     : undefined;
+
+  const handleCopyDiagnostic = async () => {
+    const report = buildTPDiagnosticReport({
+      module: 'ATP',
+      workspaceId: tp.workspaceId || atp.workspaceId,
+      academicSetting,
+      context,
+      cp,
+      cpAnalysis,
+      tp,
+      uiItemsCount: tp.items?.length ?? 0,
+      validation: tpValidation,
+      isStoredStatusAligned: (tp.workflowStatus || 'BELUM_DIMULAI') === tpValidation.status,
+      atp,
+      atpGate: isTPReady ? 'ALLOWED' : 'BLOCKED',
+      atpGateReason: isTPReady ? undefined : tpReadinessReason,
+      isTPReady,
+      tpReadinessReason,
+      learningPlanGate: atp.workflowStatus === 'SIAP' ? 'ALLOWED' : 'BLOCKED',
+      learningPlanGateReason: atp.workflowStatus === 'SIAP' ? undefined : 'ATP belum berstatus SIAP.',
+    });
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(report);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = report;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        document.body.removeChild(area);
+      }
+      setCopyNotice('Diagnostik berhasil disalin.');
+      setTimeout(() => setCopyNotice(null), 3000);
+    } catch {
+      setGenerationError('Gagal menyalin diagnostik. Browser tidak memberi akses clipboard.');
+    }
+  };
 
   // Integrity Check: TP was modified after ATP was formed
   const isTPOutdated =
@@ -490,27 +534,44 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
             </p>
           </div>
 
-          {/* AI Generator Button */}
+          {/* AI Generator Button & Diagnostic Button */}
           <div className="flex flex-col items-end gap-1.5 self-start sm:self-auto">
-            <button
-              id="btn-ai-generate-atp"
-              onClick={handleGenerateAI}
-              disabled={isGenerating || !isTPReady}
-              title={!isTPReady ? tpReadinessReason : undefined}
-              className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isGenerating ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>AI Sedang Menyusun Alur ATP...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 text-amber-300" />
-                  <span>Susun ATP dari TP (AI)</span>
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleCopyDiagnostic}
+                className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl text-xs font-bold border border-slate-300 shadow-sm transition cursor-pointer"
+                title="Salin laporan diagnostik kesiapan TP dan gerbang ATP"
+              >
+                <Clipboard className="w-4 h-4 text-slate-500" />
+                <span>Salin Diagnostik</span>
+              </button>
+
+              <button
+                id="btn-ai-generate-atp"
+                onClick={handleGenerateAI}
+                disabled={isGenerating || !isTPReady}
+                title={!isTPReady ? tpReadinessReason : undefined}
+                className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isGenerating ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>AI Sedang Menyusun Alur ATP...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-amber-300" />
+                    <span>Susun ATP dari TP (AI)</span>
+                  </>
+                )}
+              </button>
+            </div>
+            {copyNotice && (
+              <span className="text-[11px] text-emerald-700 font-semibold text-right">
+                ✓ {copyNotice}
+              </span>
+            )}
             {!isTPReady && (
               <span className="text-[11px] text-amber-700 font-medium text-right max-w-xs">
                 Penyusunan diblokir: {tpReadinessReason}

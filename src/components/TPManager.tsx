@@ -44,10 +44,6 @@ import {
   buildTPDiagnosticReport,
   recordDiagnosticEvent,
 } from '../services/diagnosticService';
-import {
-  runPreviewRouteProbe,
-  formatPreviewRouteProbeReport,
-} from '../services/previewRouteProbe';
 
 interface TPManagerProps {
   tp: TPData;
@@ -97,16 +93,18 @@ export const TPManager: React.FC<TPManagerProps> = ({
   const hasCPAnalysis = !!(cpAnalysis?.items && cpAnalysis.items.length > 0);
 
   // Workflow validation
+  const runtimeTPCandidate: TPData = {
+    ...tp,
+    items,
+    academicSettingId: tp.academicSettingId || academicSetting.id,
+    cpId: tp.cpId || cp.id,
+    academicYear: tp.academicYear || context.academicYear,
+    subjectCode: tp.subjectCode || context.subject,
+    phase: tp.phase || context.phase,
+  };
+
   const validation = validateTPDataWorkflow(
-    {
-      ...tp,
-      items,
-      academicSettingId: tp.academicSettingId || academicSetting.id,
-      cpId: tp.cpId || cp.id,
-      academicYear: tp.academicYear || context.academicYear,
-      subjectCode: tp.subjectCode || context.subject,
-      phase: tp.phase || context.phase,
-    },
+    runtimeTPCandidate,
     cp,
     cpAnalysis,
     academicSetting
@@ -506,25 +504,25 @@ export const TPManager: React.FC<TPManagerProps> = ({
   };
 
   const handleCopyDiagnostic = async () => {
-    let report = buildTPDiagnosticReport({
+    const isTPReady = validation.isSiap && tp.workflowStatus === 'SIAP' && tp.needsReview !== true;
+    const report = buildTPDiagnosticReport({
       module: 'TP',
       workspaceId: tp.workspaceId,
       academicSetting,
       context,
-      tp,
+      cp,
+      cpAnalysis,
+      tp: runtimeTPCandidate,
       uiItemsCount: items.length,
       validation,
+      isStoredStatusAligned,
+      atpGate: isTPReady ? 'ALLOWED' : 'BLOCKED',
+      atpGateReason: isTPReady ? undefined : (validation.issues[0] || 'TP belum SIAP.'),
+      isTPReady,
+      tpReadinessReason: isTPReady ? undefined : (validation.issues[0] || 'TP belum SIAP.'),
       learningPlanGate: validation.isSiap ? 'ALLOWED' : 'BLOCKED',
       learningPlanGateReason: validation.isSiap ? undefined : validation.issues[0],
     });
-
-    try {
-      const probeResult = await runPreviewRouteProbe();
-      const probeText = formatPreviewRouteProbeReport(probeResult);
-      report += probeText;
-    } catch (err: any) {
-      report += `\n\n=== GAS Preview Route Probe ===\nFAILED: ${err?.message || String(err)}\n`;
-    }
 
     try {
       if (navigator.clipboard?.writeText) {

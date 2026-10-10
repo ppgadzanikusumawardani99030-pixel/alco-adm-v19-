@@ -1,6 +1,8 @@
 import {
   AcademicSetting,
   ActiveContext,
+  CPData,
+  CPAnalysisData,
   ATPData,
   TPData,
   LearningPlan,
@@ -92,14 +94,21 @@ function formatEvents(scope: DiagnosticScope): string[] {
 }
 
 export function buildTPDiagnosticReport(data: {
-  module?: 'TP' | 'LEARNING_PLAN';
+  module?: 'TP' | 'ATP' | 'LEARNING_PLAN';
   workspaceId?: string;
   academicSetting?: AcademicSetting | null;
   context?: Partial<ActiveContext> | null;
+  cp?: CPData | null;
+  cpAnalysis?: CPAnalysisData | null;
   tp?: TPData | null;
   uiItemsCount?: number;
   validation?: TPValidationDetails | null;
+  isStoredStatusAligned?: boolean;
   atp?: ATPData | null;
+  atpGate?: 'ALLOWED' | 'BLOCKED';
+  atpGateReason?: string;
+  isTPReady?: boolean;
+  tpReadinessReason?: string;
   learningPlanGate?: 'ALLOWED' | 'BLOCKED';
   learningPlanGateReason?: string;
 }): string {
@@ -107,6 +116,25 @@ export function buildTPDiagnosticReport(data: {
   const tpPhaseRaw = data.tp?.phase || '';
   const validation = data.validation;
   const issues = validation?.issues?.length ? validation.issues.map((issue) => `- ${issue}`) : ['- none'];
+  const storedStatusAligned = data.isStoredStatusAligned !== undefined
+    ? data.isStoredStatusAligned
+    : (data.tp?.workflowStatus || 'BELUM_DIMULAI') === validation?.status;
+
+  const isTPReady = data.isTPReady !== undefined
+    ? data.isTPReady
+    : (Boolean(validation?.isSiap) && data.tp?.workflowStatus === 'SIAP' && data.tp?.needsReview !== true);
+
+  const derivedGateReason = !isTPReady
+    ? (!validation?.isSiap
+        ? (validation?.issues?.[0] || 'TP belum memenuhi kriteria kanonikal SIAP.')
+        : (data.tp?.needsReview
+            ? (data.tp?.reviewReason || 'TP ditandai perlu ditinjau ulang (needsReview).')
+            : 'TP belum dikonfirmasi atau disimpan sebagai SIAP.'))
+    : undefined;
+
+  const atpGate = data.atpGate || (isTPReady ? 'ALLOWED' : 'BLOCKED');
+  const atpGateReason = data.atpGateReason || data.tpReadinessReason || derivedGateReason || '-';
+
   return [
     'ADMINISTRASI GURU AI - DIAGNOSTIC REPORT',
     '',
@@ -127,30 +155,67 @@ export function buildTPDiagnosticReport(data: {
     line('semester', data.academicSetting?.semester || data.context?.semester),
     line('level', data.academicSetting?.level || data.context?.level),
     line('grade', data.academicSetting?.grade || data.context?.grade),
+    line('phase', data.academicSetting?.phase || data.context?.phase || data.tp?.phase),
     line('phaseRaw', phaseRaw),
     line('phaseNormalized', normalizePhaseCode(phaseRaw)),
     line('subject', data.academicSetting?.subject || data.context?.subject),
     '',
+    'CP:',
+    line('id', data.cp?.id),
+    line('workflowStatus', data.cp?.workflowStatus),
+    line('source verificationStatus', data.cp?.source?.verificationStatus),
+    line('elementsCount', data.cp?.elements?.length ?? 0),
+    line('updatedAt', data.cp?.updatedAt),
+    '',
+    'CP ANALYSIS:',
+    line('id', data.cpAnalysis?.id),
+    line('status', data.cpAnalysis?.status),
+    line('workflowStatus', data.cpAnalysis?.workflowStatus),
+    line('itemsCount', data.cpAnalysis?.items?.length ?? 0),
+    line('basedOnCpUpdatedAt', data.cpAnalysis?.basedOnCpUpdatedAt),
+    line('updatedAt', data.cpAnalysis?.updatedAt),
+    line('needsReview', data.cpAnalysis?.needsReview ?? false),
+    '',
     'TP:',
     line('id', data.tp?.id),
-    line('uiItemsCount', data.uiItemsCount ?? data.tp?.items?.length ?? 0),
-    line('storedItemsCount', data.tp?.items?.length ?? 0),
+    line('status', data.tp?.status),
     line('workflowStatus', data.tp?.workflowStatus),
     line('runtimeValidationStatus', validation?.status),
     line('runtimeIsSiap', validation?.isSiap),
-    line('needsReview', data.tp?.needsReview || false),
-    line('generatedBy', data.tp?.generatedBy),
+    line('needsReview', data.tp?.needsReview ?? false),
+    line('reviewReason', data.tp?.reviewReason),
+    line('basedOnCpUpdatedAt', data.tp?.basedOnCpUpdatedAt),
+    line('basedOnAnalysisUpdatedAt', data.tp?.basedOnAnalysisUpdatedAt),
     line('updatedAt', data.tp?.updatedAt),
+    line('storedStatusAligned', storedStatusAligned),
+    line('uiItemsCount', data.uiItemsCount ?? data.tp?.items?.length ?? 0),
+    line('storedItemsCount', data.tp?.items?.length ?? 0),
+    line('generatedBy', data.tp?.generatedBy),
     line('storedPhaseRaw', tpPhaseRaw),
     line('storedPhaseNormalized', normalizePhaseCode(tpPhaseRaw)),
     '',
-    'TP Validation Issues:',
+    'TP ITEMS:',
+    ...formatTPItems(data.tp),
+    '',
+    'TP VALIDATION ISSUES:',
     ...issues,
+    '',
+    'ATP GATE:',
+    line('atpGate', atpGate),
+    line('atpGateReason', atpGateReason),
+    line('isTPReady', isTPReady),
+    line('runtimeTPIsSiap', validation?.isSiap ?? false),
+    line('storedTPWorkflowStatus', data.tp?.workflowStatus),
+    line('tpNeedsReview', data.tp?.needsReview ?? false),
+    line('gateReason', atpGateReason),
+    line('atpWorkflowStatus', data.atp?.workflowStatus),
+    line('atpItemsCount', data.atp?.items?.length ?? 0),
+    line('atpBasedOnTpUpdatedAt', data.atp?.basedOnTpUpdatedAt),
     '',
     'Downstream:',
     line('atpItemsCount', data.atp?.items?.length ?? 0),
     line('atpWorkflowStatus', data.atp?.workflowStatus),
-    line('atpNeedsReview', data.atp?.needsReview || false),
+    line('atpNeedsReview', data.atp?.needsReview ?? false),
     line('learningPlanGate', data.learningPlanGate || '-'),
     line('learningPlanGateReason', data.learningPlanGateReason || '-'),
     '',
