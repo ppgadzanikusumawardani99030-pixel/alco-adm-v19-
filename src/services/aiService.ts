@@ -832,21 +832,77 @@ export async function generateLearningPlanWithAI(params: GenerateLearningPlanPar
 
 export async function generateATPWithAI(params: GenerateATPParams): Promise<GenerateATPResult> {
   try {
-    const res = await aiFetch('/api/ai/generate-atp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
+    const requestATP = () =>
+      aiFetch('/api/ai/generate-atp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
 
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      if (errData.code === 'AI_NOT_CONFIGURED') {
-        throw new Error('Layanan AI belum dikonfigurasi pada server.');
+    let res = await requestATP();
+
+    let contentType = res.headers.get('Content-Type') || '';
+    if (!contentType.toLowerCase().includes('application/json')) {
+      const text = await res.text().catch(() => '');
+
+      if (text.includes('Starting Server')) {
+        // Cold-start / intercept retry exactly once after short delay
+        await new Promise((resolve) => setTimeout(resolve, 700));
+        res = await requestATP();
+        contentType = res.headers.get('Content-Type') || '';
+
+        if (!contentType.toLowerCase().includes('application/json')) {
+          const retryText = await res.text().catch(() => '');
+          if (retryText.includes('Starting Server')) {
+            throw new Error(
+              'Runtime preview masih belum siap setelah satu kali percobaan ulang.'
+            );
+          }
+          const retryMime =
+            contentType.split(';')[0]?.trim() ||
+            contentType ||
+            'unknown';
+          throw new Error(
+            `Endpoint AI ATP tidak mengembalikan JSON (received ${retryMime}). (Status ${res.status})`
+          );
+        }
+      } else {
+        const mime =
+          contentType.split(';')[0]?.trim() ||
+          contentType ||
+          'unknown';
+
+        throw new Error(
+          `Endpoint AI ATP tidak mengembalikan JSON (received ${mime}). (Status ${res.status})`
+        );
       }
-      throw new Error(errData.error || `Gagal menyusun ATP dengan AI (Status ${res.status})`);
     }
 
-    const data = await res.json();
+    if (!res.ok) {
+      let errData: any = {};
+      try {
+        errData = await res.json();
+      } catch {
+        errData = {};
+      }
+
+      if (errData && errData.code === 'AI_NOT_CONFIGURED') {
+        throw new Error('Layanan AI belum dikonfigurasi pada server.');
+      }
+      throw new Error(errData?.error || `Gagal menyusun ATP dengan AI (Status ${res.status})`);
+    }
+
+    let data: any;
+    try {
+      data = await res.json();
+    } catch {
+      throw new Error('Respons endpoint AI ATP tidak dapat dibaca sebagai JSON valid.');
+    }
+
+    if (!data || typeof data !== 'object') {
+      throw new Error('Respons endpoint AI ATP tidak dapat dibaca sebagai JSON valid.');
+    }
+
     if (!data.data || !Array.isArray(data.data.items) || data.data.items.length === 0) {
       throw new Error('Hasil respon AI ATP tidak memuat butir alur yang valid.');
     }

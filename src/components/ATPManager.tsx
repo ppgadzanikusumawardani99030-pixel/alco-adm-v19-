@@ -24,7 +24,10 @@ import {
   resolveATPItemTPReferences,
   validateTPDataWorkflow,
 } from '../services/cpWorkflowService';
-import { buildTPDiagnosticReport } from '../services/diagnosticService';
+import {
+  buildTPDiagnosticReport,
+  recordDiagnosticEvent,
+} from '../services/diagnosticService';
 
 interface ATPManagerProps {
   atp: ATPData;
@@ -134,6 +137,17 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
     setIsGenerating(true);
     setGenerationError(null);
 
+    recordDiagnosticEvent({
+      scope: 'ATP',
+      action: 'ATP_GENERATE_STARTED',
+      status: 'STARTED',
+      metadata: {
+        tpItemsCount: tp.items?.length ?? 0,
+        existingAtpItemsCount: items?.length ?? 0,
+        tpWorkflowStatus: tp.workflowStatus,
+      },
+    });
+
     try {
       const generated = await generateATPWithAI({
         tps: tp.items,
@@ -225,9 +239,26 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
         updatedAt: new Date().toISOString(),
       };
       onSaveATP(updated);
+
+      recordDiagnosticEvent({
+        scope: 'ATP',
+        action: 'ATP_GENERATE_SUCCESS',
+        status: 'DRAFT',
+        metadata: {
+          generatedItemsCount: formattedItems.length,
+        },
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Gagal menyusun ATP dengan AI';
       setGenerationError(msg);
+      recordDiagnosticEvent({
+        scope: 'ATP',
+        action: 'ATP_GENERATE_FAILED',
+        status: 'FAILED',
+        metadata: {
+          reason: msg,
+        },
+      });
     } finally {
       setIsGenerating(false);
     }
