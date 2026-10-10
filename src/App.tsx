@@ -1646,6 +1646,8 @@ export function App() {
             <ATPUnitMappingManager
               atp={activeATP}
               tp={activeTP}
+              cp={activeCP}
+              cpAnalysis={activeCPAnalysis}
               mapping={activeATPUnitMapping}
               academicSetting={transitionalAcademicSetting}
               onSaveMapping={handleSaveATPUnitMapping}

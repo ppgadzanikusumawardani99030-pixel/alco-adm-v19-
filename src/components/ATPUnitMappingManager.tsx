@@ -27,6 +27,8 @@ import {
   ATPUnitMappingData,
   ATPUnitMapping,
   ATPUnitMaterial,
+  CPData,
+  CPAnalysisData,
 } from '../types';
 import {
   analyzeATPUnitMappingWithAI,
@@ -46,6 +48,8 @@ export interface ATPUnitMappingManagerProps {
   tp: TPData;
   mapping?: ATPUnitMappingData;
   academicSetting?: AcademicSetting;
+  cp?: CPData;
+  cpAnalysis?: CPAnalysisData;
   onSaveMapping: (updatedMapping: ATPUnitMappingData) => boolean;
   onNextStep: () => void;
   onBackToATP: () => void;
@@ -247,6 +251,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   tp,
   mapping,
   academicSetting,
+  cp,
+  cpAnalysis,
   onSaveMapping,
   onNextStep,
   onBackToATP,
@@ -838,8 +844,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   const notReadyMessage = 'ATP perlu ditinjau atau diperbarui sebelum mengimpor struktur Bab & Materi.';
 
   const atpWorkflowValidation = useMemo(() => {
-    return validateATPDataWorkflow(atp, tp, academicSetting);
-  }, [atp, tp, academicSetting]);
+    return validateATPDataWorkflow(atp, tp, academicSetting, cp, cpAnalysis);
+  }, [atp, tp, academicSetting, cp, cpAnalysis]);
 
   const isATPReady = Boolean(atpWorkflowValidation.isSiap);
 

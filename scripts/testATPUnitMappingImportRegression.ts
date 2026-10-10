@@ -301,38 +301,92 @@ console.log('Testing Readiness Regression (Cases A, B, C, D)...');
     updatedAt: '2026-01-03T00:00:00Z',
   };
 
-  // Case A: ATP SIAP, TP unchanged, ATP not stale -> canImportBabMateri === true
-  const resA = validateATPDataWorkflow(baseATP, mockTP as any, mockAcademicSetting as any, mockCP as any, mockCPAnalysis as any);
-  if (!resA.isSiap) {
-    console.log('Case A issues:', resA.issues);
+  // Helper function
+  function canImportBabMateri({
+    atp,
+    tp,
+    academicSetting,
+    cp,
+    cpAnalysis,
+}: {
+    atp?: any;
+    tp?: any;
+    academicSetting?: any;
+    cp?: any;
+    cpAnalysis?: any;
+  }): boolean {
+    return validateATPDataWorkflow(
+      atp,
+      tp,
+      academicSetting,
+      cp,
+      cpAnalysis
+    ).isSiap;
   }
-  assert.strictEqual(resA.isSiap, true, 'Case A: canImportBabMateri must be true');
 
-  // Case B: ATP workflowStatus = SIAP, needsReview = false, TP.updatedAt > ATP.basedOnTpUpdatedAt -> canImportBabMateri === false
+  // Case A — full canonical chain ready
+  const resA = canImportBabMateri({
+    atp: baseATP,
+    tp: mockTP,
+    academicSetting: mockAcademicSetting,
+    cp: mockCP,
+    cpAnalysis: mockCPAnalysis,
+  });
+  assert.strictEqual(resA, true, 'Case A: canImportBabMateri must be true');
+
+  // Case B — TP stale against ATP
   const staleTP = {
     ...mockTP,
     updatedAt: '2026-01-05T00:00:00Z',
   };
-  const resB = validateATPDataWorkflow(baseATP, staleTP as any, mockAcademicSetting as any, mockCP as any, mockCPAnalysis as any);
-  assert.strictEqual(resB.isSiap, false, 'Case B: canImportBabMateri must be false when TP is newer than ATP lineage');
+  const resB = canImportBabMateri({
+    atp: baseATP,
+    tp: staleTP,
+    academicSetting: mockAcademicSetting,
+    cp: mockCP,
+    cpAnalysis: mockCPAnalysis,
+  });
+  assert.strictEqual(resB, false, 'Case B: canImportBabMateri must be false when TP is newer than ATP lineage');
 
-  // Case C: ATP workflowStatus = PERLU_DILENGKAPI -> expected false
-  const draftATP = {
-    ...baseATP,
-    workflowStatus: 'PERLU_DILENGKAPI' as const,
-  };
-  const resC = validateATPDataWorkflow(draftATP, mockTP as any, mockAcademicSetting as any, mockCP as any, mockCPAnalysis as any);
-  assert.strictEqual(resC.isSiap, false, 'Case C: canImportBabMateri must be false when ATP status is not SIAP');
+  // Case C — CP Analysis missing
+  const resC = canImportBabMateri({
+    atp: baseATP,
+    tp: mockTP,
+    academicSetting: mockAcademicSetting,
+    cp: mockCP,
+    cpAnalysis: undefined,
+  });
+  assert.strictEqual(resC, false, 'Case C: canImportBabMateri must be false when cpAnalysis is missing');
 
-  // Case D: ATP needsReview = true -> expected false
+  // Case D — ATP needsReview
   const reviewedATP = {
     ...baseATP,
     needsReview: true,
   };
-  const resD = validateATPDataWorkflow(reviewedATP, mockTP as any, mockAcademicSetting as any, mockCP as any, mockCPAnalysis as any);
-  assert.strictEqual(resD.isSiap, false, 'Case D: canImportBabMateri must be false when ATP needsReview is true');
+  const resD = canImportBabMateri({
+    atp: reviewedATP,
+    tp: mockTP,
+    academicSetting: mockAcademicSetting,
+    cp: mockCP,
+    cpAnalysis: mockCPAnalysis,
+  });
+  assert.strictEqual(resD, false, 'Case D: canImportBabMateri must be false when ATP needsReview is true');
 
-  console.log('✅ Readiness Regression (Cases A, B, C, D) passed');
+  // Case E — ATP status not SIAP
+  const draftATP = {
+    ...baseATP,
+    workflowStatus: 'DRAFT' as const,
+  };
+  const resE = canImportBabMateri({
+    atp: draftATP,
+    tp: mockTP,
+    academicSetting: mockAcademicSetting,
+    cp: mockCP,
+    cpAnalysis: mockCPAnalysis,
+  });
+  assert.strictEqual(resE, false, 'Case E: canImportBabMateri must be false when ATP status is not SIAP');
+
+  console.log('✅ Readiness Regression (Cases A, B, C, D, E) passed');
 }
 
 console.log('=== ALL REGRESSION TESTS PASSED SUCCESSFULLY ===');
