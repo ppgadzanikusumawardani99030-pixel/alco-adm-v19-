@@ -532,7 +532,7 @@ export function sanitizeMappingAnalysisResult(
           action: undefined,
         });
       }
-      return;
+
     }
 
     atpFindings.push({
@@ -1041,7 +1041,7 @@ export function fallbackAnalyzeMapping(params: AnalyzeATPUnitMappingServerParams
           supportingTpIds: rawLinked,
           strength: bestUnassigned.totalScore >= 6.0 ? 'STRONG' : 'MODERATE',
           reason: `Topik langkah ATP memiliki keterkaitan substantif dengan tema Bab ${targetUnit.order}: '${targetUnit.title}'.`,
-          action: multiBabAction || { type: 'ASSIGN_ATP_TO_UNIT', atpItemId: item.id, targetUnitId: targetUnit.id, linkedTpIds: rawLinked, targetMaterialId: matchingMat?.id },
+          action: multiBabAction,
         });
       }
     }

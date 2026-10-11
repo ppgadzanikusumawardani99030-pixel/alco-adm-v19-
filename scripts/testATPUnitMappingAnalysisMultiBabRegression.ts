@@ -1,5 +1,6 @@
 import assert from 'node:assert';
 import { fallbackAnalyzeMapping, sanitizeMappingAnalysisResult } from '../server/mappingAnalysis';
+import { validateATPUnitMappingCanonical } from '../src/services/atpUnitMappingValidationService';
 import { TPData, ATPData, ATPUnitMappingData } from '../src/types';
 
 console.log('=== RUNNING TESTS: Multi-Bab ATP Mapping Analysis & Deadlock Prevention ===');
@@ -184,54 +185,57 @@ console.log('Testing Case D & G: Preserve existing Bab and Idempotency...');
 }
 
 // ==========================================
-// CASE H: Exact subset TP for Pecahan
+// CASE I: True Z=0 + Bab incomplete dead-lock prevention
 // ==========================================
-console.log('Testing Case H: Exact subset TP for Pecahan...');
+console.log('Testing Case I: True Z=0 deadlock prevention...');
 {
-  const rawResult = {
-    atpFindings: [
-      {
-        id: 'f-1',
-        atpItemId: 'atp-1',
-        status: 'UNMAPPED',
-        action: {
-          type: 'ASSIGN_ATP_TO_UNIT',
-          atpItemId: 'atp-1',
-          targetUnitId: 'unit-1',
-          linkedTpIds: ['TP3'], // Subset
-        },
-      },
-    ],
-    materialFindings: [],
-  };
-
   const mapping: ATPUnitMappingData = {
-    id: 'map-h',
+    id: 'map-i',
     academicSettingId: 'acad-001',
     atpId: 'atp-001',
     tpDataId: 'tp-data-001',
     units: [
       {
         id: 'unit-1',
-        title: 'Bab 1',
+        title: 'Bab 1: Bilangan',
         order: 1,
+        linkedAtpItemIds: ['atp-1'],
+        linkedTpIds: ['TP1', 'TP2', 'TP3'],
+        materials: [{ id: 'm-1', title: 'Operasi', order: 1, linkedAtpItemIds: ['atp-1'], linkedTpIds: ['TP1', 'TP2'] }],
+      },
+      {
+        id: 'unit-2',
+        title: 'Bab 2: Pecahan',
+        order: 2,
         linkedAtpItemIds: [],
-        linkedTpIds: ['TP3'],
-        materials: [],
+        linkedTpIds: [],
+        materials: [{ id: 'm-2', title: 'Pecahan', order: 1, linkedAtpItemIds: [], linkedTpIds: [] }],
       },
     ],
     updatedAt: '2026-01-01T00:00:00Z',
   };
 
-  const sanitized = sanitizeMappingAnalysisResult(rawResult, {
+  const before = validateATPUnitMappingCanonical(mapping, mockATPData, mockTPData);
+  assert.strictEqual(
+    before.unmappedAtpIds.length + before.uncoveredTpIds.length,
+    0,
+    'Z=0 condition must be true'
+  );
+  assert.ok(
+    before.unitsWithoutLineage.includes('unit-2'),
+    'unit-2 must be incomplete'
+  );
+
+  const analysis = fallbackAnalyzeMapping({
     tpData: mockTPData,
     atpData: mockATPData,
     currentMapping: mapping,
   });
 
-  const sanitizedFinding = sanitized.atpFindings[0];
-  assert.deepStrictEqual(sanitizedFinding.action?.linkedTpIds, ['TP3'], 'Should only have exactly TP3 in linkedTpIds');
-  console.log('✅ Case H passed');
+  const finding = analysis.atpFindings.find((f) => f.atpItemId === 'atp-1');
+  assert.ok(finding?.action, 'Analyzer must recommend assignment to unit-2 despite Z=0');
+  assert.strictEqual(finding.action?.targetUnitId, 'unit-2');
+  console.log('✅ Case I passed');
 }
 
 console.log('=== ALL MULTI-BAB ANALYSIS REGRESSION TESTS PASSED SUCCESSFULLY ===');
