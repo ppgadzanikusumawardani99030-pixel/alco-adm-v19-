@@ -426,7 +426,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     } else if (zCount > 0) {
       summaryMessage = 'Pemetaan belum siap. Hubungkan ATP/TP canonical yang tersisa.';
     } else {
-      const missingUnits = validation.unitsWithoutLineage.map(u => units.find(unit => unit.id === u.id)?.title || 'Bab Tanpa Judul').join(', ');
+      const missingUnits = validation.unitsWithoutLineage.map(unitId => units.find(unit => unit.id === unitId)?.title || unitId).join(', ');
       summaryMessage = `Pemetaan belum siap. Lengkapi Bab (${missingUnits}) atau Materi yang belum diselaraskan.`;
     }
 

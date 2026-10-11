@@ -235,7 +235,150 @@ console.log('Testing Case I: True Z=0 deadlock prevention...');
   const finding = analysis.atpFindings.find((f) => f.atpItemId === 'atp-1');
   assert.ok(finding?.action, 'Analyzer must recommend assignment to unit-2 despite Z=0');
   assert.strictEqual(finding.action?.targetUnitId, 'unit-2');
+  assert.deepStrictEqual(
+    finding.action?.linkedTpIds,
+    ['TP3'],
+    'Unit 2 must receive exactly TP3'
+  );
   console.log('✅ Case I passed');
+}
+
+// ==========================================
+// CASE J: Fail-Closed Invalid TP
+// ==========================================
+console.log('Testing Case J: Invalid TP rejected...');
+{
+  const rawResult = {
+    atpFindings: [{
+        id: 'f-1',
+        atpItemId: 'atp-1',
+        status: 'UNMAPPED',
+        action: {
+          type: 'ASSIGN_ATP_TO_UNIT',
+          atpItemId: 'atp-1',
+          targetUnitId: 'unit-1',
+          linkedTpIds: ['TP_INVALID'],
+        },
+    }],
+    materialFindings: [],
+  };
+  const mapping: ATPUnitMappingData = {
+    id: 'map-j',
+    academicSettingId: 'acad-001',
+    atpId: 'atp-001',
+    tpDataId: 'tp-data-001',
+    units: [{ id: 'unit-1', title: 'Bab 1', order: 1, linkedAtpItemIds: [], linkedTpIds: [], materials: [] }],
+    updatedAt: '2026-01-01T00:00:00Z',
+  };
+  const sanitized = sanitizeMappingAnalysisResult(rawResult, { tpData: mockTPData, atpData: mockATPData, currentMapping: mapping });
+  assert.strictEqual(sanitized.atpFindings[0].action, undefined);
+  console.log('✅ Case J passed');
+}
+
+// ==========================================
+// CASE K: Mixed Valid/Invalid TP
+// ==========================================
+console.log('Testing Case K: Mixed Valid/Invalid rejected...');
+{
+  const rawResult = {
+    atpFindings: [{
+        id: 'f-1',
+        atpItemId: 'atp-1',
+        status: 'UNMAPPED',
+        action: {
+          type: 'ASSIGN_ATP_TO_UNIT',
+          atpItemId: 'atp-1',
+          targetUnitId: 'unit-1',
+          linkedTpIds: ['TP1', 'TP_INVALID'],
+        },
+    }],
+    materialFindings: [],
+  };
+  const mapping: ATPUnitMappingData = {
+    id: 'map-k',
+    academicSettingId: 'acad-001',
+    atpId: 'atp-001',
+    tpDataId: 'tp-data-001',
+    units: [{ id: 'unit-1', title: 'Bab 1', order: 1, linkedAtpItemIds: [], linkedTpIds: [], materials: [] }],
+    updatedAt: '2026-01-01T00:00:00Z',
+  };
+  const sanitized = sanitizeMappingAnalysisResult(rawResult, { tpData: mockTPData, atpData: mockATPData, currentMapping: mapping });
+  assert.strictEqual(sanitized.atpFindings[0].action, undefined);
+  console.log('✅ Case K passed');
+}
+
+// ==========================================
+// CASE L: Regression Third Bab
+// ==========================================
+console.log('Testing Case L: Regression Third Bab...');
+{
+  const mapping: ATPUnitMappingData = {
+    id: 'map-l',
+    academicSettingId: 'acad-001',
+    atpId: 'atp-001',
+    tpDataId: 'tp-data-001',
+    units: [
+      { id: 'unit-1', title: 'B1', order: 1, linkedAtpItemIds: ['atp-1'], linkedTpIds: ['TP1'], materials: [] },
+      { id: 'unit-2', title: 'B2', order: 2, linkedAtpItemIds: ['atp-1'], linkedTpIds: ['TP2'], materials: [] },
+      { id: 'unit-3', title: 'B3: Pecahan', order: 3, linkedAtpItemIds: [], linkedTpIds: [], materials: [{ id: 'm-3', title: 'Pecahan', order: 1, linkedAtpItemIds: [], linkedTpIds: [] }] },
+    ],
+    updatedAt: '2026-01-01T00:00:00Z',
+  };
+  const analysis = fallbackAnalyzeMapping({ tpData: mockTPData, atpData: mockATPData, currentMapping: mapping });
+  const findings = analysis.atpFindings.filter(f => f.atpItemId === 'atp-1');
+  assert.strictEqual(findings.length, 1);
+  assert.strictEqual(findings[0].action?.targetUnitId, 'unit-3');
+  console.log('✅ Case L passed');
+}
+
+// ==========================================
+// CASE M: Material Closure
+// ==========================================
+console.log('Testing Case M: Material Closure...');
+{
+  const mapping: ATPUnitMappingData = {
+    id: 'map-m',
+    academicSettingId: 'acad-001',
+    atpId: 'atp-001',
+    tpDataId: 'tp-data-001',
+    units: [
+      { id: 'unit-1', title: 'B1', order: 1, linkedAtpItemIds: ['atp-1'], linkedTpIds: ['TP1', 'TP2', 'TP3'], materials: [] },
+      { 
+        id: 'unit-2', 
+        title: 'B2', 
+        order: 2, 
+        linkedAtpItemIds: ['atp-1'], 
+        linkedTpIds: ['TP3'], 
+        materials: [{ id: 'm-2', title: 'Pecahan', order: 1, linkedAtpItemIds: [], linkedTpIds: [] }] 
+      },
+    ],
+    updatedAt: '2026-01-01T00:00:00Z',
+  };
+
+  const analysis = fallbackAnalyzeMapping({ tpData: mockTPData, atpData: mockATPData, currentMapping: mapping });
+  const matFinding = analysis.materialFindings.find(m => m.materialId === 'm-2');
+  
+  assert.ok(matFinding, 'Material finding m-2 must exist');
+  console.log('Status found:', matFinding?.status);
+  assert.ok(['ALIGNABLE', 'SUPPORTED', 'MANUAL_REVIEW'].includes(matFinding?.status || ''), 'Status should be ALIGNABLE or SUPPORTED');
+  assert.strictEqual(matFinding?.action?.type, 'ALIGN_EXISTING_MATERIAL');
+  assert.deepStrictEqual(matFinding?.action?.linkedAtpItemIds, ['atp-1']);
+  assert.deepStrictEqual(matFinding?.action?.linkedTpIds, ['TP3']);
+
+  // Simulate applying
+  mapping.units[1].materials[0].linkedAtpItemIds = ['atp-1'];
+  mapping.units[1].materials[0].linkedTpIds = ['TP3'];
+
+  const finalValidation = validateATPUnitMappingCanonical(mapping, mockATPData, mockTPData);
+  
+  assert.strictEqual(finalValidation.isValid, true);
+  assert.strictEqual(finalValidation.isComplete, true);
+  assert.deepStrictEqual(finalValidation.unitsWithoutLineage, []);
+  assert.deepStrictEqual(finalValidation.materialsWithoutLineage, []);
+  assert.deepStrictEqual(finalValidation.unmappedAtpIds, []);
+  assert.deepStrictEqual(finalValidation.uncoveredTpIds, []);
+  
+  console.log('✅ Case M passed');
 }
 
 console.log('=== ALL MULTI-BAB ANALYSIS REGRESSION TESTS PASSED SUCCESSFULLY ===');

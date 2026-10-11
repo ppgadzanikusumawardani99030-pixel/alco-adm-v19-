@@ -358,6 +358,7 @@ Kembalikan respon DALAM FORMAT JSON VALID yang mematuhi skema berikut:
         "type": "ASSIGN_ATP_TO_UNIT",
         "atpItemId": "string",
         "targetUnitId": "string",
+        "linkedTpIds": ["string"],
         "targetMaterialId": "string (opsional)"
       }
     }
@@ -503,35 +504,21 @@ export function sanitizeMappingAnalysisResult(
       const allCanonicalCovered = canonicalTpIds.length > 0 && canonicalTpIds.every((id) => unionSubset.has(id));
 
       const isMultiBabValid = allSubsetsNonEmpty && allCanonicalCovered;
-      if (isMultiBabValid) {
-        atpFindings.push({
-          id: f?.id ? String(f.id) : `finding-atp-${idx + 1}`,
-          atpItemId,
-          status: 'ALIGNED',
-          currentUnitId: undefined,
-          suggestedUnitId: undefined,
-          suggestedMaterialId: undefined,
-          supportingTpIds: canonicalTpIds,
-          strength: 'STRONG',
-          reason: f?.reason && typeof f.reason === 'string' && f.reason.trim().length > 0
-            ? f.reason.trim()
-            : 'Pembagian TP lintas Bab valid dan lengkap.',
-          action: undefined,
-        });
-      } else {
-        atpFindings.push({
-          id: f?.id ? String(f.id) : `finding-atp-${idx + 1}`,
-          atpItemId,
-          status: 'REVIEW',
-          currentUnitId: undefined,
-          suggestedUnitId: undefined,
-          suggestedMaterialId: undefined,
-          supportingTpIds: canonicalTpIds,
-          strength: 'LOW',
-          reason: 'Pembagian TP lintas Bab belum lengkap atau ada subset TP kosong sehingga perlu peninjauan guru.',
-          action: undefined,
-        });
-      }
+      atpFindings.push({
+        id: f?.id ? String(f.id) : `finding-atp-${idx + 1}`,
+        atpItemId,
+        status: isMultiBabValid ? 'ALIGNED' : 'REVIEW',
+        currentUnitId: undefined,
+        suggestedUnitId: undefined,
+        suggestedMaterialId: undefined,
+        supportingTpIds: canonicalTpIds,
+        strength: isMultiBabValid ? 'STRONG' : 'LOW',
+        reason: isMultiBabValid
+          ? (f?.reason && typeof f.reason === 'string' && f.reason.trim().length > 0 ? f.reason.trim() : 'Pembagian TP lintas Bab valid dan lengkap.')
+          : 'Pembagian TP lintas Bab belum lengkap atau ada subset TP kosong sehingga perlu peninjauan guru.',
+        action: action,
+      });
+      return;
 
     }
 
