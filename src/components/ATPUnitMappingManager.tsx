@@ -18,7 +18,10 @@ import {
   FileSpreadsheet,
   X,
   Download,
+<<<<<<< HEAD
   Copy,
+=======
+>>>>>>> 5c98b4da33a07b0bcc1ee0272f2e12ec80462369
 } from 'lucide-react';
 import {
   ATPData,
@@ -43,7 +46,10 @@ import {
   ATPUnitMappingImportResult,
 } from '../services/atpUnitMappingImportService';
 import { validateATPDataWorkflow } from '../services/cpWorkflowService';
+<<<<<<< HEAD
 import { buildATPUnitMappingDiagnosticReport } from '../services/diagnosticService';
+=======
+>>>>>>> 5c98b4da33a07b0bcc1ee0272f2e12ec80462369
 
 export interface ATPUnitMappingManagerProps {
   atp: ATPData;
@@ -914,8 +920,11 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
 
     // Section 5: Reset state analysis lama bila diperlukan
     setAnalysisResult(null);
+<<<<<<< HEAD
     setLastAnalysisSnapshot(null);
     setLastAppliedActionIds([]);
+=======
+>>>>>>> 5c98b4da33a07b0bcc1ee0272f2e12ec80462369
     setSelectedAnalysisActionIds(new Set());
     setAppliedNotice(null);
     setSaveSuccessNotice(false);

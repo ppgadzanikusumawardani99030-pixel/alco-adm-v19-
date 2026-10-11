@@ -349,7 +349,11 @@ console.log('Testing Case M: Material Closure...');
         order: 2, 
         linkedAtpItemIds: ['atp-1'], 
         linkedTpIds: ['TP3'], 
+<<<<<<< HEAD
         materials: [{ id: 'm-2', title: 'Pecahan Sederhana', order: 1, linkedAtpItemIds: [], linkedTpIds: [] }] 
+=======
+        materials: [{ id: 'm-2', title: 'Pecahan', order: 1, linkedAtpItemIds: [], linkedTpIds: [] }] 
+>>>>>>> 5c98b4da33a07b0bcc1ee0272f2e12ec80462369
       },
     ],
     updatedAt: '2026-01-01T00:00:00Z',
@@ -360,11 +364,15 @@ console.log('Testing Case M: Material Closure...');
   
   assert.ok(matFinding, 'Material finding m-2 must exist');
   console.log('Status found:', matFinding?.status);
+<<<<<<< HEAD
   assert.strictEqual(
     matFinding?.status,
     'ALIGNABLE',
     'Material Pecahan Sederhana must be deterministically alignable'
   );
+=======
+  assert.ok(['ALIGNABLE', 'SUPPORTED', 'MANUAL_REVIEW'].includes(matFinding?.status || ''), 'Status should be ALIGNABLE or SUPPORTED');
+>>>>>>> 5c98b4da33a07b0bcc1ee0272f2e12ec80462369
   assert.strictEqual(matFinding?.action?.type, 'ALIGN_EXISTING_MATERIAL');
   assert.deepStrictEqual(matFinding?.action?.linkedAtpItemIds, ['atp-1']);
   assert.deepStrictEqual(matFinding?.action?.linkedTpIds, ['TP3']);
@@ -385,6 +393,7 @@ console.log('Testing Case M: Material Closure...');
   console.log('✅ Case M passed');
 }
 
+<<<<<<< HEAD
 // ==========================================
 // CASE N: Lock TP to ATP Canonical Parent
 // ==========================================
@@ -494,3 +503,6 @@ console.log('Testing Case O: ALIGNED + valid multi-Bab action to empty unit pres
 
 console.log('=== ALL MULTI-BAB ANALYSIS REGRESSION TESTS PASSED SUCCESSFULLY ===');
 
+=======
+console.log('=== ALL MULTI-BAB ANALYSIS REGRESSION TESTS PASSED SUCCESSFULLY ===');
+>>>>>>> 5c98b4da33a07b0bcc1ee0272f2e12ec80462369

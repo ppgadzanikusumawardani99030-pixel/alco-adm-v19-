@@ -121,14 +121,20 @@ export function validateCPAnalysisDataWorkflow(
     };
   }
 
+<<<<<<< HEAD
   // Canonical CP dependency: CP must be provided
   if (!cp) {
     issues.push('Capaian Pembelajaran (CP) rujukan belum tersedia.');
   } else {
+=======
+  // Canonical CP dependency: CP must be SIAP
+  if (cp) {
+>>>>>>> 5c98b4da33a07b0bcc1ee0272f2e12ec80462369
     const cpValidation = validateCPDataWorkflow(cp);
     if (!cpValidation.isSiap) {
       issues.push('Capaian Pembelajaran (CP) rujukan belum memenuhi status SIAP.');
     }
+<<<<<<< HEAD
 
     // cpAnalysis.cpId wajib sama dengan cp.id
     if (!cpAnalysis.cpId || cpAnalysis.cpId !== cp.id) {
@@ -139,6 +145,8 @@ export function validateCPAnalysisDataWorkflow(
     if (cp.updatedAt && !cpAnalysis.basedOnCpUpdatedAt) {
       issues.push('Timestamp rujukan CP (basedOnCpUpdatedAt) belum tercatat.');
     }
+=======
+>>>>>>> 5c98b4da33a07b0bcc1ee0272f2e12ec80462369
   }
 
   // Check if CP version changed or review needed
