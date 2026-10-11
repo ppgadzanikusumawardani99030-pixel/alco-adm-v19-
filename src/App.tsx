@@ -761,7 +761,9 @@ export function App() {
         id: analysis.id && analysis.id.trim() ? analysis.id : `cpanalysis-${activeYearPlan.id}`,
         academicSettingId: activeYearPlan.id,
         cpId: persistedCP.id,
-        basedOnCpUpdatedAt: persistedCP.updatedAt,
+        basedOnCpUpdatedAt:
+          analysis.basedOnCpUpdatedAt ||
+          persistedCP.updatedAt,
       };
 
       saveCPAnalysisV5(activeYearPlan.id, canonicalAnalysis);
@@ -1646,6 +1648,8 @@ export function App() {
             <ATPUnitMappingManager
               atp={activeATP}
               tp={activeTP}
+              cp={activeCP}
+              cpAnalysis={activeCPAnalysis}
               mapping={activeATPUnitMapping}
               academicSetting={transitionalAcademicSetting}
               onSaveMapping={handleSaveATPUnitMapping}

@@ -46,6 +46,7 @@ import {
   normalizeCalendarDayStatus,
   validateCalendarCompleteness,
 } from '../src/services/jpEngine';
+import { CP_PRESETS } from '../src/data/curriculumDefaults';
 
 function assert(condition: boolean, message: string) {
   if (!condition) {
@@ -887,10 +888,62 @@ async function runCurriculumMasterTests() {
   );
   assert(
     cp2025.entry?.elements.some((e) => e.name === 'Terampil Bergerak') &&
-      cp2025.entry?.elements.some((e) => e.name === 'Belajar melalui Gerak') &&
+      cp2025.entry?.elements.some((e) => e.name.toLowerCase() === 'belajar melalui gerak') &&
       cp2025.entry?.elements.some((e) => e.name === 'Bergaya Hidup Aktif') &&
       cp2025.entry?.elements.some((e) => e.name === 'Memilih Hidup yang Menyehatkan'),
     'CP current PJOK Fase A memiliki elemen terverifikasi sesuai BSKAP 046/2025'
+  );
+
+  // Regression Lock: CPManager PJOK Fase A Preset Alignment with Master BSKAP 046/2025
+  const pjokPreset = CP_PRESETS.find(
+    (p) => p.subject.toLowerCase().includes('pjok') && p.phase === 'Fase A'
+  );
+  assert(pjokPreset !== undefined, 'Preset PJOK Fase A ditemukan di CP_PRESETS');
+  assert(
+    pjokPreset?.sourceInfo.title.includes('Keputusan Kepala BSKAP 046/H/KR/2025') ||
+      pjokPreset?.sourceInfo.title.includes('046/H/KR/2025'),
+    'Preset PJOK Fase A merujuk tepat ke Keputusan Kepala BSKAP 046/H/KR/2025'
+  );
+
+  const presetElementNames = (pjokPreset?.elements || []).map((e) => e.name);
+  assert(
+    presetElementNames.length === 4,
+    `Preset PJOK Fase A mempunyai tepat empat elemen (ditemukan: ${presetElementNames.length})`
+  );
+  assert(
+    presetElementNames.includes('Terampil Bergerak') &&
+      presetElementNames.includes('Belajar Melalui Gerak') &&
+      presetElementNames.includes('Bergaya Hidup Aktif') &&
+      presetElementNames.includes('Memilih Hidup yang Menyehatkan'),
+    'Preset PJOK Fase A mempunyai tepat 4 nama elemen: Terampil Bergerak, Belajar Melalui Gerak, Bergaya Hidup Aktif, Memilih Hidup yang Menyehatkan'
+  );
+
+  const masterPjok = SD_CP_ENTRIES.find((entry) => entry.id === 'cp25-sd-fase-a-pjok');
+  assert(
+    JSON.stringify(pjokPreset?.elements) === JSON.stringify(masterPjok?.elements),
+    'CP_PRESETS PJOK Fase A harus identik dengan canonical master elements'
+  );
+
+  const combinedContent = (pjokPreset?.elements || []).map((e) => e.content).join(' ').toLowerCase();
+  assert(
+    combinedContent.includes('mengidentifikasi manfaatnya'),
+    'Konten preset memuat semantic marker: mengidentifikasi manfaatnya'
+  );
+  assert(
+    combinedContent.includes('makanan bergizi'),
+    'Konten preset memuat semantic marker: makanan bergizi'
+  );
+  assert(
+    combinedContent.includes('kesehatan') && combinedContent.includes('keselamatan'),
+    'Konten preset memuat semantic marker: risiko kesehatan/keselamatan'
+  );
+  assert(
+    combinedContent.includes('mencari bantuan'),
+    'Konten preset memuat semantic marker: mencari bantuan'
+  );
+  assert(
+    combinedContent.includes('menyimpulkan efektivitasnya'),
+    'Konten preset memuat semantic marker: menyimpulkan efektivitasnya'
   );
 
   const cp2024 = resolveCPContext({

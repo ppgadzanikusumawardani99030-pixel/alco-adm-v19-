@@ -1,6 +1,8 @@
 import {
   AcademicSetting,
   ActiveContext,
+  CPData,
+  CPAnalysisData,
   ATPData,
   TPData,
   LearningPlan,
@@ -22,11 +24,13 @@ import {
   UnitSemesterPlacementValidation,
 } from './unitSemesterPlanningService';
 
-import { AIMeetingDiagnostic } from './aiService';
+import { AIMeetingDiagnostic, MappingAnalysisResult } from './aiService';
+import { ATPUnitMappingValidationResult } from './atpUnitMappingValidationService';
 
 export type DiagnosticScope =
   | 'TP'
   | 'ATP'
+  | 'ATP_UNIT_MAPPING'
   | 'UNIT_EXECUTION_PLAN'
   | 'LEARNING_PLAN'
   | 'KKTP'
@@ -92,14 +96,21 @@ function formatEvents(scope: DiagnosticScope): string[] {
 }
 
 export function buildTPDiagnosticReport(data: {
-  module?: 'TP' | 'LEARNING_PLAN';
+  module?: 'TP' | 'ATP' | 'LEARNING_PLAN';
   workspaceId?: string;
   academicSetting?: AcademicSetting | null;
   context?: Partial<ActiveContext> | null;
+  cp?: CPData | null;
+  cpAnalysis?: CPAnalysisData | null;
   tp?: TPData | null;
   uiItemsCount?: number;
   validation?: TPValidationDetails | null;
+  isStoredStatusAligned?: boolean;
   atp?: ATPData | null;
+  atpGate?: 'ALLOWED' | 'BLOCKED';
+  atpGateReason?: string;
+  isTPReady?: boolean;
+  tpReadinessReason?: string;
   learningPlanGate?: 'ALLOWED' | 'BLOCKED';
   learningPlanGateReason?: string;
 }): string {
@@ -107,6 +118,25 @@ export function buildTPDiagnosticReport(data: {
   const tpPhaseRaw = data.tp?.phase || '';
   const validation = data.validation;
   const issues = validation?.issues?.length ? validation.issues.map((issue) => `- ${issue}`) : ['- none'];
+  const storedStatusAligned = data.isStoredStatusAligned !== undefined
+    ? data.isStoredStatusAligned
+    : (data.tp?.workflowStatus || 'BELUM_DIMULAI') === validation?.status;
+
+  const isTPReady = data.isTPReady !== undefined
+    ? data.isTPReady
+    : (Boolean(validation?.isSiap) && data.tp?.workflowStatus === 'SIAP' && data.tp?.needsReview !== true);
+
+  const derivedGateReason = !isTPReady
+    ? (!validation?.isSiap
+        ? (validation?.issues?.[0] || 'TP belum memenuhi kriteria kanonikal SIAP.')
+        : (data.tp?.needsReview
+            ? (data.tp?.reviewReason || 'TP ditandai perlu ditinjau ulang (needsReview).')
+            : 'TP belum dikonfirmasi atau disimpan sebagai SIAP.'))
+    : undefined;
+
+  const atpGate = data.atpGate || (isTPReady ? 'ALLOWED' : 'BLOCKED');
+  const atpGateReason = data.atpGateReason || data.tpReadinessReason || derivedGateReason || '-';
+
   return [
     'ADMINISTRASI GURU AI - DIAGNOSTIC REPORT',
     '',
@@ -127,30 +157,67 @@ export function buildTPDiagnosticReport(data: {
     line('semester', data.academicSetting?.semester || data.context?.semester),
     line('level', data.academicSetting?.level || data.context?.level),
     line('grade', data.academicSetting?.grade || data.context?.grade),
+    line('phase', data.academicSetting?.phase || data.context?.phase || data.tp?.phase),
     line('phaseRaw', phaseRaw),
     line('phaseNormalized', normalizePhaseCode(phaseRaw)),
     line('subject', data.academicSetting?.subject || data.context?.subject),
     '',
+    'CP:',
+    line('id', data.cp?.id),
+    line('workflowStatus', data.cp?.workflowStatus),
+    line('source verificationStatus', data.cp?.source?.verificationStatus),
+    line('elementsCount', data.cp?.elements?.length ?? 0),
+    line('updatedAt', data.cp?.updatedAt),
+    '',
+    'CP ANALYSIS:',
+    line('id', data.cpAnalysis?.id),
+    line('status', data.cpAnalysis?.status),
+    line('workflowStatus', data.cpAnalysis?.workflowStatus),
+    line('itemsCount', data.cpAnalysis?.items?.length ?? 0),
+    line('basedOnCpUpdatedAt', data.cpAnalysis?.basedOnCpUpdatedAt),
+    line('updatedAt', data.cpAnalysis?.updatedAt),
+    line('needsReview', data.cpAnalysis?.needsReview ?? false),
+    '',
     'TP:',
     line('id', data.tp?.id),
-    line('uiItemsCount', data.uiItemsCount ?? data.tp?.items?.length ?? 0),
-    line('storedItemsCount', data.tp?.items?.length ?? 0),
+    line('status', data.tp?.status),
     line('workflowStatus', data.tp?.workflowStatus),
     line('runtimeValidationStatus', validation?.status),
     line('runtimeIsSiap', validation?.isSiap),
-    line('needsReview', data.tp?.needsReview || false),
-    line('generatedBy', data.tp?.generatedBy),
+    line('needsReview', data.tp?.needsReview ?? false),
+    line('reviewReason', data.tp?.reviewReason),
+    line('basedOnCpUpdatedAt', data.tp?.basedOnCpUpdatedAt),
+    line('basedOnAnalysisUpdatedAt', data.tp?.basedOnAnalysisUpdatedAt),
     line('updatedAt', data.tp?.updatedAt),
+    line('storedStatusAligned', storedStatusAligned),
+    line('uiItemsCount', data.uiItemsCount ?? data.tp?.items?.length ?? 0),
+    line('storedItemsCount', data.tp?.items?.length ?? 0),
+    line('generatedBy', data.tp?.generatedBy),
     line('storedPhaseRaw', tpPhaseRaw),
     line('storedPhaseNormalized', normalizePhaseCode(tpPhaseRaw)),
     '',
-    'TP Validation Issues:',
+    'TP ITEMS:',
+    ...formatTPItems(data.tp),
+    '',
+    'TP VALIDATION ISSUES:',
     ...issues,
+    '',
+    'ATP GATE:',
+    line('atpGate', atpGate),
+    line('atpGateReason', atpGateReason),
+    line('isTPReady', isTPReady),
+    line('runtimeTPIsSiap', validation?.isSiap ?? false),
+    line('storedTPWorkflowStatus', data.tp?.workflowStatus),
+    line('tpNeedsReview', data.tp?.needsReview ?? false),
+    line('gateReason', atpGateReason),
+    line('atpWorkflowStatus', data.atp?.workflowStatus),
+    line('atpItemsCount', data.atp?.items?.length ?? 0),
+    line('atpBasedOnTpUpdatedAt', data.atp?.basedOnTpUpdatedAt),
     '',
     'Downstream:',
     line('atpItemsCount', data.atp?.items?.length ?? 0),
     line('atpWorkflowStatus', data.atp?.workflowStatus),
-    line('atpNeedsReview', data.atp?.needsReview || false),
+    line('atpNeedsReview', data.atp?.needsReview ?? false),
     line('learningPlanGate', data.learningPlanGate || '-'),
     line('learningPlanGateReason', data.learningPlanGateReason || '-'),
     '',
@@ -234,9 +301,51 @@ export function buildLearningPlanDiagnosticReport(data: {
       scheduleStatus: item.schedule.status,
     }))
   );
-  const latestAIRequest = getRecentDiagnosticEvents('LEARNING_PLAN')
-    .filter((event) => event.action === 'LEARNING_PLAN_AI_REQUEST')
+  const aiEvents = getRecentDiagnosticEvents('LEARNING_PLAN')
+    .filter((event) => event.action === 'LEARNING_PLAN_AI_REQUEST');
+  const latestAIStarted = aiEvents
+    .filter((event) => event.status === 'STARTED')
     .slice(-1)[0];
+  const latestAIOutcome = aiEvents
+    .filter((event) => event.status !== 'STARTED')
+    .slice(-1)[0];
+
+  const latestBulkSave = getRecentDiagnosticEvents('LEARNING_PLAN')
+    .filter((event) => event.action === 'LEARNING_PLAN_BULK_SAVE')
+    .slice(-1)[0];
+  const latestDelete = getRecentDiagnosticEvents('LEARNING_PLAN')
+    .filter((event) => event.action === 'LEARNING_PLAN_DELETE')
+    .slice(-1)[0];
+
+  const latestAIOutcomeLines = latestAIOutcome
+    ? [
+        line('status', latestAIOutcome.status),
+        line('unitId', latestAIOutcome.metadata?.unitId),
+        line('scopeId', latestAIOutcome.metadata?.scopeId),
+        line('stage', latestAIOutcome.metadata?.stage),
+        line('planId', latestAIOutcome.metadata?.planId || latestAIOutcome.metadata?.generatedPlanId),
+        line('errorMessage', latestAIOutcome.metadata?.errorMessage),
+        line('saveResult', latestAIOutcome.metadata?.saveResult),
+      ]
+    : ['- none'];
+
+  const bulkSaveLines = latestBulkSave
+    ? [
+        line('latest status', latestBulkSave.status),
+        line('generatedCount', latestBulkSave.metadata?.generatedCount),
+        line('failedGenerationCount', latestBulkSave.metadata?.failedGenerationCount),
+        line('skippedExistingCount', latestBulkSave.metadata?.skippedExistingCount),
+      ]
+    : ['- none'];
+
+  const deleteLines = latestDelete
+    ? [
+        line('latest delete status', latestDelete.status),
+        line('planId', latestDelete.metadata?.planId),
+        line('countBefore', latestDelete.metadata?.learningPlanCountBefore),
+        line('expectedCountAfter', latestDelete.metadata?.expectedCountAfter),
+      ]
+    : ['- none'];
 
   const canonicalScopes = activeScopes.length > 0
     ? activeScopes.flatMap((scope) => [
@@ -298,17 +407,17 @@ export function buildLearningPlanDiagnosticReport(data: {
       ])
     : ['- none'];
 
-  const aiInputLines = latestAIRequest
+  const aiInputLines = latestAIStarted
     ? [
-        line('unitId', latestAIRequest.metadata?.unitId),
-        line('TP sent', latestAIRequest.metadata?.tpCount),
-        line('ATP sent', latestAIRequest.metadata?.atpCount),
-        line('LearningMeeting IDs in scope', latestAIRequest.metadata?.learningMeetingCount),
-        line('Allocated JP sent', latestAIRequest.metadata?.allocatedJP),
-        line('Meeting structure sent to AI', latestAIRequest.metadata?.meetingStructureSent),
-        line('meetingStructureCount', latestAIRequest.metadata?.meetingStructureCount),
-        line('KKTP sent to AI', latestAIRequest.metadata?.kktpSent),
-        line('kktpCount', latestAIRequest.metadata?.kktpCount),
+        line('unitId', latestAIStarted.metadata?.unitId),
+        line('TP sent', latestAIStarted.metadata?.tpCount),
+        line('ATP sent', latestAIStarted.metadata?.atpCount),
+        line('LearningMeeting IDs in scope', latestAIStarted.metadata?.learningMeetingCount),
+        line('Allocated JP sent', latestAIStarted.metadata?.allocatedJP),
+        line('Meeting structure sent to AI', latestAIStarted.metadata?.meetingStructureSent),
+        line('meetingStructureCount', latestAIStarted.metadata?.meetingStructureCount),
+        line('KKTP sent to AI', latestAIStarted.metadata?.kktpSent),
+        line('kktpCount', latestAIStarted.metadata?.kktpCount),
       ]
     : ['- no request recorded'];
 
@@ -385,6 +494,15 @@ export function buildLearningPlanDiagnosticReport(data: {
     '',
     'CANONICAL ASSESSMENT PLANS:',
     ...canonicalAssessmentPlans,
+    '',
+    'LATEST AI OUTCOME:',
+    ...latestAIOutcomeLines,
+    '',
+    'BULK SAVE:',
+    ...bulkSaveLines,
+    '',
+    'DELETE:',
+    ...deleteLines,
     '',
     'Recent LEARNING_PLAN Events:',
     ...formatEvents('LEARNING_PLAN'),
@@ -742,5 +860,268 @@ export function buildUnitSemesterPlanningDiagnosticReport(data: {
     'CAPACITY',
     `- s1AvailableJP: ${s1AvailableJP === null ? '-' : s1AvailableJP}`,
     `- s2AvailableJP: ${s2AvailableJP === null ? '-' : s2AvailableJP}`,
+  ].join('\n');
+}
+
+export interface BuildATPUnitMappingDiagnosticParams {
+  academicSetting?: AcademicSetting | null;
+  mapping?: ATPUnitMappingData | null;
+  atp?: ATPData | null;
+  tp?: TPData | null;
+  validation: ATPUnitMappingValidationResult;
+  analysisResult?: MappingAnalysisResult | null;
+  appliedActionIds?: string[];
+}
+
+export function buildATPUnitMappingDiagnosticReport(params: BuildATPUnitMappingDiagnosticParams): string {
+  const {
+    academicSetting,
+    mapping,
+    atp,
+    tp,
+    validation,
+    analysisResult,
+    appliedActionIds = [],
+  } = params;
+
+  const mappingUnits = mapping?.units || [];
+  const z = (validation.unmappedAtpIds?.length || 0) + (validation.uncoveredTpIds?.length || 0);
+
+  // Map of unitId -> title
+  const unitTitleMap = new Map<string, string>();
+  const materialTitleMap = new Map<string, { materialTitle: string; unitTitle: string; unitId: string }>();
+
+  mappingUnits.forEach((u) => {
+    unitTitleMap.set(u.id, u.title || `Bab ${u.order}`);
+    (u.materials || []).forEach((m) => {
+      materialTitleMap.set(m.id, {
+        materialTitle: m.title || `Materi ${m.order}`,
+        unitTitle: u.title || `Bab ${u.order}`,
+        unitId: u.id,
+      });
+    });
+  });
+
+  // Map of canonical ATP items & TP items
+  const canonicalAtpMap = new Map<string, any>();
+  (atp?.items || []).forEach((item) => {
+    canonicalAtpMap.set(item.id, item);
+  });
+
+  const canonicalTpMap = new Map<string, any>();
+  (tp?.items || []).forEach((t) => {
+    canonicalTpMap.set(t.id, t);
+  });
+
+  const unitsWithoutLineageFormatted = (validation.unitsWithoutLineage || []).map((uId) => {
+    const title = unitTitleMap.get(uId);
+    return title ? `${uId} ("${title}")` : uId;
+  });
+
+  const materialsWithoutLineageFormatted = (validation.materialsWithoutLineage || []).map((mRef) => {
+    const info = materialTitleMap.get(mRef.materialId);
+    if (info) {
+      return `${mRef.materialId} ("${info.materialTitle}") in Bab ${mRef.unitId} ("${info.unitTitle}")`;
+    }
+    return `${mRef.materialId} in Bab ${mRef.unitId}`;
+  });
+
+  const unitLines: string[] = [];
+  if (mappingUnits.length === 0) {
+    unitLines.push('- none', '');
+  } else {
+    mappingUnits.forEach((u) => {
+      const uAtpIds = u.linkedAtpItemIds || [];
+      const uTpIds = u.linkedTpIds || [];
+      const isUnitWithoutLineage = (validation.unitsWithoutLineage || []).includes(u.id);
+      const lineageComplete = uAtpIds.length > 0 && uTpIds.length > 0 && !isUnitWithoutLineage;
+
+      unitLines.push(
+        `- unitId: ${u.id}`,
+        `  order: ${u.order ?? '-'}`,
+        `  title: ${u.title || '-'}`,
+        `  linkedAtpItemIds: [${uAtpIds.join(', ')}]`,
+        `  linkedTpIds: [${uTpIds.join(', ')}]`,
+        `  lineageComplete: ${lineageComplete}`,
+        '',
+        '  MATERIALS:'
+      );
+
+      const mats = u.materials || [];
+      if (mats.length === 0) {
+        unitLines.push('  - none');
+      } else {
+        mats.forEach((m) => {
+          const mAtpIds = m.linkedAtpItemIds || [];
+          const mTpIds = m.linkedTpIds || [];
+          const isMatWithoutLineage = (validation.materialsWithoutLineage || []).some(
+            (ref) => ref.materialId === m.id && ref.unitId === u.id
+          );
+          const matLineageComplete = mAtpIds.length > 0 && mTpIds.length > 0 && !isMatWithoutLineage;
+
+          unitLines.push(
+            `  - materialId: ${m.id}`,
+            `    order: ${m.order ?? '-'}`,
+            `    title: ${m.title || '-'}`,
+            `    linkedAtpItemIds: [${mAtpIds.join(', ')}]`,
+            `    linkedTpIds: [${mTpIds.join(', ')}]`,
+            `    lineageComplete: ${matLineageComplete}`
+          );
+        });
+      }
+      unitLines.push('');
+    });
+  }
+
+  const atpFindingLines: string[] = [];
+  if (analysisResult && Array.isArray(analysisResult.atpFindings) && analysisResult.atpFindings.length > 0) {
+    analysisResult.atpFindings.forEach((f) => {
+      const atpFocus = canonicalAtpMap.get(f.atpItemId)?.focus || '-';
+      const suggestedUnitTitle = f.suggestedUnitId ? unitTitleMap.get(f.suggestedUnitId) || '-' : undefined;
+      const targetUnitTitle = f.action?.targetUnitId ? unitTitleMap.get(f.action.targetUnitId) || '-' : undefined;
+
+      atpFindingLines.push(
+        `- atpItemId: ${f.atpItemId}`,
+        `  focus: ${atpFocus}`,
+        `  status: ${f.status}`,
+        `  strength: ${f.strength || '-'}`,
+        `  reason: ${f.reason || '-'}`,
+        `  suggestedUnitId: ${f.suggestedUnitId ? `${f.suggestedUnitId}${suggestedUnitTitle ? ` ("${suggestedUnitTitle}")` : ''}` : '-'}`,
+        `  actionType: ${f.action?.type || '-'}`,
+        `  targetUnitId: ${f.action?.targetUnitId ? `${f.action.targetUnitId}${targetUnitTitle ? ` ("${targetUnitTitle}")` : ''}` : '-'}`,
+        `  linkedTpIds: [${(f.action?.linkedTpIds || []).join(', ')}]`
+      );
+    });
+  } else {
+    atpFindingLines.push('- none');
+  }
+
+  const materialFindingLines: string[] = [];
+  if (analysisResult && Array.isArray(analysisResult.materialFindings) && analysisResult.materialFindings.length > 0) {
+    analysisResult.materialFindings.forEach((m) => {
+      const matInfo = m.materialId ? materialTitleMap.get(m.materialId) : undefined;
+      const matTitle = matInfo?.materialTitle || m.suggestedTitle || '-';
+      const unitTitle = unitTitleMap.get(m.unitId) || '-';
+
+      materialFindingLines.push(
+        `- materialId: ${m.materialId ? `${m.materialId} ("${matTitle}")` : `- ("${matTitle}")`}`,
+        `  unitId: ${m.unitId} ("${unitTitle}")`,
+        `  status: ${m.status}`,
+        `  strength: ${m.strength || '-'}`,
+        `  reason: ${m.reason || '-'}`,
+        `  actionType: ${m.action?.type || '-'}`,
+        `  linkedAtpItemIds: [${((m.action as any)?.linkedAtpItemIds || []).join(', ')}]`,
+        `  linkedTpIds: [${(m.action?.linkedTpIds || []).join(', ')}]`
+      );
+    });
+  } else {
+    materialFindingLines.push('- none');
+  }
+
+  // Canonical ATP section
+  const canonicalAtpLines: string[] = [];
+  if (atp && Array.isArray(atp.items) && atp.items.length > 0) {
+    atp.items.forEach((item) => {
+      const linkedTps = Array.isArray(item.linkedTpIds) && item.linkedTpIds.length > 0
+        ? item.linkedTpIds
+        : item.tpId ? [item.tpId] : [];
+      canonicalAtpLines.push(
+        `- id: ${item.id}`,
+        `  step: ${item.stepNumber ?? '-'}`,
+        `  focus: ${item.focus || '-'}`,
+        `  linkedTpIds: [${linkedTps.join(', ')}]`
+      );
+    });
+  } else {
+    canonicalAtpLines.push('- none');
+  }
+
+  // Canonical TP section
+  const canonicalTpLines: string[] = [];
+  if (tp && Array.isArray(tp.items) && tp.items.length > 0) {
+    tp.items.forEach((t) => {
+      canonicalTpLines.push(
+        `- id: ${t.id}`,
+        `  code: ${t.code || '-'}`,
+        `  statement: ${t.statement || '-'}`,
+        `  competence: ${t.competence || '-'}`,
+        `  contentScope: ${t.contentScope || '-'}`
+      );
+    });
+  } else {
+    canonicalTpLines.push('- none');
+  }
+
+  const validationIssueLines = (validation.issues || []).length > 0
+    ? validation.issues.map((iss) => `- ${iss}`)
+    : ['- none'];
+
+  const lastAnalysisLines: string[] = [];
+  if (analysisResult) {
+    lastAnalysisLines.push(
+      `engine: ${analysisResult.engine || '-'}`,
+      `totalAtp: ${analysisResult.summary?.totalAtp ?? '-'}`,
+      `mappedAtp: ${analysisResult.summary?.mappedAtp ?? '-'}`,
+      `unmappedAtp: ${analysisResult.summary?.unmappedAtp ?? '-'}`,
+      `alignedAtp: ${analysisResult.summary?.alignedAtp ?? '-'}`,
+      `reviewAtp: ${analysisResult.summary?.reviewAtp ?? '-'}`,
+      `alignableMaterials: ${analysisResult.summary?.alignableMaterials ?? '-'}`,
+      `manualMaterialReview: ${analysisResult.summary?.manualMaterialReview ?? '-'}`
+    );
+  } else {
+    lastAnalysisLines.push(
+      'engine: -',
+      '- none (belum pernah dianalisis)'
+    );
+  }
+
+  return [
+    'ADMINISTRASI GURU AI - ATP UNIT MAPPING DIAGNOSTIC',
+    '',
+    'Build:',
+    APP_BUILD_ID,
+    '',
+    'GeneratedAt:',
+    new Date().toISOString(),
+    '',
+    'Context:',
+    `academicSettingId: ${academicSetting?.id || '-'}`,
+    `subject: ${academicSetting?.subject || '-'}`,
+    `grade: ${academicSetting?.grade || '-'}`,
+    `phase: ${academicSetting?.phase || '-'}`,
+    '',
+    'MAPPING:',
+    `mappingId: ${mapping?.id || '-'}`,
+    `unitsCount: ${mappingUnits.length}`,
+    `isValid: ${validation.isValid}`,
+    `isComplete: ${validation.isComplete}`,
+    `unitsWithoutLineage: ${unitsWithoutLineageFormatted.length > 0 ? `[${unitsWithoutLineageFormatted.join(', ')}]` : '[]'}`,
+    `materialsWithoutLineage: ${materialsWithoutLineageFormatted.length > 0 ? `[${materialsWithoutLineageFormatted.join(', ')}]` : '[]'}`,
+    `unmappedAtpIds: [${(validation.unmappedAtpIds || []).join(', ')}]`,
+    `uncoveredTpIds: [${(validation.uncoveredTpIds || []).join(', ')}]`,
+    `Z: ${z}`,
+    '',
+    'UNITS:',
+    ...unitLines,
+    'VALIDATION ISSUES:',
+    ...validationIssueLines,
+    '',
+    'CANONICAL ATP:',
+    ...canonicalAtpLines,
+    '',
+    'CANONICAL TP:',
+    ...canonicalTpLines,
+    '',
+    'LAST ANALYSIS:',
+    ...lastAnalysisLines,
+    '',
+    'ATP FINDINGS:',
+    ...atpFindingLines,
+    '',
+    'MATERIAL FINDINGS:',
+    ...materialFindingLines,
+    '',
+    'APPLIED ACTION IDS:',
+    `[${appliedActionIds.join(', ')}]`,
   ].join('\n');
 }

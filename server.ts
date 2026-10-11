@@ -589,40 +589,78 @@ Kembalikan respon JSON sesuai schema:`;
 
       const parsed = cleanAndParseJSON(response.text, null);
       if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0) {
-        // Sanitize elementId linkage and scopeCode
-        const sanitizedItems = parsed.items.map((item: any, idx: number) => {
-          let elemId = item.elementId && validElementIdSet.has(String(item.elementId)) ? String(item.elementId) : undefined;
-          if (!elemId && validElements.length > 0) {
-            // Match by element name or index
-            const matchedElem = validElements.find((e: any) => e.name && item.elementName && e.name.toLowerCase() === item.elementName.toLowerCase()) || validElements[idx];
-            if (matchedElem) {
-              elemId = matchedElem.id || matchedElem.elementId;
-            }
+        let isGeminiValid = true;
+        const coveredElementIds = new Set<string>();
+
+        // Check each item
+        const sanitizedItems: any[] = [];
+        for (const item of parsed.items) {
+          if (!item || typeof item !== 'object') {
+            isGeminiValid = false;
+            break;
           }
+
+          const elemId = item.elementId ? String(item.elementId).trim() : '';
+          // Jika AI mengembalikan elementId kosong atau tidak terdapat pada input CP -> invalid
+          if (!elemId || !validElementIdSet.has(elemId)) {
+            isGeminiValid = false;
+            break;
+          }
+
+          const canonicalElement = validElements.find((e: any) => String(e.id || e.elementId).trim() === elemId);
+          if (!canonicalElement) {
+            isGeminiValid = false;
+            break;
+          }
+
+          const cpCompetence = (item.cpCompetence && typeof item.cpCompetence === 'string') ? item.cpCompetence.trim() : '';
+          const materialScope = (item.materialScope && typeof item.materialScope === 'string') ? item.materialScope.trim() : '';
+
+          // cpCompetence dan materialScope wajib non-empty
+          if (!cpCompetence || !materialScope) {
+            isGeminiValid = false;
+            break;
+          }
+
+          coveredElementIds.add(elemId);
+
           const scopeCode = (item.scopeCode && typeof item.scopeCode === 'string' && item.scopeCode.trim().length >= 2)
             ? item.scopeCode.trim().toUpperCase()
-            : deriveScopeCode(item.materialScope || item.elementName);
+            : deriveScopeCode(materialScope || canonicalElement.name);
 
-          return {
+          sanitizedItems.push({
             elementId: elemId,
-            elementName: item.elementName || (validElements[idx]?.name) || `Elemen ${idx + 1}`,
+            elementName: canonicalElement.name,
             scopeCode,
-            cpText: item.cpText || (validElements.find((e: any) => e.id === elemId)?.content) || '',
-            cpCompetence: item.cpCompetence || '',
-            materialScope: item.materialScope || '',
-            meaningfulUnderstanding: item.meaningfulUnderstanding || '',
-            suggestedTp: item.suggestedTp || '',
-          };
-        });
+            cpText: canonicalElement.content || '',
+            cpCompetence,
+            materialScope,
+            meaningfulUnderstanding: (item.meaningfulUnderstanding && typeof item.meaningfulUnderstanding === 'string') ? item.meaningfulUnderstanding.trim() : '',
+            suggestedTp: (item.suggestedTp && typeof item.suggestedTp === 'string') ? item.suggestedTp.trim() : '',
+          });
+        }
 
-        return res.json({
-          success: true,
-          data: {
-            generalSummary: parsed.generalSummary || cpText || '',
-            items: sanitizedItems,
-          },
-          engine: 'gemini',
-        });
+        // Seluruh CP element IDs wajib tercakup minimal sekali
+        if (validElements.length > 0) {
+          for (const e of validElements) {
+            const eId = String(e.id || e.elementId || '').trim();
+            if (!eId || !coveredElementIds.has(eId)) {
+              isGeminiValid = false;
+              break;
+            }
+          }
+        }
+
+        if (isGeminiValid && sanitizedItems.length > 0) {
+          return res.json({
+            success: true,
+            data: {
+              generalSummary: parsed.generalSummary || cpText || '',
+              items: sanitizedItems,
+            },
+            engine: 'gemini',
+          });
+        }
       }
     } catch (error: unknown) {
       console.warn('Gemini analyze CP failed, using fallback engine:', error);

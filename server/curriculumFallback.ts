@@ -32,9 +32,27 @@ export function fallbackAnalyzeCP(params: FallbackAnalyzeCPParams) {
   const rawElements = Array.isArray(params.elements) ? params.elements : [];
 
   const commonKKOList = [
-    'Menganalisis', 'Memahami', 'Mengidentifikasi', 'Menerapkan', 'Mengevaluasi',
-    'Merancang', 'Mempraktikkan', 'Menyajikan', 'Mengomunikasikan', 'Menciptakan',
-    'Menjelaskan', 'Membandingkan', 'Mendeskripsikan', 'Menyusun'
+    'Mempraktikkan',
+    'Menerapkan',
+    'Mengidentifikasi',
+    'Mengenali',
+    'Menaati',
+    'Mengeksplorasi',
+    'Menyimpulkan',
+    'Berpartisipasi',
+    'Memahami',
+    'Menunjukkan',
+    'Menjaga',
+    'Menjelaskan',
+    'Menganalisis',
+    'Mengevaluasi',
+    'Merancang',
+    'Menyajikan',
+    'Mengomunikasikan',
+    'Menciptakan',
+    'Membandingkan',
+    'Mendeskripsikan',
+    'Menyusun',
   ];
 
   const extractCompetenceFromText = (text: string): string => {
@@ -46,15 +64,11 @@ export function fallbackAnalyzeCP(params: FallbackAnalyzeCPParams) {
     return ''; // Leave empty if uncertain!
   };
 
-  const extractScopeFromText = (text: string): string => {
+  const cleanScopeText = (text: string): string => {
     if (!text) return '';
-    const clean = text
-      .replace(/^(pada akhir fase|peserta didik mampu|murid mampu|pada fase ini|peserta didik dapat)\s+/i, '')
+    return text
+      .replace(/^(pada akhir fase|peserta didik mampu|peserta didik|murid mampu|pada fase ini|peserta didik dapat)\s+/i, '')
       .trim();
-    if (clean.length > 0) {
-      return clean.length > 120 ? `${clean.substring(0, 117)}...` : clean;
-    }
-    return ''; // Leave empty if uncertain!
   };
 
   const items: Array<{
@@ -68,31 +82,49 @@ export function fallbackAnalyzeCP(params: FallbackAnalyzeCPParams) {
     suggestedTp: string;
   }> = [];
 
+  const splitIntoAtomicSegments = (content: string): string[] => {
+    if (!content || !content.trim()) return [];
+    // Split by semicolons first if present, otherwise by periods followed by space/capital
+    const rawParts = content
+      .split(/;\s*|\.\s+(?=[A-Z])/)
+      .map((p) => p.replace(/\.$/, '').trim())
+      .filter((p) => p.length > 0);
+
+    return rawParts.length > 0 ? rawParts : [content.trim()];
+  };
+
   if (rawElements.length > 0) {
     rawElements.forEach((elem, idx) => {
       const elemName = elem.name?.trim() || `Elemen ${idx + 1}`;
       const elemContent = elem.content?.trim() || '';
       const elemId = (elem.id && elem.id.trim()) || (elem.elementId && elem.elementId.trim()) || undefined;
 
-      const competence = extractCompetenceFromText(elemContent);
-      const scope = extractScopeFromText(elemContent);
-      const scopeCode = deriveScopeCode(scope || elemName);
-      const suggestedTp = competence && scope ? `Peserta didik mampu ${competence.toLowerCase()} ${scope}.` : '';
+      const segments = splitIntoAtomicSegments(elemContent);
+      if (segments.length === 0) {
+        segments.push(elemContent);
+      }
 
-      items.push({
-        elementId: elemId,
-        elementName: elemName,
-        scopeCode,
-        cpText: elemContent,
-        cpCompetence: competence,
-        materialScope: scope,
-        meaningfulUnderstanding: '',
-        suggestedTp,
+      segments.forEach((seg) => {
+        const competence = extractCompetenceFromText(seg) || extractCompetenceFromText(elemContent);
+        const scope = cleanScopeText(seg) || cleanScopeText(elemContent);
+        const scopeCode = deriveScopeCode(scope || elemName);
+        const suggestedTp = competence && scope ? `Peserta didik mampu ${competence.toLowerCase()} ${scope}.` : '';
+
+        items.push({
+          elementId: elemId,
+          elementName: elemName,
+          scopeCode,
+          cpText: elemContent,
+          cpCompetence: competence,
+          materialScope: scope,
+          meaningfulUnderstanding: '',
+          suggestedTp,
+        });
       });
     });
   } else if (cpGeneralText) {
     const competence = extractCompetenceFromText(cpGeneralText);
-    const scope = extractScopeFromText(cpGeneralText);
+    const scope = cleanScopeText(cpGeneralText);
     const scopeCode = deriveScopeCode(scope || 'Umum');
     const suggestedTp = competence && scope ? `Peserta didik mampu ${competence.toLowerCase()} ${scope}.` : '';
 

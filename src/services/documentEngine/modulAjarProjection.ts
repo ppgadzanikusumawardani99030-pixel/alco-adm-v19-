@@ -1,5 +1,5 @@
 import { LearningPlan, DocumentGenerationContext } from './types';
-import { validateLearningPlan, LearningPlanValidationResult } from '../learningPlanService';
+import { validateLearningPlanForModulAjar, LearningPlanValidationResult } from '../learningPlanService';
 
 export interface ModulAjarProjection {
   isReady: boolean;
@@ -86,7 +86,7 @@ export function buildModulAjarProjection(context: DocumentGenerationContext): Mo
     selectedPlan = siapPlans[0];
   }
 
-  const validation = validateLearningPlan(selectedPlan, {
+  const validation = validateLearningPlanForModulAjar(selectedPlan, {
     academicSetting: context.academicSetting,
     tp: context.tp,
     atp: context.atp,

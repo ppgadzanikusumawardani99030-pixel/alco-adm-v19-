@@ -41,8 +41,19 @@ export function validateCPDataWorkflow(
 
   // Check element validity
   if (cp.elements && cp.elements.length > 0) {
+    const seenElementIds = new Set<string>();
     for (let i = 0; i < cp.elements.length; i++) {
       const el = cp.elements[i];
+      if (!el.id || typeof el.id !== 'string' || !el.id.trim()) {
+        issues.push(`Elemen ke-${i + 1} tidak memiliki ID elemen yang valid.`);
+      } else {
+        const trimmedId = el.id.trim();
+        if (seenElementIds.has(trimmedId)) {
+          issues.push(`Elemen "${el.name || i + 1}" memiliki ID duplikat: ${trimmedId}.`);
+        } else {
+          seenElementIds.add(trimmedId);
+        }
+      }
       if (!el.name || !el.name.trim()) {
         issues.push(`Elemen ke-${i + 1} tidak memiliki nama elemen.`);
       }
@@ -110,6 +121,26 @@ export function validateCPAnalysisDataWorkflow(
     };
   }
 
+  // Canonical CP dependency: CP must be provided
+  if (!cp) {
+    issues.push('Capaian Pembelajaran (CP) rujukan belum tersedia.');
+  } else {
+    const cpValidation = validateCPDataWorkflow(cp);
+    if (!cpValidation.isSiap) {
+      issues.push('Capaian Pembelajaran (CP) rujukan belum memenuhi status SIAP.');
+    }
+
+    // cpAnalysis.cpId wajib sama dengan cp.id
+    if (!cpAnalysis.cpId || cpAnalysis.cpId !== cp.id) {
+      issues.push(`ID CP rujukan pada analisis (${cpAnalysis.cpId || 'kosong'}) tidak sesuai dengan ID CP (${cp.id}).`);
+    }
+
+    // Jika cp.updatedAt tersedia, basedOnCpUpdatedAt wajib tersedia
+    if (cp.updatedAt && !cpAnalysis.basedOnCpUpdatedAt) {
+      issues.push('Timestamp rujukan CP (basedOnCpUpdatedAt) belum tercatat.');
+    }
+  }
+
   // Check if CP version changed or review needed
   if (cpAnalysis.needsReview) {
     issues.push(
@@ -118,9 +149,61 @@ export function validateCPAnalysisDataWorkflow(
     );
   }
 
+  const validCanonicalElementIds = new Set<string>(
+    (cp?.elements || []).map((el) => (el.id ? el.id.trim() : '')).filter(Boolean)
+  );
+  const referencedElementIds = new Set<string>();
+  const seenItemIds = new Set<string>();
+
   // Check items completeness
   for (let i = 0; i < cpAnalysis.items.length; i++) {
     const item = cpAnalysis.items[i];
+
+    // Setiap CPAnalysisItem wajib mempunyai id non-empty dan unik
+    if (!item.id || typeof item.id !== 'string' || !item.id.trim()) {
+      issues.push(`Baris analisis ke-${i + 1} tidak memiliki ID yang valid.`);
+    } else {
+      const trimmedItemId = item.id.trim();
+      if (seenItemIds.has(trimmedItemId)) {
+        issues.push(`Baris analisis ke-${i + 1} memiliki ID duplikat: ${trimmedItemId}.`);
+      } else {
+        seenItemIds.add(trimmedItemId);
+      }
+    }
+
+    // Setiap item wajib mempunyai elementId
+    if (!item.elementId || typeof item.elementId !== 'string' || !item.elementId.trim()) {
+      issues.push(`Baris analisis ke-${i + 1} ("${item.elementName || 'Tanpa Nama'}") belum memilih elemen CP rujukan (elementId kosong).`);
+    } else {
+      const trimmedElemId = item.elementId.trim();
+      if (cp && cp.elements && cp.elements.length > 0) {
+        if (!validCanonicalElementIds.has(trimmedElemId)) {
+          issues.push(`Baris analisis ke-${i + 1} merujuk ke ID elemen yang tidak ada pada CP rujukan: "${trimmedElemId}".`);
+        } else {
+          referencedElementIds.add(trimmedElemId);
+          const canonicalElement = cp.elements.find((el) => el.id && el.id.trim() === trimmedElemId);
+          if (canonicalElement) {
+            const itemElemName = (item.elementName || '').trim();
+            const canonElemName = (canonicalElement.name || '').trim();
+            if (itemElemName !== canonElemName) {
+              issues.push(
+                `Nama elemen pada baris ke-${i + 1} ("${itemElemName}") tidak sesuai dengan nama elemen CP canonical ("${canonElemName}").`
+              );
+            }
+            const itemCpText = (item.cpText || '').trim();
+            const canonCpText = (canonicalElement.content || '').trim();
+            if (itemCpText !== canonCpText) {
+              issues.push(
+                `Teks CP pada baris ke-${i + 1} tidak sesuai dengan isi elemen CP canonical "${canonElemName}".`
+              );
+            }
+          }
+        }
+      } else {
+        referencedElementIds.add(trimmedElemId);
+      }
+    }
+
     if (!item.elementName || !item.elementName.trim()) {
       issues.push(`Baris analisis ke-${i + 1} belum memiliki nama elemen.`);
     }
@@ -129,6 +212,15 @@ export function validateCPAnalysisDataWorkflow(
     }
     if (!item.materialScope || !item.materialScope.trim()) {
       issues.push(`Baris "${item.elementName || i + 1}" belum mengisi Lingkup Materi Inti.`);
+    }
+  }
+
+  // Setiap elemen CP canonical harus direferensikan minimal satu AnalysisItem
+  if (cp && cp.elements && cp.elements.length > 0) {
+    for (const elem of cp.elements) {
+      if (elem.id && !referencedElementIds.has(elem.id.trim())) {
+        issues.push(`Elemen CP canonical "${elem.name}" (ID: ${elem.id}) belum dianalisis oleh butir Analisis CP mana pun.`);
+      }
     }
   }
 
@@ -484,8 +576,16 @@ export function validateTPDataWorkflow(
     }
   }
 
-  // Check CP Analysis validity if CP Analysis is provided
-  if (cpAnalysis) {
+  // Check CP Analysis validity
+  if (!cpAnalysis) {
+    if (tp.items && tp.items.length > 0) {
+      issues.push('Analisis CP rujukan belum tersedia.');
+    }
+  } else {
+    const cpAnalysisValidation = validateCPAnalysisDataWorkflow(cpAnalysis, cp);
+    if (!cpAnalysisValidation.isSiap) {
+      issues.push('Analisis CP rujukan belum memenuhi status SIAP.');
+    }
     if (cpAnalysis.needsReview) {
       issues.push('Analisis CP rujukan memerlukan peninjauan ulang.');
     }
@@ -935,7 +1035,7 @@ export function validateATPDataWorkflow(
   if (!tp || !tp.items || tp.items.length === 0) {
     issues.push('Daftar Tujuan Pembelajaran (TP) acuan belum tersedia.');
   } else {
-    // Deep runtime validation on TP (don't blindly trust tp.workflowStatus)
+    // Deep runtime validation on TP
     const tpValidation = validateTPDataWorkflow(tp, cp, cpAnalysis, academicSetting);
     if (!tpValidation.isSiap) {
       tpValidation.issues.forEach((iss) => {

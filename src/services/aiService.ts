@@ -19,6 +19,7 @@ import {
   normalizeDeepLearningContext,
   normalizeAIResources,
 } from './learningPlanService';
+import { recordDiagnosticEvent } from './diagnosticService';
 
 export interface CanonicalCPAnalysisResult {
   generalSummary: string;
@@ -45,6 +46,7 @@ export interface GenerateTPParams {
   phase: string;
   curriculum: string;
   count?: number;
+  mode?: 'ALIGN_EXISTING' | 'REBUILD_FROM_UPSTREAM';
 }
 
 export interface GenerateTPResult {
@@ -172,7 +174,83 @@ export async function ensureGeminiApiKey(): Promise<string> {
   return '';
 }
 
-export async function aiFetch(url: string, options: RequestInit = {}): Promise<Response> {
+export interface AIBackendReadyResult {
+  ready: boolean;
+  geminiConfigured: boolean;
+  attempts: number;
+}
+
+/**
+ * Probes the backend /api/health endpoint to ensure preview server is fully warm
+ * and retrieves the server-side Gemini configuration state.
+ * Performs bounded health check polling (up to maxAttempts) to handle cold starts.
+ */
+export async function waitForAIBackendReady(
+  maxAttempts: number = 6,
+  intervalMs: number = 750
+): Promise<AIBackendReadyResult> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await fetch('/api/health', {
+        method: 'GET',
+        cache: 'no-store',
+        headers: {
+          'cache-control': 'no-cache',
+        },
+      });
+
+      const contentType = res.headers.get('Content-Type') || '';
+      if (contentType.toLowerCase().includes('application/json')) {
+        let payload: any = null;
+        try {
+          payload = await res.json();
+        } catch {
+          payload = null;
+        }
+
+        if (payload && typeof payload === 'object' && payload.status === 'ok') {
+          return {
+            ready: true,
+            geminiConfigured: Boolean(payload.geminiConfigured),
+            attempts: attempt,
+          };
+        }
+      } else {
+        const text = await res.text().catch(() => '');
+        lastError = new Error(
+          text.includes('Starting Server')
+            ? 'Runtime preview sedang memulai ulang.'
+            : `Endpoint health mengembalikan format non-JSON (Status ${res.status}).`
+        );
+      }
+    } catch (err: any) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+    }
+
+    if (attempt < maxAttempts) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
+  const err = new Error(
+    'Runtime preview belum siap menerima request API. Backend health check gagal.'
+  );
+  (err as any).attempts = maxAttempts;
+  (err as any).lastError = lastError;
+  throw err;
+}
+
+export interface AIFetchPolicy {
+  preferLocalKeyOnFirstRequest?: boolean;
+}
+
+export async function aiFetch(
+  url: string,
+  options: RequestInit = {},
+  policy: AIFetchPolicy = {}
+): Promise<Response> {
   const makeRequest = async (currentKey?: string | null): Promise<Response> => {
     const headers = new Headers(options.headers || {});
     if (currentKey && currentKey.trim()) {
@@ -186,19 +264,27 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
     });
   };
 
-  // 1. Request PERTAMA tanpa local BYOK header agar server mendapat kesempatan memakai server key/fallback
-  let res = await makeRequest(null);
+  const localKey = getGeminiApiKey();
+
+  // 1. Request PERTAMA: jika policy.preferLocalKeyOnFirstRequest === true dan localKey tersedia,
+  // gunakan local BYOK pada request pertama; jika tidak, request pertama dikirim tanpa key (server key first).
+  const firstKey =
+    policy.preferLocalKeyOnFirstRequest && localKey && localKey.trim()
+      ? localKey.trim()
+      : null;
+
+  let res = await makeRequest(firstKey);
 
   // 2. Jika response 200 adalah pedagogical_engine fallback DAN user punya local BYOK,
   // beri prioritas pada Gemini dengan retry TEPAT SATU KALI memakai key user.
-  const localKey = getGeminiApiKey();
-  if (res.ok && localKey && localKey.trim()) {
+  const activeLocalKey = getGeminiApiKey();
+  if (res.ok && activeLocalKey && activeLocalKey.trim()) {
     try {
       const cloned = typeof res.clone === 'function' ? res.clone() : res;
       const bodyJson = await cloned.json().catch(() => null);
       if (bodyJson && bodyJson.engine === 'pedagogical_engine') {
         try {
-          const retryRes = await makeRequest(localKey.trim());
+          const retryRes = await makeRequest(activeLocalKey.trim());
           if (retryRes.status === 401 || retryRes.status === 403) {
             removeGeminiApiKey();
             // Kembalikan fallback valid pertama agar proses tidak gagal
@@ -274,10 +360,30 @@ export async function aiFetch(url: string, options: RequestInit = {}): Promise<R
     return res;
   }
 
-  // 3. Penanganan 401 / 403 pada request pertama (berasal dari server key / provider server, BUKAN local BYOK user):
+  // 3. Penanganan 401 / 403:
   if (res.status === 401 || res.status === 403) {
-    if (localKey && localKey.trim()) {
-      // Jangan hapus local key karena belum pernah dikirim. Retry tepat satu kali dengan local key.
+    if (firstKey) {
+      // Request pertama sudah membawa local key dan ditolak 401/403
+      removeGeminiApiKey();
+      if (modalOpenListeners.length > 0) {
+        try {
+          const newKey = await openApiKeyModal(
+            'Kunci API Gemini tidak valid atau izin ditolak (401/403). Silakan periksa kembali dan masukkan API Key yang benar:'
+          );
+          if (newKey && newKey.trim()) {
+            const freshRes = await makeRequest(newKey.trim());
+            if (freshRes.status === 401 || freshRes.status === 403) {
+              removeGeminiApiKey();
+            }
+            return freshRes;
+          }
+        } catch {
+          // Modal cancelled
+        }
+      }
+      return res;
+    } else if (localKey && localKey.trim()) {
+      // Request pertama tanpa key (server key). Retry tepat satu kali dengan local key.
       const retryRes = await makeRequest(localKey.trim());
       if (retryRes.ok) {
         return retryRes;
@@ -391,6 +497,12 @@ export function formatAIErrorMessage(error: any, actionName: string = 'memproses
   if (!error) return `Terjadi kendala saat ${actionName}. Silakan coba lagi.`;
   const raw = (error.message || String(error)).toLowerCase();
 
+  if (raw.includes('dibatalkan') || raw.includes('batal')) {
+    return error.message || 'Proses penyusunan AI dibatalkan.';
+  }
+  if (raw.includes('backend health check gagal') || raw.includes('health check gagal')) {
+    return error.message;
+  }
   if (raw.includes('layanan ai belum dikonfigurasi') || raw.includes('ai_not_configured')) {
     return 'Layanan AI belum dikonfigurasi pada server.';
   }
@@ -452,7 +564,7 @@ export async function analyzeCPWithAI(params: {
 
 export async function generateTPWithAI(params: GenerateTPParams): Promise<GenerateTPResult> {
   try {
-    const { existingTps, ...payloadToSend } = params;
+    const { existingTps, mode = 'ALIGN_EXISTING', ...payloadToSend } = params;
     const res = await aiFetch('/api/ai/generate-tp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -507,7 +619,8 @@ export async function generateTPWithAI(params: GenerateTPParams): Promise<Genera
       items: mergeGeneratedTPsWithExisting(
         data.items,
         params.existingTps || [],
-        params.cpAnalysisItems || []
+        params.cpAnalysisItems || [],
+        mode
       ),
       engine: resolvedEngine,
     };
@@ -518,18 +631,21 @@ export async function generateTPWithAI(params: GenerateTPParams): Promise<Genera
 
 /**
  * Deterministic safe merge for TP regeneration.
- * Matches generated TPs to existing TPs using cpAnalysisItemIds, elementName, contentScope, statement.
- * Strictly preserves existing TPItem.id and teacher work. Never carries over stale cpAnalysisItemIds.
+ * Matches generated TPs to existing TPs using strict canonical lineage + semantic identity match.
+ * Generated semantic content always wins on match. Supports ALIGN_EXISTING and REBUILD_FROM_UPSTREAM modes.
  */
 export function mergeGeneratedTPsWithExisting(
   generatedItems: Array<Partial<TPItem>>,
   existingItems: TPItem[] = [],
-  activeAnalysisItems: Array<{ id: string }> = []
+  activeAnalysisItems: Array<{ id: string }> = [],
+  mode: 'ALIGN_EXISTING' | 'REBUILD_FROM_UPSTREAM' = 'ALIGN_EXISTING'
 ): TPItem[] {
   const activeAnalysisItemIds = new Set<string>(
     activeAnalysisItems.map((a) => String(a.id)).filter(Boolean)
   );
   const hasCanonicalAnalysis = activeAnalysisItemIds.size > 0;
+
+  const normalizeText = (s?: string) => (s || '').trim().toLowerCase().replace(/\s+/g, ' ');
 
   if (!existingItems || existingItems.length === 0) {
     return generatedItems.map((g, idx) => {
@@ -537,6 +653,7 @@ export function mergeGeneratedTPsWithExisting(
       return {
         id: g.id || `tp-item-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
         code: g.code || `TP ${idx + 1}`,
+        scopeCode: g.scopeCode || '',
         elementName: g.elementName || '',
         statement: stmt,
         description: stmt,
@@ -544,7 +661,7 @@ export function mergeGeneratedTPsWithExisting(
         contentScope: g.contentScope || '',
         p3Dimensions: Array.isArray(g.p3Dimensions) ? g.p3Dimensions : [],
         order: idx + 1,
-        cpAnalysisItemIds: Array.isArray(g.cpAnalysisItemIds) ? g.cpAnalysisItemIds : [],
+        cpAnalysisItemIds: Array.isArray(g.cpAnalysisItemIds) ? g.cpAnalysisItemIds.map(String) : [],
       };
     });
   }
@@ -552,105 +669,66 @@ export function mergeGeneratedTPsWithExisting(
   const matchedExistingIds = new Set<string>();
   const result: TPItem[] = [];
 
-  const calculateMatchScore = (gen: Partial<TPItem>, exist: TPItem): number => {
-    let score = 0;
-
-    // 1. cpAnalysisItemIds overlap (highest priority)
-    const genAnalysisIds = Array.isArray(gen.cpAnalysisItemIds) ? gen.cpAnalysisItemIds : [];
-    const existAnalysisIds = Array.isArray(exist.cpAnalysisItemIds) ? exist.cpAnalysisItemIds : [];
-    if (genAnalysisIds.length > 0 && existAnalysisIds.length > 0) {
-      const overlap = genAnalysisIds.filter((id) => existAnalysisIds.includes(id));
-      if (overlap.length > 0) {
-        score += 10 * overlap.length;
-      }
-    }
-
-    // 2. Exact or substring match on elementName
-    const genElem = (gen.elementName || '').trim().toLowerCase();
-    const existElem = (exist.elementName || '').trim().toLowerCase();
-    if (genElem && existElem && (genElem === existElem || genElem.includes(existElem) || existElem.includes(genElem))) {
-      score += 4;
-    }
-
-    // 3. Exact or keyword match on contentScope
-    const genScope = (gen.contentScope || '').trim().toLowerCase();
-    const existScope = (exist.contentScope || '').trim().toLowerCase();
-    if (genScope && existScope && (genScope === existScope || genScope.includes(existScope) || existScope.includes(genScope))) {
-      score += 5;
-    }
-
-    // 4. Code match
-    const genCode = (gen.code || '').trim().toLowerCase();
-    const existCode = (exist.code || '').trim().toLowerCase();
-    if (genCode && existCode && genCode === existCode) {
-      score += 3;
-    }
-
-    // 5. Statement similarity (supporting fallback)
-    const genStmt = (gen.statement || (gen as any).description || '').trim().toLowerCase();
-    const existStmt = (exist.statement || exist.description || '').trim().toLowerCase();
-    if (genStmt && existStmt) {
-      if (genStmt === existStmt) {
-        score += 6;
-      } else {
-        const wordsGen = genStmt.split(/\s+/).filter((w) => w.length > 3);
-        const wordsExist = existStmt.split(/\s+/).filter((w) => w.length > 3);
-        const wordOverlap = wordsGen.filter((w) => wordsExist.includes(w)).length;
-        if (wordOverlap >= 2) {
-          score += 2;
-        }
-      }
-    }
-
-    return score;
-  };
-
   for (let i = 0; i < generatedItems.length; i++) {
     const gen = generatedItems[i];
     let bestMatch: TPItem | null = null;
-    let highestScore = 3;
+
+    const genAnalysisIds = Array.isArray(gen.cpAnalysisItemIds)
+      ? gen.cpAnalysisItemIds.map(String).filter(Boolean)
+      : [];
 
     for (const exist of existingItems) {
       if (matchedExistingIds.has(exist.id)) continue;
-      const score = calculateMatchScore(gen, exist);
-      if (score > highestScore) {
-        highestScore = score;
+      const existAnalysisIds = Array.isArray(exist.cpAnalysisItemIds)
+        ? exist.cpAnalysisItemIds.map(String).filter(Boolean)
+        : [];
+
+      // 1. Lineage condition: overlap in cpAnalysisItemIds, valid in active analysis items
+      const hasLineageOverlap = genAnalysisIds.some(
+        (gId) => existAnalysisIds.includes(gId) && (!hasCanonicalAnalysis || activeAnalysisItemIds.has(gId))
+      );
+
+      if (!hasLineageOverlap) continue;
+
+      // 2. Semantic identity addition (at least one of: normalized statement exact match, normalized contentScope exact match, semantic code exact match)
+      const genCode = normalizeText(gen.code);
+      const existCode = normalizeText(exist.code);
+      const isCodeMatch = genCode && existCode && genCode === existCode;
+
+      const genScope = normalizeText(gen.contentScope);
+      const existScope = normalizeText(exist.contentScope);
+      const isScopeMatch = genScope && existScope && genScope === existScope;
+
+      const genStmt = normalizeText(gen.statement || (gen as any).description);
+      const existStmt = normalizeText(exist.statement || exist.description);
+      const isStmtMatch = genStmt && existStmt && genStmt === existStmt;
+
+      if (isCodeMatch || isScopeMatch || isStmtMatch) {
         bestMatch = exist;
+        break;
       }
     }
 
     if (bestMatch) {
       matchedExistingIds.add(bestMatch.id);
-      // Strictly PRESERVE existing TPItem.id!
-      const isSemantic = (c?: string) => typeof c === 'string' && /^E\d+-[A-Za-z0-9]+-\d{2}$/.test(c.trim());
-      const finalCode = bestMatch.code && isSemantic(bestMatch.code)
-        ? bestMatch.code.trim().toUpperCase()
-        : (gen.code || bestMatch.code || `E1-MAT-${String(result.length + 1).padStart(2, '0')}`);
-      const finalScopeCode = bestMatch.scopeCode || gen.scopeCode;
-      const finalStatement = bestMatch.statement?.trim() ? bestMatch.statement : (gen.statement || (gen as any).description || '');
-      const finalElementName = bestMatch.elementName?.trim() ? bestMatch.elementName : (gen.elementName || '');
-      const finalCompetence = bestMatch.competence?.trim() ? bestMatch.competence : (gen.competence || '');
-      const finalContentScope = bestMatch.contentScope?.trim() ? bestMatch.contentScope : (gen.contentScope || '');
-      const finalP3 = (bestMatch.p3Dimensions && bestMatch.p3Dimensions.length > 0)
-        ? bestMatch.p3Dimensions
-        : (Array.isArray(gen.p3Dimensions) ? gen.p3Dimensions : []);
 
-      // Canonical lineage resolution: do NOT union with stale existing lineage.
-      const genIds = Array.isArray(gen.cpAnalysisItemIds) ? gen.cpAnalysisItemIds : [];
-      const existIds = Array.isArray(bestMatch.cpAnalysisItemIds) ? bestMatch.cpAnalysisItemIds : [];
-
-      let finalAnalysisIds: string[];
-      if (genIds.length > 0) {
-        finalAnalysisIds = genIds;
-      } else if (hasCanonicalAnalysis) {
-        finalAnalysisIds = existIds.filter((id) => activeAnalysisItemIds.has(id));
-      } else {
-        finalAnalysisIds = existIds;
-      }
+      // Generated semantics always win
+      const finalCode = gen.code || bestMatch.code || `TP ${result.length + 1}`;
+      const finalScopeCode = gen.scopeCode || bestMatch.scopeCode || '';
+      const finalElementName = gen.elementName || bestMatch.elementName || '';
+      const finalStatement = gen.statement || (gen as any).description || bestMatch.statement || bestMatch.description || '';
+      const finalCompetence = gen.competence || bestMatch.competence || '';
+      const finalContentScope = gen.contentScope || bestMatch.contentScope || '';
+      const finalP3 = Array.isArray(gen.p3Dimensions) && gen.p3Dimensions.length > 0
+        ? gen.p3Dimensions
+        : (bestMatch.p3Dimensions || []);
+      const finalAnalysisIds = genAnalysisIds.length > 0
+        ? genAnalysisIds
+        : (bestMatch.cpAnalysisItemIds || []).filter((id) => !hasCanonicalAnalysis || activeAnalysisItemIds.has(id));
 
       result.push({
         ...bestMatch,
-        id: bestMatch.id, // Stable ID preserved!
+        id: bestMatch.id, // Stable ID preserved
         code: finalCode,
         scopeCode: finalScopeCode,
         elementName: finalElementName,
@@ -663,12 +741,11 @@ export function mergeGeneratedTPsWithExisting(
         order: result.length + 1,
       });
     } else {
-      // New genuinely supported TP
       const stmt = gen.statement || (gen as any).description || '';
       result.push({
-        id: `tp-item-${Date.now()}-${i + 1}-${Math.random().toString(36).substring(2, 6)}`,
-        code: gen.code || `E1-MAT-${String(result.length + 1).padStart(2, '0')}`,
-        scopeCode: gen.scopeCode || 'MAT',
+        id: gen.id || `tp-item-${Date.now()}-${i + 1}-${Math.random().toString(36).substring(2, 6)}`,
+        code: gen.code || `TP ${result.length + 1}`,
+        scopeCode: gen.scopeCode || '',
         elementName: gen.elementName || '',
         statement: stmt,
         description: stmt,
@@ -676,32 +753,35 @@ export function mergeGeneratedTPsWithExisting(
         contentScope: gen.contentScope || '',
         p3Dimensions: Array.isArray(gen.p3Dimensions) ? gen.p3Dimensions : [],
         order: result.length + 1,
-        cpAnalysisItemIds: Array.isArray(gen.cpAnalysisItemIds) ? gen.cpAnalysisItemIds : [],
+        cpAnalysisItemIds: genAnalysisIds,
       });
     }
   }
 
-  // Unmatched existing TPs processing
-  for (const exist of existingItems) {
-    if (!matchedExistingIds.has(exist.id)) {
-      if (!hasCanonicalAnalysis) {
-        result.push({
-          ...exist,
-          order: result.length + 1,
-        });
-      } else {
-        const existIds = Array.isArray(exist.cpAnalysisItemIds) ? exist.cpAnalysisItemIds : [];
-        const validLineageIds = existIds.filter((id) => activeAnalysisItemIds.has(id));
-        if (validLineageIds.length > 0) {
+  // Mode processing for unmatched existing items
+  if (mode === 'ALIGN_EXISTING') {
+    for (const exist of existingItems) {
+      if (!matchedExistingIds.has(exist.id)) {
+        if (!hasCanonicalAnalysis) {
           result.push({
             ...exist,
-            cpAnalysisItemIds: validLineageIds,
             order: result.length + 1,
           });
+        } else {
+          const existIds = Array.isArray(exist.cpAnalysisItemIds) ? exist.cpAnalysisItemIds.map(String) : [];
+          const validLineageIds = existIds.filter((id) => activeAnalysisItemIds.has(id));
+          if (validLineageIds.length > 0) {
+            result.push({
+              ...exist,
+              cpAnalysisItemIds: validLineageIds,
+              order: result.length + 1,
+            });
+          }
         }
       }
     }
   }
+  // If mode === 'REBUILD_FROM_UPSTREAM', unmatched existing TPs are dropped entirely.
 
   return result.map((item, idx) => ({ ...item, order: idx + 1 }));
 }
@@ -830,23 +910,133 @@ export async function generateLearningPlanWithAI(params: GenerateLearningPlanPar
   }
 }
 
-export async function generateATPWithAI(params: GenerateATPParams): Promise<GenerateATPResult> {
-  try {
-    const res = await aiFetch('/api/ai/generate-atp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(params),
-    });
+export interface GenerateATPOptions {
+  backendReady?: AIBackendReadyResult;
+  preferLocalKeyOnFirstRequest?: boolean;
+}
 
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      if (errData.code === 'AI_NOT_CONFIGURED') {
-        throw new Error('Layanan AI belum dikonfigurasi pada server.');
-      }
-      throw new Error(errData.error || `Gagal menyusun ATP dengan AI (Status ${res.status})`);
+export async function generateATPWithAI(
+  params: GenerateATPParams,
+  options?: GenerateATPOptions
+): Promise<GenerateATPResult> {
+  try {
+    // 1. Health preflight
+    let health: AIBackendReadyResult;
+    try {
+      health = options?.backendReady || (await waitForAIBackendReady());
+    } catch (healthErr: any) {
+      const attempts = (healthErr as any)?.attempts || 6;
+      const reason = healthErr?.message || 'Backend health check gagal.';
+      recordDiagnosticEvent({
+        scope: 'ATP',
+        action: 'ATP_BACKEND_NOT_READY',
+        status: 'FAILED',
+        metadata: {
+          healthAttempts: attempts,
+          reason,
+        },
+      });
+      throw healthErr;
     }
 
-    const data = await res.json();
+    // 2. Resolve key source
+    let preferLocalKey = options?.preferLocalKeyOnFirstRequest;
+    let localKey = getGeminiApiKey();
+    let keySource: 'SERVER' | 'LOCAL' = health.geminiConfigured ? 'SERVER' : 'LOCAL';
+
+    if (preferLocalKey === undefined) {
+      if (!health.geminiConfigured) {
+        if (!localKey || !localKey.trim()) {
+          try {
+            localKey = await ensureGeminiApiKey();
+          } catch (modalErr: any) {
+            throw new Error(modalErr?.message || 'Penyusunan ATP dengan AI dibatalkan: Kunci API Gemini diperlukan.');
+          }
+          if (!localKey || !localKey.trim()) {
+            throw new Error('Penyusunan ATP dengan AI dibatalkan: Kunci API Gemini diperlukan.');
+          }
+        }
+        preferLocalKey = true;
+        keySource = 'LOCAL';
+      } else {
+        preferLocalKey = false;
+        keySource = 'SERVER';
+      }
+    } else {
+      keySource = preferLocalKey ? 'LOCAL' : 'SERVER';
+    }
+
+    // Catat ATP_BACKEND_READY SEBELUM Generate ATP POST dikirim
+    recordDiagnosticEvent({
+      scope: 'ATP',
+      action: 'ATP_BACKEND_READY',
+      status: 'READY',
+      metadata: {
+        healthAttempts: health.attempts,
+        serverGeminiConfigured: health.geminiConfigured,
+        localKeyPresent: Boolean(localKey && localKey.trim()),
+        keySource,
+      },
+    });
+
+    // 3. POST ATP TEPAT SATU KALI
+    const res = await aiFetch(
+      '/api/ai/generate-atp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      },
+      {
+        preferLocalKeyOnFirstRequest: preferLocalKey,
+      }
+    );
+
+    let contentType = res.headers.get('Content-Type') || '';
+    if (!contentType.toLowerCase().includes('application/json')) {
+      const text = await res.text().catch(() => '');
+
+      if (text.includes('Starting Server')) {
+        throw new Error(
+          'Runtime preview sedang memulai ulang atau mengintersep respons API.'
+        );
+      }
+
+      const mime =
+        contentType.split(';')[0]?.trim() ||
+        contentType ||
+        'unknown';
+
+      throw new Error(
+        `Endpoint AI ATP tidak mengembalikan JSON (received ${mime}). (Status ${res.status})`
+      );
+    }
+
+    if (!res.ok) {
+      let errData: any = {};
+      try {
+        errData = await res.json();
+      } catch {
+        errData = {};
+      }
+
+      if (errData && errData.code === 'AI_NOT_CONFIGURED') {
+        throw new Error('Layanan AI belum dikonfigurasi pada server.');
+      }
+      throw new Error(errData?.error || `Gagal menyusun ATP dengan AI (Status ${res.status})`);
+    }
+
+    let data: any;
+    try {
+      data = await res.json();
+    } catch {
+      throw new Error('Respons endpoint AI ATP tidak dapat dibaca sebagai JSON valid.');
+    }
+
+    if (!data || typeof data !== 'object') {
+      throw new Error('Respons endpoint AI ATP tidak dapat dibaca sebagai JSON valid.');
+    }
+
     if (!data.data || !Array.isArray(data.data.items) || data.data.items.length === 0) {
       throw new Error('Hasil respon AI ATP tidak memuat butir alur yang valid.');
     }
@@ -1003,6 +1193,7 @@ export async function generateCanonicalATPUnitMappingWithAI(
 }
 
 export interface MappingAnalysisResult {
+  engine?: 'gemini_ai' | 'pedagogical_engine';
   summary: {
     totalAtp: number;
     mappedAtp: number;
@@ -1033,6 +1224,7 @@ export interface MappingAnalysisResult {
       type: 'ASSIGN_ATP_TO_UNIT';
       atpItemId: string;
       targetUnitId: string;
+      linkedTpIds: string[];
       targetMaterialId?: string;
     };
   }>;
@@ -1106,7 +1298,10 @@ export async function analyzeATPUnitMappingWithAI(
     ) {
       throw new Error('Hasil respon Analisis Pemetaan tidak memuat struktur data yang valid.');
     }
-    return data.data;
+    return {
+      ...data.data,
+      engine: data.engine,
+    };
   } catch (err) {
     throw new Error(formatAIErrorMessage(err, 'menganalisis pemetaan Bab & Lingkup Materi'));
   }

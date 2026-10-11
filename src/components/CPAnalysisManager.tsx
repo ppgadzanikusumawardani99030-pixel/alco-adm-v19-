@@ -110,8 +110,9 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
 
   const handleAddItem = () => {
     const newItem: CPAnalysisItem = {
-      id: `ana-item-${Date.now()}`,
-      elementName: 'Elemen Baru',
+      id: `ana-item-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      elementId: '',
+      elementName: '',
       cpText: '',
       cpCompetence: '',
       materialScope: '',
@@ -120,6 +121,29 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
       order: items.length + 1,
     };
     setItems([...items, newItem]);
+  };
+
+  const handleSelectElement = (itemId: string, selectedElemId: string) => {
+    const canonicalElem = (cp.elements || []).find((el) => el.id === selectedElemId);
+    setItems((prev) =>
+      prev.map((it) => {
+        if (it.id !== itemId) return it;
+        if (!canonicalElem) {
+          return {
+            ...it,
+            elementId: '',
+            elementName: '',
+            cpText: '',
+          };
+        }
+        return {
+          ...it,
+          elementId: canonicalElem.id,
+          elementName: canonicalElem.name,
+          cpText: canonicalElem.content,
+        };
+      })
+    );
   };
 
   const handleDeleteItem = (id: string) => {
@@ -154,11 +178,13 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
     cp
   );
 
-  const handleSave = () => {
+  const handleSave = (): boolean => {
     const nextGeneratedBy =
       cpAnalysis?.generatedBy === 'AI' ? 'AI_EDITED_BY_TEACHER' : cpAnalysis?.generatedBy || 'TEACHER';
 
-    const updated: CPAnalysisData = {
+    const shouldKeepReview = Boolean(cpAnalysis?.needsReview || isCPOutdated);
+
+    const candidate: CPAnalysisData = {
       id: cpAnalysis?.id || `cpanalysis-${academicSetting.id}`,
       academicSettingId: academicSetting.id,
       cpId: cp.id,
@@ -171,15 +197,38 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
       generalSummary,
       items,
       generatedBy: nextGeneratedBy,
-      workflowStatus: validation.isSiap ? 'SIAP' : 'PERLU_DILENGKAPI',
-      needsReview: false,
-      reviewReason: undefined,
-      basedOnCpUpdatedAt: cp.updatedAt || new Date().toISOString(),
+      needsReview: shouldKeepReview,
+      reviewReason: shouldKeepReview
+        ? cpAnalysis?.reviewReason || (isCPOutdated ? 'Teks CP telah diperbarui sejak analisis ini dibuat. Mohon sesuaikan analisis.' : undefined)
+        : undefined,
+      basedOnCpUpdatedAt:
+        cpAnalysis?.basedOnCpUpdatedAt ||
+        cp.updatedAt ||
+        new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+
+    const candidateValidation = validateCPAnalysisDataWorkflow(candidate, cp);
+
+    const updated: CPAnalysisData = {
+      ...candidate,
+      workflowStatus: candidateValidation.isSiap ? 'SIAP' : 'PERLU_DILENGKAPI',
+    };
+
     onSaveCPAnalysis(updated);
     setShowSavedToast(true);
     setTimeout(() => setShowSavedToast(false), 2500);
+
+    if (!candidateValidation.isSiap) {
+      setAnalysisError(
+        candidateValidation.issues[0] ||
+        'Analisis CP belum siap untuk dilanjutkan.'
+      );
+      return false;
+    }
+
+    setAnalysisError(null);
+    return true;
   };
 
   const executeAIAnalysis = async () => {
@@ -196,18 +245,24 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
         curriculum: context.curriculum,
       });
 
-      const newItems: CPAnalysisItem[] = (res.items || []).map((it, idx) => ({
-        id: `ana-item-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
-        elementId: it.elementId || (cp.elements && cp.elements[idx]?.id),
-        elementName: it.elementName || (cp.elements && cp.elements[idx]?.name) || `Elemen ${idx + 1}`,
-        scopeCode: it.scopeCode || '',
-        cpText: it.cpText || (cp.elements && cp.elements[idx]?.content) || '',
-        cpCompetence: it.cpCompetence || '',
-        materialScope: it.materialScope || '',
-        meaningfulUnderstanding: it.meaningfulUnderstanding || '',
-        suggestedTp: it.suggestedTp || '',
-        order: idx + 1,
-      }));
+      const newItems: CPAnalysisItem[] = (res.items || []).map((it, idx) => {
+        const canonicalElement = (cp.elements || []).find((el) => el.id === it.elementId);
+        if (!canonicalElement) {
+          throw new Error(`Hasil analisis memuat referensi elemen tidak dikenal (ID: ${it.elementId || 'kosong'}).`);
+        }
+        return {
+          id: `ana-item-${Date.now()}-${idx + 1}-${Math.random().toString(36).substring(2, 6)}`,
+          elementId: canonicalElement.id,
+          elementName: canonicalElement.name,
+          scopeCode: it.scopeCode || '',
+          cpText: canonicalElement.content || '',
+          cpCompetence: it.cpCompetence || '',
+          materialScope: it.materialScope || '',
+          meaningfulUnderstanding: it.meaningfulUnderstanding || '',
+          suggestedTp: it.suggestedTp || '',
+          order: idx + 1,
+        };
+      });
 
       const nextSummary = res.generalSummary || generalSummary || '';
       setItems(newItems);
@@ -234,6 +289,8 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
           engine: res.engine || (isGemini ? 'gemini' : 'pedagogical_engine'),
         },
         generatedAt: new Date().toISOString(),
+        needsReview: false,
+        reviewReason: undefined,
         basedOnCpUpdatedAt: cp.updatedAt || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -486,22 +543,32 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
             items.map((item, idx) => (
             <div key={item.id} className="p-4 sm:p-5 space-y-3 hover:bg-slate-50/40 transition-colors">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-800 text-xs font-bold flex items-center justify-center">
+                <div className="flex items-center gap-2 flex-1 mr-3">
+                  <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-800 text-xs font-bold flex items-center justify-center shrink-0">
                     {idx + 1}
                   </span>
-                  <input
-                    type="text"
-                    value={item.elementName}
-                    onChange={(e) => handleUpdateItem(item.id, 'elementName', e.target.value)}
-                    placeholder="Nama Elemen CP (misal: Keterampilan Gerak)"
-                    className="font-bold text-sm text-slate-900 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 focus:outline-hidden px-1"
-                  />
+                  <select
+                    value={item.elementId || ''}
+                    onChange={(e) => handleSelectElement(item.id, e.target.value)}
+                    className="font-bold text-sm text-slate-900 bg-white border border-slate-300 rounded-lg px-2.5 py-1 focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-hidden max-w-md"
+                  >
+                    <option value="">-- Pilih Elemen CP Canonical --</option>
+                    {(cp.elements || []).map((el, elIdx) => (
+                      <option key={el.id || `el-${elIdx}`} value={el.id}>
+                        {el.code ? `[${el.code}] ` : ''}{el.name}
+                      </option>
+                    ))}
+                  </select>
+                  {!item.elementId && (
+                    <span className="text-[11px] font-semibold text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
+                      Pilih Elemen CP
+                    </span>
+                  )}
                 </div>
                 <button
                   type="button"
                   onClick={() => handleDeleteItem(item.id)}
-                  className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
+                  className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors cursor-pointer shrink-0"
                   title="Hapus baris analisis"
                 >
                   <Trash2 className="w-4 h-4" />
@@ -511,15 +578,15 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
               {/* CP Text reference */}
               <div>
                 <label className="text-[11px] font-semibold text-slate-500 block mb-1">
-                  Kutipan Capaian Pembelajaran (CP) Elemen:
+                  Kutipan Capaian Pembelajaran (CP) Elemen Canonical:
                 </label>
-                <textarea
-                  rows={2}
-                  value={item.cpText}
-                  onChange={(e) => handleUpdateItem(item.id, 'cpText', e.target.value)}
-                  placeholder="Kutipan kalimat CP dari BSKAP Kemendikbud..."
-                  className="w-full text-xs text-slate-700 bg-slate-50/80 border border-slate-200 rounded-lg p-2.5 focus:bg-white focus:ring-1 focus:ring-blue-500 focus:outline-hidden"
-                />
+                <div className="w-full text-xs text-slate-700 bg-slate-50/80 border border-slate-200 rounded-lg p-2.5 min-h-[42px] leading-relaxed">
+                  {item.cpText || (
+                    <span className="text-slate-400 italic">
+                      Pilih elemen CP di atas untuk menampilkan kutipan resmi capaian pembelajaran.
+                    </span>
+                  )}
+                </div>
               </div>
 
               {/* Grid: Kompetensi & Lingkup Materi */}
@@ -613,8 +680,10 @@ export const CPAnalysisManager: React.FC<CPAnalysisManagerProps> = ({
         <button
           type="button"
           onClick={() => {
-            handleSave();
-            onNextStep();
+            const ready = handleSave();
+            if (ready) {
+              onNextStep();
+            }
           }}
           className="px-5 py-2.5 rounded-xl text-xs font-semibold bg-blue-900 text-white hover:bg-blue-800 flex items-center gap-2 shadow-sm transition-colors cursor-pointer"
         >

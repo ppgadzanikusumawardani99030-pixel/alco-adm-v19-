@@ -309,15 +309,27 @@ export const ProjectTransferImportModal: React.FC<ProjectTransferImportModalProp
 
             {/* Validation Outcome Banner */}
             {isValid ? (
-              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center gap-2.5">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                <div>
-                  <div className="font-bold">Format Data Valid & Siap Diimpor</div>
-                  <div className="text-emerald-700 text-[11px]">
-                    Seluruh struktur project, kode CP, TP, dan ATP memenuhi spesifikasi Contract v1.
+              validationResult.warnings.length > 0 ? (
+                <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-center gap-2.5">
+                  <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                  <div>
+                    <div className="font-bold">Format Struktur Valid & Dapat Diimpor</div>
+                    <div className="text-amber-800 text-[11px]">
+                      Project dapat diimpor. Terdapat catatan kelengkapan data yang perlu diselesaikan di menu Analisis CP / TP agar status menjadi SIAP dan ATP dapat disusun.
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex items-center gap-2.5">
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                  <div>
+                    <div className="font-bold">Format Data Valid & Siap Diimpor</div>
+                    <div className="text-emerald-700 text-[11px]">
+                      Seluruh struktur project, kode CP, TP, dan ATP memenuhi spesifikasi Contract v1.
+                    </div>
+                  </div>
+                </div>
+              )
             ) : (
               <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs space-y-1">
                 <div className="flex items-center gap-2 font-bold text-rose-800">

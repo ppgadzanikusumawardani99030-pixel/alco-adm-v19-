@@ -146,6 +146,12 @@ async function runAll() {
         { id: 'el-bilangan', code: 'E1', name: 'Bilangan', content: 'Peserta didik dapat memahami konsep pecahan.' },
         { id: 'el-aljabar', code: 'E2', name: 'Aljabar', content: 'Peserta didik dapat menyelesaikan pola kalimat matematika.' },
       ],
+      source: {
+        title: 'Keputusan BSKAP 046/2025',
+        institution: 'BSKAP',
+        documentYear: '2025',
+        verificationStatus: 'verified',
+      },
       updatedAt: new Date('2026-02-01T00:00:00Z').toISOString(),
     };
 
@@ -160,6 +166,7 @@ async function runAll() {
           elementId: 'el-bilangan',
           elementName: 'Bilangan',
           scopeCode: 'PCH',
+          cpText: 'Peserta didik dapat memahami konsep pecahan.',
           cpCompetence: 'Memahami',
           materialScope: 'Pecahan Senilai',
           suggestedTp: 'Peserta didik mampu memahami pecahan senilai.',
@@ -170,6 +177,7 @@ async function runAll() {
           elementId: 'el-aljabar',
           elementName: 'Aljabar',
           scopeCode: 'ALJ',
+          cpText: 'Peserta didik dapat menyelesaikan pola kalimat matematika.',
           cpCompetence: 'Mengidentifikasi',
           materialScope: 'Pola Gambar',
           suggestedTp: 'Peserta didik mampu mengidentifikasi pola gambar.',
@@ -297,7 +305,7 @@ async function runAll() {
       updatedAt: new Date('2026-02-01T03:00:00Z').toISOString(),
     };
 
-    const atpVal = validateATPDataWorkflow(atpData, loaded.tp, academicSetting);
+    const atpVal = validateATPDataWorkflow(atpData, loaded.tp, academicSetting, loaded.cp, loaded.cpAnalysis);
     assert.strictEqual(atpVal.isSiap, true, `ATP validation must be SIAP: ${atpVal.issues.join('; ')}`);
     assert.strictEqual(atpVal.status, 'SIAP');
 

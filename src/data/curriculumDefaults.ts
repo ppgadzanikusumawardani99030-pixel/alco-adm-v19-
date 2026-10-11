@@ -9,6 +9,7 @@ import {
   CPSource,
 } from '../types';
 import { getCurriculumTypeFromSetting } from '../services/curriculumRouter';
+import { SD_CP_ENTRIES } from './curriculum/cp/sd';
 
 export const CURRICULA = [
   'Kurikulum Merdeka',
@@ -191,6 +192,8 @@ export interface CPSamplePreset {
  * Local reference registry.
  * Clearly designated as local_reference or verified when citing official government publications.
  */
+const masterPjokFaseA = SD_CP_ENTRIES.find((entry) => entry.id === 'cp25-sd-fase-a-pjok');
+
 export const CP_PRESETS: CPSamplePreset[] = [
   {
     subject: 'Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)',
@@ -198,38 +201,19 @@ export const CP_PRESETS: CPSamplePreset[] = [
     phase: 'Fase A',
     level: 'SD',
     sourceInfo: {
-      title: 'Panduan Pembelajaran dan Asesmen Pendidikan Jasmani, Olahraga, dan Kesehatan (PJOK)',
-      institution: 'Kemendikdasmen / BSKAP Kemendikbudristek',
+      title: 'Keputusan Kepala BSKAP 046/H/KR/2025 tentang Capaian Pembelajaran pada Kurikulum Merdeka',
+      institution: 'BSKAP Kemendikdasmen',
       documentYear: '2025',
-      url: 'https://kurikulum.kemdikbud.go.id/',
-      page: 'Fase A (Kelas 1-2 SD)',
+      url: 'https://kurikulum.kemendikdasmen.go.id/file/1753929861_manage_file.pdf',
+      page: 'Lampiran Capaian Pembelajaran PJOK Fase A (Kelas 1-2 SD)',
       retrievedAt: new Date().toISOString(),
       verificationStatus: 'verified',
     },
-    generalDescription:
-      'Pada akhir Fase A, peserta didik dapat menunjukkan berbagai aktivitas pola gerak dasar lokomotor, non-lokomotor, dan manipulatif sebagai hasil peniruan dari berbagai sumber. Peserta didik mengetahui prosedur pola gerak dasar, menjaga kebersihan dan kesehatan diri, serta menunjukkan perilaku bertanggung jawab, mandiri, dan menghargai orang lain.',
-    elements: [
-      {
-        name: 'Keterampilan Gerak',
-        content:
-          'Peserta didik mempraktikkan keterampilan pola gerak dasar lokomotor (jalan, lari, lompat), non-lokomotor (menekuk, memutar, mengayun), dan manipulatif (melempar, menangkap, menendang) dalam berbagai bentuk permainan sederhana dan/atau tradisional.',
-      },
-      {
-        name: 'Pengetahuan Gerak',
-        content:
-          'Peserta didik memahami prosedur berbagai keterampilan pola gerak dasar lokomotor, non-lokomotor, dan manipulatif dalam berbagai permainan sederhana dan/atau tradisional.',
-      },
-      {
-        name: 'Pemanfaatan Gerak',
-        content:
-          'Peserta didik menjaga kebersihan tubuh, mengenali bagian-bagian tubuh yang boleh dan tidak boleh disentuh orang lain, serta menerapkan pola hidup sehat dalam kehidupan sehari-hari.',
-      },
-      {
-        name: 'Pengembangan Karakter dan Internalisasi Nilai-nilai Gerak',
-        content:
-          'Peserta didik menunjukkan perilaku bertanggung jawab, mengikuti aturan permainan, berbagi ruang dan alat, serta menghargai perbedaan teman saat beraktivitas jasmani.',
-      },
-    ],
+    generalDescription: masterPjokFaseA?.generalDescription || '',
+    elements: (masterPjokFaseA?.elements || []).map((el) => ({
+      name: el.name,
+      content: el.content,
+    })),
   },
   {
     subject: 'Bahasa Indonesia',
@@ -485,7 +469,7 @@ export const INITIAL_CP_DATA: CPData[] = [
       name: el.name,
       content: el.content,
     })),
-    aiNotes: 'Capaian Pembelajaran PJOK Fase A (Kelas 1-2 SD) berfokus pada penguasaan pola gerak dasar (lokomotor, non-lokomotor, manipulatif) melalui peniruan gerak dan permainan menyenangkan, serta pengenalan kebersihan diri.',
+    aiNotes: 'Capaian Pembelajaran PJOK Fase A (Kelas 1-2 SD) berfokus pada penguasaan keterampilan gerak fundamental, belajar melalui gerak dengan fair play dan kolaborasi, bergaya hidup aktif, serta memilih hidup yang menyehatkan.',
     lastEditedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   },

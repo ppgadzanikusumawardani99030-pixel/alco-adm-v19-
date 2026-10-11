@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { CPData, CPElem, AcademicSetting, TeacherProfile, ActiveContext, CPSource, CPVerificationStatus, normalizeCPVerificationStatus } from '../types';
 import { cpSourceRepository, CPSourceSearchResult } from '../services/cpSourceRepository';
+import { validateCPDataWorkflow } from '../services/cpWorkflowService';
 // CPManager imports
 
 interface CPManagerProps {
@@ -84,14 +85,20 @@ export const CPManager: React.FC<CPManagerProps> = ({
     setIsSourceModalOpen(false);
 
     // Auto save
-    const updated: CPData = {
+    const now = new Date().toISOString();
+    const candidate: CPData = {
       ...cp,
       academicSettingId: academicSetting.id,
       generalDescription: item.generalDescription,
       elements: item.elements,
       source: item.sourceMeta,
-      lastEditedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      lastEditedAt: now,
+      updatedAt: now,
+    };
+    const validation = validateCPDataWorkflow(candidate, academicSetting);
+    const updated: CPData = {
+      ...candidate,
+      workflowStatus: validation.status,
     };
     onSaveCP(updated);
   };
@@ -154,7 +161,8 @@ export const CPManager: React.FC<CPManagerProps> = ({
 
     setElements(updatedElements);
 
-    const updated: CPData = {
+    const now = new Date().toISOString();
+    const candidate: CPData = {
       ...cp,
       academicSettingId: academicSetting.id,
       generalDescription,
@@ -162,12 +170,17 @@ export const CPManager: React.FC<CPManagerProps> = ({
       source: source || {
         title: `CP ${academicSetting.subject} (${context.phase})`,
         institution: 'Entri Mandiri Guru',
-        retrievedAt: new Date().toISOString(),
+        retrievedAt: now,
         verificationStatus: 'local_reference',
       },
       aiNotes: aiNotes || '',
-      lastEditedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      lastEditedAt: now,
+      updatedAt: now,
+    };
+    const validation = validateCPDataWorkflow(candidate, academicSetting);
+    const updated: CPData = {
+      ...candidate,
+      workflowStatus: validation.status,
     };
     onSaveCP(updated);
     setSaveToast(true);

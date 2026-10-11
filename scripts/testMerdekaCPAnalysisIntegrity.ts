@@ -3,6 +3,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CPData, CPAnalysisData } from '../src/types';
 import {
+  validateCPDataWorkflow,
+  validateCPAnalysisDataWorkflow,
+} from '../src/services/cpWorkflowService';
+import { fallbackAnalyzeCP } from '../server/curriculumFallback';
+import {
   getInitialCPAnalysisItems,
   deriveAnalysisItemsFromCP,
 } from '../src/components/CPAnalysisManager';
@@ -185,7 +190,7 @@ runTest('6. Local/manual save uses generatedBy: "TEACHER" or preserves valid pre
   const compSource = fs.readFileSync(compPath, 'utf-8');
 
   // Verify handleSave provenance handling
-  const match = compSource.match(/const handleSave = \(\) => \{([\s\S]*?)\n  \};/);
+  const match = compSource.match(/const handleSave = (?:\(\): boolean =>|\(\) =>) \{([\s\S]*?)\n  \};/);
   assert.ok(match, 'handleSave must be present in CPAnalysisManager');
   const body = match[1];
 
@@ -227,6 +232,569 @@ runTest('8. CP Analysis component integrity: CPAnalysisManager does not perform 
   );
 });
 
+runTest('9. CP element tanpa ID -> CP tidak SIAP (PERLU_DILENGKAPI)', () => {
+  const invalidCP: CPData = {
+    ...sampleCP,
+    elements: [
+      { id: '', name: 'Elemen 1', content: 'Uraian elemen 1' },
+      { id: 'elem-2', name: 'Elemen 2', content: 'Uraian elemen 2' },
+    ],
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const val = validateCPDataWorkflow(invalidCP);
+  assert.strictEqual(val.isSiap, false, 'CP dengan element tanpa ID tidak boleh SIAP');
+  assert.strictEqual(val.status, 'PERLU_DILENGKAPI');
+  assert.ok(val.issues.some((iss) => iss.includes('tidak memiliki ID elemen yang valid')));
+});
+
+runTest('10. duplicate CP element ID -> CP tidak SIAP (PERLU_DILENGKAPI)', () => {
+  const dupCP: CPData = {
+    ...sampleCP,
+    elements: [
+      { id: 'dup-id', name: 'Elemen 1', content: 'Uraian elemen 1' },
+      { id: 'dup-id', name: 'Elemen 2', content: 'Uraian elemen 2' },
+    ],
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const val = validateCPDataWorkflow(dupCP);
+  assert.strictEqual(val.isSiap, false, 'CP dengan duplicate element ID tidak boleh SIAP');
+  assert.strictEqual(val.status, 'PERLU_DILENGKAPI');
+  assert.ok(val.issues.some((iss) => iss.includes('ID duplikat')));
+});
+
+runTest('11. AnalysisItem tanpa elementId -> tidak SIAP', () => {
+  const validCP: CPData = {
+    ...sampleCP,
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const cpa: CPAnalysisData = {
+    id: 'cpa-test',
+    academicSettingId: validCP.academicSettingId,
+    cpId: validCP.id,
+    basedOnCpUpdatedAt: validCP.updatedAt,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1',
+        elementId: '',
+        elementName: 'Terampil Bergerak',
+        cpCompetence: 'Mempraktikkan',
+        materialScope: 'Gerak dasar',
+        order: 1,
+      },
+      {
+        id: 'item-2',
+        elementId: 'elem-2',
+        elementName: 'Belajar Melalui Gerak',
+        cpCompetence: 'Menerapkan',
+        materialScope: 'Pola hidup sehat',
+        order: 2,
+      },
+    ],
+  };
+  const val = validateCPAnalysisDataWorkflow(cpa, validCP);
+  assert.strictEqual(val.isSiap, false, 'AnalysisItem tanpa elementId tidak boleh SIAP');
+  assert.ok(val.issues.some((iss) => iss.includes('elementId kosong')));
+});
+
+runTest('12. AnalysisItem memakai unknown elementId -> tidak SIAP', () => {
+  const validCP: CPData = {
+    ...sampleCP,
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const cpa: CPAnalysisData = {
+    id: 'cpa-test',
+    academicSettingId: validCP.academicSettingId,
+    cpId: validCP.id,
+    basedOnCpUpdatedAt: validCP.updatedAt,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1',
+        elementId: 'elem-ghost-99',
+        elementName: 'Terampil Bergerak',
+        cpCompetence: 'Mempraktikkan',
+        materialScope: 'Gerak dasar',
+        order: 1,
+      },
+      {
+        id: 'item-2',
+        elementId: 'elem-2',
+        elementName: 'Belajar Melalui Gerak',
+        cpCompetence: 'Menerapkan',
+        materialScope: 'Pola hidup sehat',
+        order: 2,
+      },
+    ],
+  };
+  const val = validateCPAnalysisDataWorkflow(cpa, validCP);
+  assert.strictEqual(val.isSiap, false, 'AnalysisItem dengan unknown elementId tidak boleh SIAP');
+  assert.ok(val.issues.some((iss) => iss.includes('tidak ada pada CP rujukan')));
+});
+
+runTest('13. CP punya E1 + E2 tetapi Analysis hanya mencakup E1 -> tidak SIAP', () => {
+  const validCP: CPData = {
+    ...sampleCP,
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const cpa: CPAnalysisData = {
+    id: 'cpa-test',
+    academicSettingId: validCP.academicSettingId,
+    cpId: validCP.id,
+    basedOnCpUpdatedAt: validCP.updatedAt,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1',
+        elementId: 'elem-1',
+        elementName: 'Terampil Bergerak',
+        cpCompetence: 'Mempraktikkan',
+        materialScope: 'Gerak dasar',
+        order: 1,
+      },
+    ],
+  };
+  const val = validateCPAnalysisDataWorkflow(cpa, validCP);
+  assert.strictEqual(val.isSiap, false, 'Jika elemen CP belum tercakup lengkap, tidak boleh SIAP');
+  assert.ok(val.issues.some((iss) => iss.includes('belum dianalisis oleh butir Analisis CP mana pun')));
+});
+
+runTest('14. E1 mempunyai 2 AnalysisItem dan E2 mempunyai 1 -> valid/SIAP jika field lain lengkap', () => {
+  const validCP: CPData = {
+    ...sampleCP,
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const cpa: CPAnalysisData = {
+    id: 'cpa-test',
+    academicSettingId: validCP.academicSettingId,
+    cpId: validCP.id,
+    basedOnCpUpdatedAt: validCP.updatedAt,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1a',
+        elementId: 'elem-1',
+        elementName: 'Terampil Bergerak',
+        cpText: 'Peserta didik mempraktikkan keterampilan gerak fundamental secara efektif.',
+        cpCompetence: 'Mempraktikkan',
+        materialScope: 'Gerak lokomotor',
+        order: 1,
+      },
+      {
+        id: 'item-1b',
+        elementId: 'elem-1',
+        elementName: 'Terampil Bergerak',
+        cpText: 'Peserta didik mempraktikkan keterampilan gerak fundamental secara efektif.',
+        cpCompetence: 'Mengeksplorasi',
+        materialScope: 'Gerak manipulatif',
+        order: 2,
+      },
+      {
+        id: 'item-2',
+        elementId: 'elem-2',
+        elementName: 'Belajar Melalui Gerak',
+        cpText: 'Peserta didik menerapkan perilaku hidup sehat dalam aktivitas jasmani.',
+        cpCompetence: 'Menerapkan',
+        materialScope: 'Pola hidup sehat',
+        order: 3,
+      },
+    ],
+  };
+  const val = validateCPAnalysisDataWorkflow(cpa, validCP);
+  assert.strictEqual(val.isSiap, true, 'Multi-item per elemen harus valid dan SIAP');
+  assert.strictEqual(val.issues.length, 0);
+});
+
+runTest('15. cpAnalysis.cpId !== cp.id -> tidak SIAP', () => {
+  const validCP: CPData = {
+    ...sampleCP,
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const cpa: CPAnalysisData = {
+    id: 'cpa-test',
+    academicSettingId: validCP.academicSettingId,
+    cpId: 'wrong-cp-id-999',
+    basedOnCpUpdatedAt: validCP.updatedAt,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1',
+        elementId: 'elem-1',
+        elementName: 'Terampil Bergerak',
+        cpCompetence: 'Mempraktikkan',
+        materialScope: 'Gerak dasar',
+        order: 1,
+      },
+      {
+        id: 'item-2',
+        elementId: 'elem-2',
+        elementName: 'Belajar Melalui Gerak',
+        cpCompetence: 'Menerapkan',
+        materialScope: 'Pola hidup sehat',
+        order: 2,
+      },
+    ],
+  };
+  const val = validateCPAnalysisDataWorkflow(cpa, validCP);
+  assert.strictEqual(val.isSiap, false, 'cpAnalysis.cpId beda dengan cp.id tidak boleh SIAP');
+  assert.ok(val.issues.some((iss) => iss.includes('tidak sesuai dengan ID CP')));
+});
+
+runTest('16. basedOnCpUpdatedAt hilang ketika CP mempunyai updatedAt -> tidak SIAP', () => {
+  const validCP: CPData = {
+    ...sampleCP,
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const cpa: CPAnalysisData = {
+    id: 'cpa-test',
+    academicSettingId: validCP.academicSettingId,
+    cpId: validCP.id,
+    basedOnCpUpdatedAt: undefined,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1',
+        elementId: 'elem-1',
+        elementName: 'Terampil Bergerak',
+        cpCompetence: 'Mempraktikkan',
+        materialScope: 'Gerak dasar',
+        order: 1,
+      },
+      {
+        id: 'item-2',
+        elementId: 'elem-2',
+        elementName: 'Belajar Melalui Gerak',
+        cpCompetence: 'Menerapkan',
+        materialScope: 'Pola hidup sehat',
+        order: 2,
+      },
+    ],
+  };
+  const val = validateCPAnalysisDataWorkflow(cpa, validCP);
+  assert.strictEqual(val.isSiap, false, 'basedOnCpUpdatedAt wajib ada jika cp.updatedAt ada');
+  assert.ok(val.issues.some((iss) => iss.includes('basedOnCpUpdatedAt')));
+});
+
+runTest('17. fallback analysis mempertahankan seluruh canonical element IDs', () => {
+  const fallback = fallbackAnalyzeCP({
+    cpText: sampleCP.generalDescription,
+    elements: sampleCP.elements,
+    subject: 'PJOK',
+    grade: 'Kelas 1',
+    phase: 'Fase A',
+  });
+
+  const ids = fallback.items.map((it) => it.elementId);
+  assert.ok(ids.includes('elem-1'), 'Fallback harus mempertahankan elem-1');
+  assert.ok(ids.includes('elem-2'), 'Fallback harus mempertahankan elem-2');
+  assert.strictEqual(ids.length >= 2, true);
+});
+
+runTest('18. fallback tidak memotong bagian akhir CP panjang (tidak ada 120 char truncation)', () => {
+  const longText = 'Mempraktikkan keterampilan gerak fundamental dalam situasi permainan sederhana dan tradisional yang sangat panjang dan kaya akan variasi gerak berirama serta aktivitas air di lingkungan sekitar sekolah secara komprehensif dan berkelanjutan tanpa dipotong sama sekali.';
+  const fallback = fallbackAnalyzeCP({
+    elements: [
+      {
+        id: 'long-elem-1',
+        name: 'Elemen Panjang',
+        content: longText,
+      },
+    ],
+    subject: 'PJOK',
+  });
+
+  assert.strictEqual(fallback.items.length >= 1, true);
+  const scope = fallback.items[0].materialScope;
+  assert.strictEqual(scope.includes('...'), false, 'Fallback tidak boleh memotong teks dengan elipsis');
+  assert.ok(scope.includes('tanpa dipotong sama sekali'), 'Teks akhir harus utuh');
+});
+
+runTest('19. source CPAnalysisManager tidak lagi mengandung it.elementId || (cp.elements && cp.elements[idx]?.id)', () => {
+  const compPath = path.resolve(process.cwd(), 'src/components/CPAnalysisManager.tsx');
+  const compSource = fs.readFileSync(compPath, 'utf-8');
+
+  assert.strictEqual(
+    compSource.includes('it.elementId || (cp.elements && cp.elements[idx]?.id)'),
+    false,
+    'CPAnalysisManager must not use positional fallback for elementId'
+  );
+  assert.strictEqual(
+    compSource.includes('cp.elements[idx]?.id'),
+    false,
+    'CPAnalysisManager must not use cp.elements[idx]?.id'
+  );
+});
+
+runTest('20. /api/ai/analyze-cp tidak menggunakan positional validElements[idx] untuk memperbaiki elementId AI', () => {
+  const serverPath = path.resolve(process.cwd(), 'server.ts');
+  const serverSource = fs.readFileSync(serverPath, 'utf-8');
+
+  // Verify within /api/ai/analyze-cp endpoint that validElements[idx] is not used
+  const endpointMatch = serverSource.match(/app\.post\('\/api\/ai\/analyze-cp'[\s\S]*?app\.post/);
+  assert.ok(endpointMatch, 'Endpoint /api/ai/analyze-cp must exist in server.ts');
+  const endpointBody = endpointMatch[0];
+
+  assert.strictEqual(
+    endpointBody.includes('validElements[idx]'),
+    false,
+    'server.ts /api/ai/analyze-cp must not use validElements[idx] positional fallback'
+  );
+});
+
+runTest('21. Mismatch elementName terhadap elemen CP canonical -> ditolak validator (PERLU_DILENGKAPI)', () => {
+  const validCP: CPData = {
+    ...sampleCP,
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const cpa: CPAnalysisData = {
+    id: 'cpa-test',
+    academicSettingId: validCP.academicSettingId,
+    cpId: validCP.id,
+    basedOnCpUpdatedAt: validCP.updatedAt,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1',
+        elementId: 'elem-1',
+        elementName: 'Elemen Palsu / Modifikasi',
+        cpText: 'Peserta didik mempraktikkan keterampilan gerak fundamental secara efektif.',
+        cpCompetence: 'Mempraktikkan',
+        materialScope: 'Gerak dasar',
+        order: 1,
+      },
+      {
+        id: 'item-2',
+        elementId: 'elem-2',
+        elementName: 'Belajar Melalui Gerak',
+        cpText: 'Peserta didik menerapkan perilaku hidup sehat dalam aktivitas jasmani.',
+        cpCompetence: 'Menerapkan',
+        materialScope: 'Pola hidup sehat',
+        order: 2,
+      },
+    ],
+  };
+  const val = validateCPAnalysisDataWorkflow(cpa, validCP);
+  assert.strictEqual(val.isSiap, false, 'Nama elemen berbeda dengan canonical harus ditolak');
+  assert.ok(val.issues.some((iss) => iss.includes('tidak sesuai dengan nama elemen CP canonical')));
+});
+
+runTest('22. Mismatch cpText terhadap elemen CP canonical -> ditolak validator (PERLU_DILENGKAPI)', () => {
+  const validCP: CPData = {
+    ...sampleCP,
+    source: { title: 'Kep BSKAP', institution: 'BSKAP', documentYear: '2025', verificationStatus: 'verified' },
+  };
+  const cpa: CPAnalysisData = {
+    id: 'cpa-test',
+    academicSettingId: validCP.academicSettingId,
+    cpId: validCP.id,
+    basedOnCpUpdatedAt: validCP.updatedAt,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1',
+        elementId: 'elem-1',
+        elementName: 'Terampil Bergerak',
+        cpText: 'Teks yang diubah atau diparafrase sepihak tanpa izin kurikulum.',
+        cpCompetence: 'Mempraktikkan',
+        materialScope: 'Gerak dasar',
+        order: 1,
+      },
+      {
+        id: 'item-2',
+        elementId: 'elem-2',
+        elementName: 'Belajar Melalui Gerak',
+        cpText: 'Peserta didik menerapkan perilaku hidup sehat dalam aktivitas jasmani.',
+        cpCompetence: 'Menerapkan',
+        materialScope: 'Pola hidup sehat',
+        order: 2,
+      },
+    ],
+  };
+  const val = validateCPAnalysisDataWorkflow(cpa, validCP);
+  assert.strictEqual(val.isSiap, false, 'Teks CP yang tidak cocok dengan canonical content harus ditolak');
+  assert.ok(val.issues.some((iss) => iss.includes('tidak sesuai dengan isi elemen CP canonical')));
+});
+
+runTest('23. Ordinary save preserves previous basedOnCpUpdatedAt to prevent stale laundering', () => {
+  const compPath = path.resolve(process.cwd(), 'src/components/CPAnalysisManager.tsx');
+  const compSource = fs.readFileSync(compPath, 'utf-8');
+
+  // Verify handleSave implementation preserves existing basedOnCpUpdatedAt
+  const match = compSource.match(/const handleSave = \(\): boolean => \{([\s\S]*?)\n  \};/);
+  assert.ok(match, 'handleSave must exist');
+  const body = match[1];
+
+  assert.ok(
+    body.includes('cpAnalysis?.basedOnCpUpdatedAt ||'),
+    'handleSave must preserve existing basedOnCpUpdatedAt before falling back'
+  );
+  assert.ok(
+    !body.includes('basedOnCpUpdatedAt: cp.updatedAt ||'),
+    'handleSave must not unconditionally overwrite basedOnCpUpdatedAt with cp.updatedAt'
+  );
+});
+
+runTest('24. Ordinary save preserves needsReview / isCPOutdated condition', () => {
+  const compPath = path.resolve(process.cwd(), 'src/components/CPAnalysisManager.tsx');
+  const compSource = fs.readFileSync(compPath, 'utf-8');
+
+  const match = compSource.match(/const handleSave = \(\): boolean => \{([\s\S]*?)\n  \};/);
+  assert.ok(match, 'handleSave must exist');
+  const body = match[1];
+
+  assert.ok(
+    body.includes('shouldKeepReview') || body.includes('cpAnalysis?.needsReview || isCPOutdated'),
+    'handleSave must preserve needsReview if previously flagged or currently outdated'
+  );
+  assert.ok(
+    !body.includes('needsReview: false,'),
+    'handleSave must not hardcode needsReview: false'
+  );
+});
+
+runTest('25. handleSave evaluates candidate to determine final workflowStatus', () => {
+  const compPath = path.resolve(process.cwd(), 'src/components/CPAnalysisManager.tsx');
+  const compSource = fs.readFileSync(compPath, 'utf-8');
+
+  const match = compSource.match(/const handleSave = \(\): boolean => \{([\s\S]*?)\n  \};/);
+  assert.ok(match, 'handleSave must exist');
+  const body = match[1];
+
+  assert.ok(
+    body.includes('validateCPAnalysisDataWorkflow(candidate, cp)'),
+    'handleSave must validate candidate directly before deciding final workflowStatus'
+  );
+});
+
+runTest('26. Rebase paths (executeAIAnalysis & handleGenerateFromCP) rebase to active cp.updatedAt and clear needsReview', () => {
+  const compPath = path.resolve(process.cwd(), 'src/components/CPAnalysisManager.tsx');
+  const compSource = fs.readFileSync(compPath, 'utf-8');
+
+  // Both rebase handlers must use active cp.updatedAt and clear needsReview
+  const aiMatch = compSource.match(/executeAIAnalysis = async \(\) => \{([\s\S]*?)\n  \};/);
+  assert.ok(aiMatch, 'executeAIAnalysis must exist');
+  assert.ok(aiMatch[1].includes('needsReview: false'), 'executeAIAnalysis must clear needsReview');
+  assert.ok(aiMatch[1].includes('basedOnCpUpdatedAt: cp.updatedAt'), 'executeAIAnalysis must rebase to cp.updatedAt');
+
+  const deriveMatch = compSource.match(/handleGenerateFromCP = \(\) => \{([\s\S]*?)\n  \};/);
+  assert.ok(deriveMatch, 'handleGenerateFromCP must exist');
+  assert.ok(deriveMatch[1].includes('needsReview: false'), 'handleGenerateFromCP must clear needsReview');
+  assert.ok(deriveMatch[1].includes('basedOnCpUpdatedAt: cp.updatedAt'), 'handleGenerateFromCP must rebase to cp.updatedAt');
+});
+
+runTest('27. CP invalid -> CPAnalysis tidak SIAP (CP prerequisite restored)', () => {
+  const invalidCP: CPData = {
+    ...sampleCP,
+    generalDescription: '', // empty generalDescription makes CP invalid
+    source: undefined,
+  };
+  const cpa: CPAnalysisData = {
+    id: 'cpa-test',
+    academicSettingId: invalidCP.academicSettingId,
+    cpId: invalidCP.id,
+    basedOnCpUpdatedAt: invalidCP.updatedAt,
+    updatedAt: new Date().toISOString(),
+    items: [
+      {
+        id: 'item-1',
+        elementId: 'elem-1',
+        elementName: 'Terampil Bergerak',
+        cpText: 'Peserta didik mempraktikkan keterampilan gerak fundamental secara efektif.',
+        cpCompetence: 'Mempraktikkan',
+        materialScope: 'Gerak dasar',
+        order: 1,
+      },
+      {
+        id: 'item-2',
+        elementId: 'elem-2',
+        elementName: 'Belajar Melalui Gerak',
+        cpText: 'Peserta didik menerapkan perilaku hidup sehat dalam aktivitas jasmani.',
+        cpCompetence: 'Menerapkan',
+        materialScope: 'Pola hidup sehat',
+        order: 2,
+      },
+    ],
+  };
+
+  const val = validateCPAnalysisDataWorkflow(cpa, invalidCP);
+  assert.strictEqual(val.isSiap, false, 'CPAnalysis harus tidak SIAP jika CP rujukan tidak valid');
+  assert.ok(
+    val.issues.some((iss) => iss.includes('Capaian Pembelajaran (CP) rujukan belum memenuhi status SIAP.')),
+    'Harus memuat issue CP belum memenuhi status SIAP'
+  );
+});
+
+runTest('28. handleSave mempunyai return type boolean', () => {
+  const compPath = path.resolve(process.cwd(), 'src/components/CPAnalysisManager.tsx');
+  const compSource = fs.readFileSync(compPath, 'utf-8');
+
+  assert.ok(
+    compSource.includes('const handleSave = (): boolean =>'),
+    'handleSave must have explicit return type boolean'
+  );
+  assert.ok(
+    compSource.includes('return false;'),
+    'handleSave must return false when candidate is not siap'
+  );
+  assert.ok(
+    compSource.includes('return true;'),
+    'handleSave must return true when candidate is siap'
+  );
+});
+
+runTest('29. Navigation memanggil onNextStep() hanya jika handleSave() mengembalikan true', () => {
+  const compPath = path.resolve(process.cwd(), 'src/components/CPAnalysisManager.tsx');
+  const compSource = fs.readFileSync(compPath, 'utf-8');
+
+  assert.ok(
+    compSource.includes('const ready = handleSave();\n            if (ready) {\n              onNextStep();\n            }') ||
+    compSource.includes('const ready = handleSave();\n            if (ready) {\n              onNextStep();'),
+    'Navigation button must gate onNextStep() on handleSave() returning true'
+  );
+  assert.strictEqual(
+    compSource.includes('handleSave();\n            onNextStep();'),
+    false,
+    'Navigation must not call onNextStep() unconditionally'
+  );
+});
+
+runTest('30. validateATPDataWorkflow() tetap melakukan deep validateTPDataWorkflow() tanpa conditional if (cpAnalysis)', () => {
+  const servicePath = path.resolve(process.cwd(), 'src/services/cpWorkflowService.ts');
+  const serviceSource = fs.readFileSync(servicePath, 'utf-8');
+
+  assert.strictEqual(
+    serviceSource.includes('if (cpAnalysis) {\n      const tpValidation = validateTPDataWorkflow'),
+    false,
+    'validateATPDataWorkflow must not wrap validateTPDataWorkflow in if (cpAnalysis)'
+  );
+  assert.ok(
+    serviceSource.includes('const tpValidation = validateTPDataWorkflow(tp, cp, cpAnalysis, academicSetting);'),
+    'validateATPDataWorkflow must run validateTPDataWorkflow directly'
+  );
+});
+
+runTest('31. handleSaveCPAnalysis does not rebase basedOnCpUpdatedAt unconditionally', () => {
+  const appPath = path.resolve(process.cwd(), 'src/App.tsx');
+  const appSource = fs.readFileSync(appPath, 'utf-8');
+
+  assert.strictEqual(
+    appSource.includes('basedOnCpUpdatedAt: persistedCP.updatedAt,'),
+    false,
+    'handleSaveCPAnalysis must not have unconditional basedOnCpUpdatedAt: persistedCP.updatedAt'
+  );
+  assert.ok(
+    appSource.includes('basedOnCpUpdatedAt:\n') || appSource.includes('basedOnCpUpdatedAt:'),
+    true,
+    'handleSaveCPAnalysis must specify basedOnCpUpdatedAt with fallback logic'
+  );
+  assert.ok(
+    appSource.includes('analysis.basedOnCpUpdatedAt'),
+    'handleSaveCPAnalysis must prioritize analysis.basedOnCpUpdatedAt'
+  );
+});
+
 console.log(`\n========================================`);
 console.log(`MERDEKA CP ANALYSIS INTEGRITY: ALL ${passedTests}/${totalTests} TESTS PASSED`);
 console.log(`========================================\n`);
+
+

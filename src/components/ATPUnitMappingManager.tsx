@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   FolderTree,
   ArrowRight,
@@ -15,6 +15,10 @@ import {
   ArrowUp,
   ArrowDown,
   BookOpen,
+  FileSpreadsheet,
+  X,
+  Download,
+  Copy,
 } from 'lucide-react';
 import {
   ATPData,
@@ -24,6 +28,8 @@ import {
   ATPUnitMappingData,
   ATPUnitMapping,
   ATPUnitMaterial,
+  CPData,
+  CPAnalysisData,
 } from '../types';
 import {
   analyzeATPUnitMappingWithAI,
@@ -31,12 +37,21 @@ import {
   MappingAnalysisResult,
 } from '../services/aiService';
 import { validateATPUnitMappingCanonical } from '../services/atpUnitMappingValidationService';
+import {
+  parseBabMateriXlsx,
+  downloadBabMateriTemplateXlsx,
+  ATPUnitMappingImportResult,
+} from '../services/atpUnitMappingImportService';
+import { validateATPDataWorkflow } from '../services/cpWorkflowService';
+import { buildATPUnitMappingDiagnosticReport } from '../services/diagnosticService';
 
 export interface ATPUnitMappingManagerProps {
   atp: ATPData;
   tp: TPData;
   mapping?: ATPUnitMappingData;
   academicSetting?: AcademicSetting;
+  cp?: CPData;
+  cpAnalysis?: CPAnalysisData;
   onSaveMapping: (updatedMapping: ATPUnitMappingData) => boolean;
   onNextStep: () => void;
   onBackToATP: () => void;
@@ -238,6 +253,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   tp,
   mapping,
   academicSetting,
+  cp,
+  cpAnalysis,
   onSaveMapping,
   onNextStep,
   onBackToATP,
@@ -336,6 +353,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         setSaveSuccessNotice(false);
         setSaveErrorNotice(null);
         setAnalysisResult(null);
+        setLastAnalysisSnapshot(null);
+        setLastAppliedActionIds([]);
         setSelectedAnalysisActionIds(new Set());
         setAppliedNotice(
           'Draf Pemetaan Bab dan Lingkup Materi berhasil disusun otomatis oleh AI dari TP & ATP. Silakan tinjau dan klik "Simpan Pemetaan" untuk menyimpan.'
@@ -411,7 +430,8 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
     } else if (zCount > 0) {
       summaryMessage = 'Pemetaan belum siap. Hubungkan ATP/TP canonical yang tersisa.';
     } else {
-      summaryMessage = 'Pemetaan belum siap. Lengkapi Bab dan Lingkup Materi yang belum diselaraskan.';
+      const missingUnits = validation.unitsWithoutLineage.map(unitId => units.find(unit => unit.id === unitId)?.title || unitId).join(', ');
+      summaryMessage = `Pemetaan belum siap. Lengkapi Bab (${missingUnits}) atau Materi yang belum diselaraskan.`;
     }
 
     return {
@@ -814,9 +834,105 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
   // AI Analysis State
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<MappingAnalysisResult | null>(null);
+  const [lastAnalysisSnapshot, setLastAnalysisSnapshot] = useState<MappingAnalysisResult | null>(null);
+  const [lastAppliedActionIds, setLastAppliedActionIds] = useState<string[]>([]);
+  const [copyDiagnosticNotice, setCopyDiagnosticNotice] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [selectedAnalysisActionIds, setSelectedAnalysisActionIds] = useState<Set<string>>(new Set());
   const [appliedNotice, setAppliedNotice] = useState<string | null>(null);
+
+  // Import Bab & Materi State (Section 4, 5, 6)
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importPreviewResult, setImportPreviewResult] = useState<ATPUnitMappingImportResult | null>(null);
+  const [importErrors, setImportErrors] = useState<string[] | null>(null);
+  const [importSuccessNotice, setImportSuccessNotice] = useState<string | null>(null);
+
+  // Section 6: ATP Readiness Gate for Import Bab & Materi (using canonical workflow authority)
+  const notReadyMessage = 'ATP perlu ditinjau atau diperbarui sebelum mengimpor struktur Bab & Materi.';
+
+  const atpWorkflowValidation = useMemo(() => {
+    return validateATPDataWorkflow(atp, tp, academicSetting, cp, cpAnalysis);
+  }, [atp, tp, academicSetting, cp, cpAnalysis]);
+
+  const isATPReady = Boolean(atpWorkflowValidation.isSiap);
+
+  const handleImportClick = () => {
+    if (!isATPReady) {
+      setImportErrors([
+        notReadyMessage,
+        ...(atpWorkflowValidation.issues || []),
+      ]);
+      return;
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!isATPReady) {
+      setImportErrors([
+        notReadyMessage,
+        ...(atpWorkflowValidation.issues || []),
+      ]);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setIsImporting(true);
+    setImportErrors(null);
+
+    try {
+      const buffer = await file.arrayBuffer();
+      const result = parseBabMateriXlsx(buffer);
+      if (!result.success || !result.units || result.units.length === 0) {
+        setImportErrors(result.errors || ['Gagal membaca file XLSX.']);
+        setImportPreviewResult(null);
+      } else {
+        setImportPreviewResult(result);
+        setImportErrors(null);
+      }
+    } catch (err: any) {
+      setImportErrors([err?.message || 'Terjadi kesalahan saat memproses file XLSX.']);
+      setImportPreviewResult(null);
+    } finally {
+      setIsImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleApplyImportToDraft = () => {
+    if (!importPreviewResult?.units || importPreviewResult.units.length === 0) return;
+
+    setUnits(importPreviewResult.units);
+    setHasChanges(true);
+
+    // Section 5: Reset state analysis lama bila diperlukan
+    setAnalysisResult(null);
+    setLastAnalysisSnapshot(null);
+    setLastAppliedActionIds([]);
+    setSelectedAnalysisActionIds(new Set());
+    setAppliedNotice(null);
+    setSaveSuccessNotice(false);
+    setSaveErrorNotice(null);
+
+    const stats = importPreviewResult.stats;
+    setImportSuccessNotice(
+      `Berhasil menerapkan ${stats?.totalBabs || importPreviewResult.units.length} Bab dan ${stats?.totalMaterials || 0} Lingkup Materi ke Draf. Silakan klik 'Analisis & Selaraskan' untuk menyelaraskan dengan ATP & TP kanonikal.`
+    );
+
+    setImportPreviewResult(null);
+  };
+
+  const handleCancelImport = () => {
+    setImportPreviewResult(null);
+    setImportErrors(null);
+  };
 
   const handleAnalyzeMapping = async () => {
     setIsAnalyzing(true);
@@ -835,6 +951,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       });
 
       setAnalysisResult(result);
+      setLastAnalysisSnapshot(result);
       setSelectedAnalysisActionIds(new Set());
     } catch (err: any) {
       setAnalysisError(err?.message || 'Gagal menganalisis pemetaan Bab & Lingkup Materi.');
@@ -884,11 +1001,14 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       (m) => m.action && selectedAnalysisActionIds.has(m.id)
     );
 
-    // 1. Apply ASSIGN_ATP_TO_UNIT actions (Support multi-unit ATP: do not remove from other units)
-    selectedAtpFindings.forEach((f) => {
+    // 1. Apply ASSIGN_ATP_TO_UNIT actions
+    for (const f of selectedAtpFindings) {
       const action = f.action!;
       const atpItemId = action.atpItemId;
       const targetUnitId = action.targetUnitId;
+      const actionLinkedTpIds = Array.isArray(action.linkedTpIds) ? action.linkedTpIds : [];
+      
+      if (actionLinkedTpIds.length === 0) continue; // Skip if no valid TP subset provided
 
       nextUnits = nextUnits.map((u) => {
         if (u.id !== targetUnitId) return u;
@@ -896,22 +1016,16 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         if (!nextLinkedAtp.includes(atpItemId)) {
           nextLinkedAtp.push(atpItemId);
         }
-        const atpItem = atpItemMap.get(atpItemId);
-        const itemTps = Array.isArray(atpItem?.linkedTpIds) && atpItem.linkedTpIds.length > 0
-          ? atpItem.linkedTpIds
-          : atpItem?.tpId
-          ? [atpItem.tpId]
-          : [];
-        const nextTpIds = Array.from(new Set([...(u.linkedTpIds || []), ...itemTps]));
+        const nextTpIds = Array.from(new Set([...(u.linkedTpIds || []), ...actionLinkedTpIds]));
 
         return {
           ...u,
           linkedAtpItemIds: nextLinkedAtp,
           linkedTpIds: nextTpIds,
-          materials: u.materials, // FIX 1: Preserve materials exactly as-is
+          materials: u.materials,
         };
       });
-    });
+    }
 
     // 2. Apply ADD_MATERIAL_TO_UNIT actions
     selectedMaterialFindings.forEach((m) => {
@@ -1000,12 +1114,40 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
 
     setUnits(nextUnits);
     setHasChanges(true);
+    setLastAppliedActionIds(Array.from(selectedAnalysisActionIds));
     setSelectedAnalysisActionIds(new Set());
     setAnalysisResult(null);
     setSaveSuccessNotice(false);
     setAppliedNotice(
       'Saran penyelarasan diterapkan ke draf. Tinjau lalu analisis kembali bila diperlukan.'
     );
+  };
+
+  const handleCopyDiagnostic = async () => {
+    try {
+      const currentDraft = buildCurrentMappingDraft();
+      const validation = validateATPUnitMappingCanonical(currentDraft, atp, tp);
+      const report = buildATPUnitMappingDiagnosticReport({
+        academicSetting,
+        mapping: currentDraft,
+        atp,
+        tp,
+        validation,
+        analysisResult: lastAnalysisSnapshot || analysisResult,
+        appliedActionIds: lastAppliedActionIds,
+      });
+
+      await navigator.clipboard.writeText(report);
+      setCopyDiagnosticNotice('Diagnosis berhasil disalin.');
+      setTimeout(() => {
+        setCopyDiagnosticNotice((prev) => (prev === 'Diagnosis berhasil disalin.' ? null : prev));
+      }, 3500);
+    } catch {
+      setCopyDiagnosticNotice('Gagal menyalin diagnosis ke clipboard.');
+      setTimeout(() => {
+        setCopyDiagnosticNotice((prev) => (prev === 'Gagal menyalin diagnosis ke clipboard.' ? null : prev));
+      }, 3500);
+    }
   };
 
   // Save Mapping Canonical
@@ -1073,7 +1215,7 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
       saveButtonClass = 'text-white bg-blue-800 hover:bg-blue-900 ring-2 ring-blue-500/20 cursor-pointer shadow-xs';
     } else {
       // Condition A: mapping ADA + !hasChanges
-      saveButtonText = '✓ Tersimpan';
+      saveButtonText = localValidation.isValid && !localValidation.isComplete ? '✓ Draf tersimpan' : '✓ Tersimpan';
       isSaveButtonDisabled = true;
       saveButtonClass = 'text-emerald-700 bg-emerald-50 border border-emerald-200 cursor-default opacity-90';
     }
@@ -1223,15 +1365,37 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
         {/* Structural Status Summary Banner (Readiness Summary C6) */}
         <div className="mt-3">
           {localValidation.isComplete ? (
-            <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center gap-2">
-              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>{localValidation.summaryMessage}</span>
+            <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs font-semibold flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>{localValidation.summaryMessage}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleCopyDiagnostic}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-emerald-300 text-emerald-700 hover:bg-emerald-100 text-[11px] font-bold shadow-2xs transition cursor-pointer shrink-0"
+                title="Salin laporan diagnosis pemetaan ke clipboard"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                <span>Salin Diagnosis</span>
+              </button>
             </div>
           ) : (
             <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 space-y-2">
-              <div className="flex items-center gap-2 text-xs font-bold">
-                <Info className="w-4 h-4 text-amber-600 shrink-0" />
-                <span>{localValidation.summaryMessage}</span>
+              <div className="flex items-center justify-between gap-2 text-xs font-bold">
+                <div className="flex items-center gap-2">
+                  <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>{localValidation.summaryMessage}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCopyDiagnostic}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white border border-amber-300 text-amber-800 hover:bg-amber-100 text-[11px] font-bold shadow-2xs transition cursor-pointer shrink-0"
+                  title="Salin laporan diagnosis pemetaan ke clipboard"
+                >
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Salin Diagnosis</span>
+                </button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 px-6">
                 <div className="text-[10px] flex items-center gap-1.5">
@@ -1249,12 +1413,44 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
               </div>
             </div>
           )}
+
+          {copyDiagnosticNotice && (
+            <div className="mt-2 p-2 rounded-xl bg-slate-800 text-white text-xs font-medium flex items-center justify-between animate-fadeIn">
+              <div className="flex items-center gap-2">
+                <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>{copyDiagnosticNotice}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCopyDiagnosticNotice(null)}
+                className="text-slate-400 hover:text-white cursor-pointer ml-2"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
         </div>
 
         {hasChanges && !saveSuccessNotice && !saveErrorNotice && !localValidationNotice && (
           <div className="mt-3 p-2.5 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs font-medium flex items-center gap-2">
             <AlertCircle className="w-4 h-4 text-blue-600 shrink-0" />
             <span>Terdapat perubahan Unit/Bab atau Lingkup Materi yang belum disimpan. Klik "{saveButtonText}" atau lanjutkan untuk menyimpan.</span>
+          </div>
+        )}
+
+        {importSuccessNotice && (
+          <div className="mt-3 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Check className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>{importSuccessNotice}</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setImportSuccessNotice(null)}
+              className="text-emerald-600 hover:text-emerald-900 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         )}
       </div>
@@ -1307,8 +1503,48 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
             </button>
           </div>
 
-          {/* AI Action Buttons */}
+          {/* Action Buttons: Import, AI Generate, AI Analyze */}
           <div className="flex items-center gap-2.5 flex-wrap">
+            {/* Download Template Button */}
+            <button
+              id="btn-download-bab-materi-template"
+              type="button"
+              onClick={() => downloadBabMateriTemplateXlsx()}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold shadow-2xs transition cursor-pointer"
+              title="Download template Excel untuk struktur Bab & Materi"
+            >
+              <Download className="w-4 h-4 text-slate-600" />
+              <span>Download Template</span>
+            </button>
+
+            {/* Import Bab & Materi Button */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls"
+              className="hidden"
+              onChange={handleFileSelect}
+            />
+            <button
+              id="btn-import-bab-materi"
+              type="button"
+              onClick={handleImportClick}
+              disabled={!isATPReady || isImporting}
+              title={
+                !isATPReady
+                  ? 'Selesaikan ATP terlebih dahulu sebelum mengimpor struktur Bab & Materi.'
+                  : 'Impor struktur Bab dan Lingkup Materi dari file Excel (sheet BAB_MATERI)'
+              }
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold border shadow-2xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                !isATPReady
+                  ? 'bg-slate-100 border-slate-200 text-slate-400'
+                  : 'bg-white border-emerald-300 text-emerald-800 hover:bg-emerald-50'
+              }`}
+            >
+              <FileSpreadsheet className={`w-4 h-4 ${isImporting ? 'animate-spin' : 'text-emerald-700'}`} />
+              <span>{isImporting ? 'Membaca XLSX...' : 'Import Bab & Materi'}</span>
+            </button>
+
             <button
               id="btn-generate-canonical-mapping"
               type="button"
@@ -1343,6 +1579,160 @@ export const ATPUnitMappingManager: React.FC<ATPUnitMappingManagerProps> = ({
                       className="px-4 py-2 rounded-xl bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold transition cursor-pointer"
                     >
                       Lanjutkan
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Import Preview Modal (Section 4, 7, 8) */}
+            {importPreviewResult && importPreviewResult.units && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-fadeIn">
+                <div className="bg-white rounded-2xl p-6 max-w-2xl w-full max-h-[88vh] flex flex-col space-y-4 shadow-2xl">
+                  <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center">
+                        <FileSpreadsheet className="w-5 h-5 text-emerald-700" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-slate-900 text-sm">Pratinjau Import Bab & Lingkup Materi</h3>
+                        <p className="text-xs text-slate-500">
+                          Struktur Bab & Materi dari sheet <code>BAB_MATERI</code> berhasil divalidasi.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCancelImport}
+                      className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  {/* Stats Summary */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-3 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-emerald-900">Jumlah Bab:</span>
+                      <span className="text-sm font-extrabold text-emerald-700">
+                        {importPreviewResult.stats?.totalBabs || importPreviewResult.units.length}
+                      </span>
+                    </div>
+                    <div className="bg-indigo-50/60 border border-indigo-200 rounded-xl p-3 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-indigo-900">Jumlah Materi:</span>
+                      <span className="text-sm font-extrabold text-indigo-700">
+                        {importPreviewResult.stats?.totalMaterials || 0}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Warnings & Notices (Section 7 & 8) */}
+                  {hasCanonicalMapping && (
+                    <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="font-semibold leading-tight">
+                          Pemetaan Bab sudah tersimpan. Struktur hasil import hanya akan mengganti draf saat ini. Data tersimpan baru berubah setelah Anda menekan Simpan Perubahan.
+                        </p>
+                        <p className="text-[11px] text-amber-800">
+                          Perubahan pada struktur Bab/Materi dapat memengaruhi pemetaan Tujuan Pembelajaran (TP) yang sudah ada sebelumnya.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Lineage Isolation Notice (Section 3 & 9) */}
+                  <div className="p-2.5 rounded-xl bg-slate-50 border border-slate-200 text-slate-600 text-xs flex items-center gap-2">
+                    <Info className="w-4 h-4 text-blue-600 shrink-0" />
+                    <span>
+                      Struktur Bab & Materi diimpor dengan lineage kosong. Gunakan fitur <strong>Analisis & Selaraskan</strong> setelah menerapkan ke draf untuk menghubungkan dengan TP & ATP kanonikal.
+                    </span>
+                  </div>
+
+                  {/* Scrollable List of Babs & Materials */}
+                  <div className="flex-1 overflow-y-auto space-y-3 pr-1 border border-slate-200 rounded-xl p-3 bg-slate-50/30 max-h-[35vh]">
+                    {importPreviewResult.units.map((u) => (
+                      <div key={u.id} className="bg-white rounded-lg border border-slate-200 p-2.5 space-y-1.5 shadow-2xs">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-800 text-[11px] font-bold">
+                              Bab {u.order}
+                            </span>
+                            <span className="font-bold text-slate-800 text-xs">{u.title}</span>
+                          </div>
+                          <span className="text-[11px] text-slate-500 font-medium">
+                            {u.materials?.length || 0} materi
+                          </span>
+                        </div>
+                        {u.materials && u.materials.length > 0 && (
+                          <div className="pl-4 pt-1 space-y-1 border-t border-slate-100">
+                            {u.materials.map((m) => (
+                              <div key={m.id} className="flex items-center gap-2 text-[11px] text-slate-600">
+                                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
+                                <span className="text-slate-400 font-semibold">{m.order}.</span>
+                                <span>{m.title}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Modal Actions */}
+                  <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={handleCancelImport}
+                      className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      id="btn-apply-import-to-draft"
+                      type="button"
+                      onClick={handleApplyImportToDraft}
+                      className="px-4 py-2 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition cursor-pointer shadow-xs"
+                    >
+                      Terapkan ke Draf
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Import Error Modal */}
+            {importErrors && importErrors.length > 0 && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-fadeIn">
+                <div className="bg-white rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-red-100 text-red-700 flex items-center justify-center shrink-0">
+                      <AlertCircle className="w-5 h-5 text-red-600" />
+                    </div>
+                    <div className="space-y-1">
+                      <h3 className="font-bold text-slate-900 text-sm">Gagal Mengimpor File Excel</h3>
+                      <p className="text-xs text-slate-500">
+                        Ditemukan kesalahan validasi pada struktur file:
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="bg-red-50/60 border border-red-200 rounded-xl p-3 max-h-48 overflow-y-auto space-y-1.5 text-xs text-red-800">
+                    {importErrors.map((err, idx) => (
+                      <div key={idx} className="flex items-start gap-2">
+                        <span className="font-bold text-red-500 shrink-0">•</span>
+                        <span className="leading-relaxed">{err}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setImportErrors(null)}
+                      className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition cursor-pointer"
+                    >
+                      Tutup
                     </button>
                   </div>
                 </div>

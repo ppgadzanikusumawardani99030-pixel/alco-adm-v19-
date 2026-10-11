@@ -1481,34 +1481,6 @@ export function validateLearningPlan(
     if (plan.sourceType === 'AI_DRAFT' && !plan.confirmedAt) {
       finalizationErrors.push('Keluaran draf AI tidak boleh langsung berstatus SIAP tanpa peninjauan guru.');
     }
-
-    // Print-readiness finalization requirements for Kurikulum Merdeka
-    if (plan.curriculumType === 'KURIKULUM_MERDEKA' || !plan.curriculumType) {
-      if (!plan.initialCompetency || typeof plan.initialCompetency !== 'string' || plan.initialCompetency.trim() === '') {
-        finalizationErrors.push('Kompetensi Awal belum diisi.');
-      }
-      const dimValidation = validateGraduateProfileDimensions(
-        plan.graduateProfileDimensions
-      );
-      if (!dimValidation.isValid) {
-        finalizationErrors.push(
-          dimValidation.error || 'Dimensi Profil Lulusan belum dipilih.'
-        );
-      }
-      const validResources = (plan.resources || []).filter(
-        (r) =>
-          r &&
-          typeof r === 'object' &&
-          ((typeof r.title === 'string' && r.title.trim().length > 0) ||
-            (typeof r.source === 'string' && r.source.trim().length > 0))
-      );
-      if (validResources.length === 0) {
-        finalizationErrors.push('Sarana dan prasarana / sumber belajar belum diisi.');
-      }
-      if (!plan.learningModel || typeof plan.learningModel !== 'string' || plan.learningModel.trim() === '') {
-        finalizationErrors.push('Model/praktik pembelajaran belum diisi.');
-      }
-    }
   }
 
   const allErrors = [...draftErrors, ...finalizationErrors];
@@ -1524,6 +1496,109 @@ export function validateLearningPlan(
     resolvedATPs,
     resolvedAllocatedJP,
     jpResolutionSource: jpResolution.source,
+  };
+}
+
+/**
+ * Validates output readiness for RPP.
+ * RPP requires canonical plan validity (validateLearningPlan),
+ * and does NOT require Modul Ajar-specific fields (initialCompetency, DPL, resources, learningModel).
+ */
+export function validateLearningPlanForRPP(
+  plan: LearningPlan,
+  context: {
+    academicSetting?: AcademicSetting | null;
+    tp?: TPData | null;
+    atp?: ATPData | null;
+    atpUnitMapping?: ATPUnitMappingData | null;
+    unitExecutionPlan?: UnitExecutionPlanData | null;
+    learningMeetingSchedules?: Array<{
+      semesterPlanId: string;
+      semester: 1 | 2;
+      schedule: LearningMeetingScheduleData;
+    }> | null;
+    scheduledMeetings?: ScheduledLearningMeetingProjection[] | null;
+    k13Analysis?: K13Analysis | null;
+    timeAllocations?: TimeAllocation[] | null;
+    assessmentCriteria?: AssessmentCriterion[] | null;
+  }
+): LearningPlanValidationResult {
+  return validateLearningPlan(plan, context);
+}
+
+/**
+ * Validates output readiness for Modul Ajar.
+ * Modul Ajar requires canonical plan validity (validateLearningPlan),
+ * plus specific components for Kurikulum Merdeka print-readiness:
+ * - initialCompetency non-empty
+ * - graduateProfileDimensions valid
+ * - at least one valid resource (title or source non-empty)
+ * - learningModel non-empty
+ */
+export function validateLearningPlanForModulAjar(
+  plan: LearningPlan,
+  context: {
+    academicSetting?: AcademicSetting | null;
+    tp?: TPData | null;
+    atp?: ATPData | null;
+    atpUnitMapping?: ATPUnitMappingData | null;
+    unitExecutionPlan?: UnitExecutionPlanData | null;
+    learningMeetingSchedules?: Array<{
+      semesterPlanId: string;
+      semester: 1 | 2;
+      schedule: LearningMeetingScheduleData;
+    }> | null;
+    scheduledMeetings?: ScheduledLearningMeetingProjection[] | null;
+    k13Analysis?: K13Analysis | null;
+    timeAllocations?: TimeAllocation[] | null;
+    assessmentCriteria?: AssessmentCriterion[] | null;
+  }
+): LearningPlanValidationResult {
+  const canonicalResult = validateLearningPlan(plan, context);
+
+  if (!plan) {
+    return canonicalResult;
+  }
+
+  const modulAjarErrors: string[] = [];
+
+  // Requirements for Modul Ajar output readiness (Kurikulum Merdeka)
+  if (plan.curriculumType === 'KURIKULUM_MERDEKA' || !plan.curriculumType) {
+    if (!plan.initialCompetency || typeof plan.initialCompetency !== 'string' || plan.initialCompetency.trim() === '') {
+      modulAjarErrors.push('Kompetensi Awal belum diisi.');
+    }
+    const dimValidation = validateGraduateProfileDimensions(
+      plan.graduateProfileDimensions
+    );
+    if (!dimValidation.isValid) {
+      modulAjarErrors.push(
+        dimValidation.error || 'Dimensi Profil Lulusan belum dipilih.'
+      );
+    }
+    const validResources = (plan.resources || []).filter(
+      (r) =>
+        r &&
+        typeof r === 'object' &&
+        ((typeof r.title === 'string' && r.title.trim().length > 0) ||
+          (typeof r.source === 'string' && r.source.trim().length > 0))
+    );
+    if (validResources.length === 0) {
+      modulAjarErrors.push('Sarana dan prasarana / sumber belajar belum diisi.');
+    }
+    if (!plan.learningModel || typeof plan.learningModel !== 'string' || plan.learningModel.trim() === '') {
+      modulAjarErrors.push('Model/praktik pembelajaran belum diisi.');
+    }
+  }
+
+  const allErrors = [...canonicalResult.errors, ...modulAjarErrors];
+  const finalizationErrors = [...canonicalResult.finalizationErrors, ...modulAjarErrors];
+
+  return {
+    ...canonicalResult,
+    valid: allErrors.length === 0,
+    isValid: allErrors.length === 0,
+    errors: allErrors,
+    finalizationErrors,
   };
 }
 

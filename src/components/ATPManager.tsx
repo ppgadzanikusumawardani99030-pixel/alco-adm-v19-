@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Wand2,
   AlertTriangle,
+  Clipboard,
 } from 'lucide-react';
 import { ATPData, ATPItem, TPData, CPData, CPAnalysisData, AcademicSetting, TeacherProfile, ActiveContext } from '../types';
 import { generateATPWithAI, refineTextWithAI } from '../services/aiService';
@@ -23,6 +24,10 @@ import {
   resolveATPItemTPReferences,
   validateTPDataWorkflow,
 } from '../services/cpWorkflowService';
+import {
+  buildTPDiagnosticReport,
+  recordDiagnosticEvent,
+} from '../services/diagnosticService';
 
 interface ATPManagerProps {
   atp: ATPData;
@@ -59,6 +64,8 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
   const [isEditing, setIsEditing] = useState(false);
   const [currentItem, setCurrentItem] = useState<ATPItem | null>(null);
   const [isRefiningRationale, setIsRefiningRationale] = useState(false);
+  const [copyNotice, setCopyNotice] = useState<string | null>(null);
+  const [showGenerateConfirmation, setShowGenerateConfirmation] = useState(false);
 
   useEffect(() => {
     setRationale(atp.rationale || '');
@@ -76,6 +83,47 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
             : 'TP belum dikonfirmasi atau disimpan sebagai SIAP.'))
     : undefined;
 
+  const handleCopyDiagnostic = async () => {
+    const report = buildTPDiagnosticReport({
+      module: 'ATP',
+      workspaceId: tp.workspaceId || atp.workspaceId,
+      academicSetting,
+      context,
+      cp,
+      cpAnalysis,
+      tp,
+      uiItemsCount: tp.items?.length ?? 0,
+      validation: tpValidation,
+      isStoredStatusAligned: (tp.workflowStatus || 'BELUM_DIMULAI') === tpValidation.status,
+      atp,
+      atpGate: isTPReady ? 'ALLOWED' : 'BLOCKED',
+      atpGateReason: isTPReady ? undefined : tpReadinessReason,
+      isTPReady,
+      tpReadinessReason,
+      learningPlanGate: atp.workflowStatus === 'SIAP' ? 'ALLOWED' : 'BLOCKED',
+      learningPlanGateReason: atp.workflowStatus === 'SIAP' ? undefined : 'ATP belum berstatus SIAP.',
+    });
+
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(report);
+      } else {
+        const area = document.createElement('textarea');
+        area.value = report;
+        area.style.position = 'fixed';
+        area.style.opacity = '0';
+        document.body.appendChild(area);
+        area.select();
+        document.execCommand('copy');
+        document.body.removeChild(area);
+      }
+      setCopyNotice('Diagnostik berhasil disalin.');
+      setTimeout(() => setCopyNotice(null), 3000);
+    } catch {
+      setGenerationError('Gagal menyalin diagnostik. Browser tidak memberi akses clipboard.');
+    }
+  };
+
   // Integrity Check: TP was modified after ATP was formed
   const isTPOutdated =
     hasTP &&
@@ -84,26 +132,21 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
     tp.updatedAt &&
     new Date(tp.updatedAt).getTime() > new Date(atp.basedOnTpUpdatedAt).getTime() + 1000;
 
-  // Handle AI Generate ATP from TP
-  const handleGenerateAI = async () => {
-    if (!hasTP) {
-      alert('Daftar TP belum tersedia. Harap rumuskan TP pada tahap 04 terlebih dahulu.');
-      return;
-    }
-    if (!isTPReady) {
-      alert(`TP belum SIAP untuk menyusun ATP: ${tpReadinessReason}`);
-      return;
-    }
-
-    if (
-      items.length > 0 &&
-      !confirm('Menyusun ATP dengan AI akan menata ulang matriks alur saat ini. Lanjutkan?')
-    ) {
-      return;
-    }
-
+  // Eksekusi penyusunan ATP dengan AI
+  const executeGenerateAI = async () => {
     setIsGenerating(true);
     setGenerationError(null);
+
+    recordDiagnosticEvent({
+      scope: 'ATP',
+      action: 'ATP_GENERATE_STARTED',
+      status: 'STARTED',
+      metadata: {
+        tpItemsCount: tp.items?.length ?? 0,
+        existingAtpItemsCount: items?.length ?? 0,
+        tpWorkflowStatus: tp.workflowStatus,
+      },
+    });
 
     try {
       const generated = await generateATPWithAI({
@@ -196,12 +239,48 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
         updatedAt: new Date().toISOString(),
       };
       onSaveATP(updated);
+
+      recordDiagnosticEvent({
+        scope: 'ATP',
+        action: 'ATP_GENERATE_SUCCESS',
+        status: 'DRAFT',
+        metadata: {
+          generatedItemsCount: formattedItems.length,
+        },
+      });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Gagal menyusun ATP dengan AI';
       setGenerationError(msg);
+      recordDiagnosticEvent({
+        scope: 'ATP',
+        action: 'ATP_GENERATE_FAILED',
+        status: 'FAILED',
+        metadata: {
+          reason: msg,
+        },
+      });
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  // Handle AI Generate ATP from TP
+  const handleGenerateAI = async () => {
+    if (!hasTP) {
+      alert('Daftar TP belum tersedia. Harap rumuskan TP pada tahap 04 terlebih dahulu.');
+      return;
+    }
+    if (!isTPReady) {
+      alert(`TP belum SIAP untuk menyusun ATP: ${tpReadinessReason}`);
+      return;
+    }
+
+    if (items.length > 0) {
+      setShowGenerateConfirmation(true);
+      return;
+    }
+
+    await executeGenerateAI();
   };
 
   const handleSave = () => {
@@ -490,27 +569,44 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
             </p>
           </div>
 
-          {/* AI Generator Button */}
+          {/* AI Generator Button & Diagnostic Button */}
           <div className="flex flex-col items-end gap-1.5 self-start sm:self-auto">
-            <button
-              id="btn-ai-generate-atp"
-              onClick={handleGenerateAI}
-              disabled={isGenerating || !isTPReady}
-              title={!isTPReady ? tpReadinessReason : undefined}
-              className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {isGenerating ? (
-                <>
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                  <span>AI Sedang Menyusun Alur ATP...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 text-amber-300" />
-                  <span>Susun ATP dari TP (AI)</span>
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handleCopyDiagnostic}
+                className="inline-flex items-center gap-2 bg-white hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl text-xs font-bold border border-slate-300 shadow-sm transition cursor-pointer"
+                title="Salin laporan diagnostik kesiapan TP dan gerbang ATP"
+              >
+                <Clipboard className="w-4 h-4 text-slate-500" />
+                <span>Salin Diagnostik</span>
+              </button>
+
+              <button
+                id="btn-ai-generate-atp"
+                onClick={handleGenerateAI}
+                disabled={isGenerating || !isTPReady}
+                title={!isTPReady ? tpReadinessReason : undefined}
+                className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-700 to-indigo-700 hover:from-blue-800 hover:to-indigo-800 text-white px-4 py-2.5 rounded-xl text-xs font-bold shadow-sm transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isGenerating ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>AI Sedang Menyusun Alur ATP...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-amber-300" />
+                    <span>Susun ATP dari TP (AI)</span>
+                  </>
+                )}
+              </button>
+            </div>
+            {copyNotice && (
+              <span className="text-[11px] text-emerald-700 font-semibold text-right">
+                ✓ {copyNotice}
+              </span>
+            )}
             {!isTPReady && (
               <span className="text-[11px] text-amber-700 font-medium text-right max-w-xs">
                 Penyusunan diblokir: {tpReadinessReason}
@@ -881,6 +977,48 @@ export const ATPManager: React.FC<ATPManagerProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Konfirmasi Susun Ulang ATP dengan AI */}
+      {showGenerateConfirmation && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="p-2.5 rounded-xl bg-amber-50 text-amber-600 border border-amber-200">
+                <AlertTriangle className="w-5 h-5 shrink-0" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-base font-bold text-slate-900">
+                  Susun Ulang ATP dengan AI?
+                </h3>
+                <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+                  ATP saat ini sudah memiliki susunan. Penyusunan dengan AI akan menata ulang langkah ATP berdasarkan TP terbaru. Data tidak akan difinalisasi otomatis dan hasil tetap DRAFT sampai dikonfirmasi guru.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowGenerateConfirmation(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 transition cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setShowGenerateConfirmation(false);
+                  await executeGenerateAI();
+                }}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 shadow-sm transition flex items-center gap-1.5 cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Susun Ulang dengan AI</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
